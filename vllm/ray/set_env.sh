@@ -2,12 +2,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ------------------------------------------
 # 容器与镜像配置
 # ------------------------------------------
 export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:main-a3}"
 export IMAGE_TAR="${IMAGE_TAR:-/llm_workspace_1P/robin/hfhub/docker/image/vllm-ascend.main-a3.tar}"
-export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-/llm_workspace_1P/robin/Kimi2-PCL/vllm-infer/ascend_infer_docker_run.sh}"
+export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/../../docker/ascend_infer_docker_run.sh}"
 export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 
 # ------------------------------------------
@@ -54,3 +56,6 @@ fi
 if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
     source /usr/local/Ascend/nnal/atb/set_env.sh
 fi
+
+# 恢复 set -u 检查
+set -u

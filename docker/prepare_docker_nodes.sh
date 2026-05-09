@@ -9,13 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 
-
-# ------------------------------------------
-# 日志函数
-# ------------------------------------------
-log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_warn() { echo "[WARN] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_err()  { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../common.sh"
 
 # ------------------------------------------
 # 帮助信息
@@ -132,30 +127,9 @@ check_dependencies
 # 辅助函数
 # ------------------------------------------
 
-# 获取非空节点列表
-read_nodes() {
-  awk 'NF {print $1}' "$NODES_FILE"
-}
-
-# 拼接 SSH 目标地址
-ssh_target() {
-  local node="$1"
-  printf "%s%s" "$SSH_USER_HOST_PREFIX" "$node"
-}
-
-# 执行 SSH 命令
-ssh_run() {
-  local node="$1"
-  shift
-  ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@"
-}
-
-# 并发数控制
-limit_jobs() {
-  local max="$1"
-  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$max" ]]; do
-    wait -n 2>/dev/null || true
-  done
+# 获取非空节点列表 (wrapper for local NODES_FILE)
+_nodes() {
+  read_nodes "$NODES_FILE"
 }
 
 # ------------------------------------------
@@ -251,7 +225,7 @@ prepare_node() {
 # 主流程入口
 # ------------------------------------------
 
-nodes="$(read_nodes)"
+nodes="$(_nodes)"
 if [[ -z "$nodes" ]]; then
   log_err "NODES_FILE 中未找到任何节点信息"
   exit 2

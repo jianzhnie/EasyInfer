@@ -9,7 +9,8 @@
 # 1. 部署与节点配置
 # ------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export NODES_FILE="${NODES_FILE:-${SCRIPT_DIR}/node_list.txt}"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export NODES_FILE="${NODES_FILE:-${PROJECT_ROOT}/vllm/node_list.txt}"
 export MASTER_NODE="${MASTER_NODE:-}"
 
 export SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"
@@ -64,18 +65,9 @@ if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
 fi
 
 # 加载 ATB 环境（如果存在）
-# 尝试多个可能的路径
-_ATB_PATHS=(
-    "/llm_workspace_1P/expert_monitor/ATB/ascend-transformer-boost-master/output/atb/set_env.sh"
-    "/usr/local/Ascend/nnal/atb/set_env.sh"
-)
-
-for _atb_path in "${_ATB_PATHS[@]}"; do
-    if [ -f "$_atb_path" ]; then
-        source "$_atb_path"
-        break
-    fi
-done
+if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
 
 # 恢复 set -u 检查
 set -u

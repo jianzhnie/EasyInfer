@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Configuration
-IMAGE_NAME="cis-pengcheng.cmecloud.cn/ascendhub/mindspeed-llm:openeuler22.03-mindspeed-llm-2.3.0-a3-arm"
-CONTAINER_NAME="mindspeed-llm-env"
+IMAGE_NAME="${IMAGE_NAME:-cis-pengcheng.cmecloud.cn/ascendhub/mindspeed-llm:openeuler22.03-mindspeed-llm-2.3.0-a3-arm}"
+CONTAINER_NAME="${CONTAINER_NAME:-mindspeed-llm-env}"
 
 # Check if container exists
 if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then

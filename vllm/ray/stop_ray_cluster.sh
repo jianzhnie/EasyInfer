@@ -6,14 +6,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "${SCRIPT_DIR}/set_env.sh" ]] && source "${SCRIPT_DIR}/set_env.sh"
 
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../../common.sh"
+
 # 配置
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
 PARALLELISM="${PARALLELISM:-16}"
 RAY_KEYWORDS="raylet|plasma_store|gcs_server|ray::|ray.worker|python.*ray|dashboard_agent|runtime_env_agent"
-
-# 日志
-log() { echo "[$(date '+%H:%M:%S')] $*"; }
-log_err() { echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2; }
 
 # 帮助
 usage() {
@@ -40,32 +39,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 辅助函数
-read_nodes() {
-  [[ -f "${NODES_FILE:-}" ]] || { log_err "节点列表文件未找到: ${NODES_FILE:-}"; exit 2; }
-  awk 'NF && !/^#/ {print $1}' "$NODES_FILE"
+# 辅助函数 (read_nodes/ssh_target/ssh_run/limit_jobs from common.sh)
+
+_nodes() {
+  read_nodes "${NODES_FILE:?NODES_FILE 未设置}"
 }
-
-ssh_target() { printf "%s%s" "${SSH_USER_HOST_PREFIX:-}" "$1"; }
-
-ssh_run() {
-  local node="$1"; shift
-  ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@"
-}
-
-limit_jobs() {
-  while [[ "$(jobs -rp | wc -l)" -ge "$1" ]]; do
-    wait -n 2>/dev/null || sleep 0.1
-  done
-}
-
-# 远程执行函数
 _remote_stop_ray() {
-  local force="$1" kill_timeout="$2"
+  local force="$1" kill_timeout="$2" pattern="$3"
   set -euo pipefail
 
   get_ray_pids() {
-    ps aux | grep -E "$3" | grep -v grep | awk '{print $2}' | sort -u | tr '\n' ' ' || true
+    ps aux | grep -E "$pattern" | grep -v grep | awk '{print $2}' | sort -u | tr '\n' ' ' || true
   }
 
   kill_procs() {
@@ -113,23 +97,23 @@ _remote_stop_ray() {
 # 停止单个节点
 stop_ray_node() {
   local node="$1"
-  log "[${node}] 停止 Ray..."
+  log_info "[${node}] 停止 Ray..."
 
   local func=$(declare -f _remote_stop_ray)
   local call="_remote_stop_ray '${FORCE}' '${KILL_TIMEOUT}' '${RAY_KEYWORDS}'"
 
   if $ON_HOST; then
     echo "$func; $call" | ssh_run "$node" bash -lc "bash -s" 2>/dev/null \
-      && log "[${node}] 已停止" || log_err "[${node}] 停止失败"
+      && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
   else
     local cmd="cd '${SCRIPT_DIR}' && source set_env.sh && docker exec -i '\${CONTAINER_NAME:-vllm-ascend-env-a3}' bash -s"
     echo "$func; $call" | ssh_run "$node" "$cmd" 2>/dev/null \
-      && log "[${node}] 已停止" || log_err "[${node}] 停止失败"
+      && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
   fi
 }
 
 # 主流程
-nodes=$(read_nodes)
+nodes=$(_nodes)
 [[ -n "$nodes" ]] || { log_err "未找到节点信息"; exit 2; }
 
 # 确认
@@ -141,10 +125,10 @@ if ! $SKIP_CONFIRM; then
   echo "  强制: $(${FORCE} && echo '是' || echo '否')"
   echo "================================"
   read -p "输入 'yes' 继续: " confirm
-  [[ "$confirm" == "yes" ]] || { log "已取消"; exit 0; }
+  [[ "$confirm" == "yes" ]] || { log_info "已取消"; exit 0; }
 fi
 
-log "开始停止 Ray 集群..."
+log_info "开始停止 Ray 集群..."
 
 for node in $nodes; do
   limit_jobs "$PARALLELISM"
@@ -152,4 +136,4 @@ for node in $nodes; do
 done
 wait
 
-log "Ray 集群停止完成"
+log_info "Ray 集群停止完成"
