@@ -10,7 +10,7 @@
 # ------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-export NODES_FILE="${NODES_FILE:-${PROJECT_ROOT}/vllm/node_list.txt}"
+export NODES_FILE="${NODES_FILE:-${PROJECT_ROOT}/node_list.txt}"
 export MASTER_NODE="${MASTER_NODE:-}"
 
 export SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"

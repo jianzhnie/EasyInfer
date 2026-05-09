@@ -26,7 +26,7 @@ fi
 # ------------------------------------------
 # 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
-NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/vllm/node_list.txt}"
+NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/node_list.txt}"
 MAX_JOBS="${MAX_JOBS:-16}"
 SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"

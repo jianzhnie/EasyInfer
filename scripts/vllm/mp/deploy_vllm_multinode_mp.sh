@@ -35,7 +35,7 @@ set -euo pipefail
 # 1. 默认值与常量
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE_LIST_FILE="${SCRIPT_DIR}/../node_list.txt"
+NODE_LIST_FILE="${SCRIPT_DIR}/../../node_list.txt"
 SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 
