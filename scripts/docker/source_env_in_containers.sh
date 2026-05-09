@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_env.sh"
-NODES_FILE="${SCRIPT_DIR}/../vllm/node_list.txt"
+NODES_FILE="${SCRIPT_DIR}/../node_list.txt"
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../common.sh"

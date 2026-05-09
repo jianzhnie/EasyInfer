@@ -9,7 +9,7 @@ ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
 # 加载共享工具函数
-source "${SCRIPT_DIR}/../../common.sh"
+source "${SCRIPT_DIR}/../common.sh"
 
 # 配置
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"

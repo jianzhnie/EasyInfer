@@ -15,11 +15,11 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "${PROJECT_DIR}/.." && pwd)"
 ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
-NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/vllm/node_list.txt}"
+NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/node_list.txt}"
 PARALLELISM="${PARALLELISM:-16}"
 
 # 加载共享工具函数
-source "${PROJECT_DIR}/../../common.sh"
+source "${PROJECT_DIR}/../common.sh"
 
 # -----------------------------------------------------------------
 # 远程执行辅助函数

@@ -69,12 +69,6 @@ get_node_ip() {
 }
 
 # ------------------------------------------------------------------------------
-# 获取项目根目录 (基于 common.sh 的位置)
+# scripts 目录路径 (基于 common.sh 的位置)
 # ------------------------------------------------------------------------------
-_project_root() {
-    local common_dir
-    common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    echo "$common_dir"
-}
-
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
