@@ -4,7 +4,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[[ -f "${SCRIPT_DIR}/set_env.sh" ]] && source "${SCRIPT_DIR}/set_env.sh"
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
+[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../../common.sh"
@@ -106,7 +108,7 @@ stop_ray_node() {
     echo "$func; $call" | ssh_run "$node" bash -lc "bash -s" 2>/dev/null \
       && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
   else
-    local cmd="cd '${SCRIPT_DIR}' && source set_env.sh && docker exec -i '\${CONTAINER_NAME:-vllm-ascend-env-a3}' bash -s"
+    local cmd="source '${ENV_FILE}' && docker exec -i '\${CONTAINER_NAME:-vllm-ascend-env-a3}' bash -s"
     echo "$func; $call" | ssh_run "$node" "$cmd" 2>/dev/null \
       && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
   fi

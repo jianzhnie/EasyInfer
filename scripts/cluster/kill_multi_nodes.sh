@@ -9,8 +9,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ENV_FILE="${SCRIPT_DIR}/set_env.sh"
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${SCRIPTS_DIR}/docker/set_env.sh"
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../common.sh"
@@ -26,7 +26,7 @@ fi
 # ------------------------------------------
 # 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
-NODE_LIST_FILE="${NODES_FILE:-${PROJECT_ROOT}/vllm/node_list.txt}"
+NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/vllm/node_list.txt}"
 MAX_JOBS="${MAX_JOBS:-16}"
 SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
@@ -53,8 +53,6 @@ declare -A NODE_STATUS  # 节点处理状态: pending|success|failed|timeout
 declare -a FAILED_NODES=()
 declare -a TIMEOUT_NODES=()
 
-# ------------------------------------------
-# 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
 # 帮助信息
 # ------------------------------------------

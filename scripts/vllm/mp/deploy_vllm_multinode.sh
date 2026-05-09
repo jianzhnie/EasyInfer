@@ -34,9 +34,12 @@ set -euo pipefail
 # 1. 默认值与常量
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE_LIST_FILE="${SCRIPT_DIR}/node_list.txt"
+NODE_LIST_FILE="${SCRIPT_DIR}/../node_list.txt"
 SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
+
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../../common.sh"
 
 # 部署配置 (可通过环境变量覆盖)
 NIC_NAME="${NIC_NAME:-enp66s0f0}"
@@ -64,18 +67,6 @@ export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.92}"
 export PREFIX_CACHING="${PREFIX_CACHING:-0}"
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-0}"
-
-# 颜色输出
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-log_info()  { echo -e "${GREEN}[INFO]${NC}  $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_fatal() { echo -e "${RED}[FATAL]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; exit 1; }
 
 # ------------------------------------------------------------------------------
 # 2. 读取节点列表
