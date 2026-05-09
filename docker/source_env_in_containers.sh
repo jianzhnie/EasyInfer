@@ -9,25 +9,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 NODES_FILE="${SCRIPT_DIR}/node_list.txt"
 
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../common.sh"
+
 # ------------------------------------------
 # 引入环境变量（操作机）
 # ------------------------------------------
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
+  source "${ENV_FILE}"
 else
-  echo "[WARN] 本地环境配置文件未找到: ${ENV_FILE}" >&2
+  log_warn "本地环境配置文件未找到: ${ENV_FILE}"
 fi
 
 SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 PARALLELISM="${PARALLELISM:-8}"
-
-# ------------------------------------------
-# 日志函数
-# ------------------------------------------
-log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_err()  { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
 
 # ------------------------------------------
 # 帮助信息
@@ -57,16 +55,6 @@ if [[ ! -f "${NODES_FILE}" ]]; then
 fi
 
 NODES=$(awk 'NF {print $1}' "${NODES_FILE}")
-
-# ------------------------------------------
-# 并发数控制
-# ------------------------------------------
-limit_jobs() {
-  local max="$1"
-  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$max" ]]; do
-    wait -n
-  done
-}
 
 # ------------------------------------------
 # 对单个节点：在容器内 source set_env.sh

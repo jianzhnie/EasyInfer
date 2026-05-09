@@ -14,29 +14,11 @@ set -euo pipefail
 # -----------------------------------------------------------------
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${PROJECT_DIR}/set_env.sh"
-NODE_LIST_FILE="${NODES_FILE:-${PROJECT_DIR}/node_list.txt}"
+NODE_LIST_FILE="${NODES_FILE:-${PROJECT_DIR}/../node_list.txt}"
 PARALLELISM="${PARALLELISM:-16}"
 
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-# -----------------------------------------------------------------
-# 日志函数
-# -----------------------------------------------------------------
-log() {
-    local level=$1 color=$2
-    shift 2
-    echo -e "${color}[${level}]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*"
-}
-
-log_info()  { log "INFO"  "$GREEN"  "$@"; }
-log_warn()  { log "WARN"  "$YELLOW" "$@" >&2; }
-log_error() { log "ERROR" "$RED"    "$@" >&2; }
-log_fatal() { log "FATAL" "$RED"    "$@" >&2; exit 1; }
+# 加载共享工具函数
+source "${PROJECT_DIR}/../../common.sh"
 
 # -----------------------------------------------------------------
 # 远程执行辅助函数
@@ -49,13 +31,6 @@ remote_exec() {
     local node=$1 cmd=$2
     ssh_cmd "$node" "cd '${PROJECT_DIR}' && source set_env.sh 2>/dev/null && \
         docker exec -i '${CONTAINER_NAME}' bash -c '${cmd}'"
-}
-
-# 并发控制
-limit_jobs() {
-    while [[ "$(jobs -rp | wc -l)" -ge "$1" ]]; do
-        wait -n 2>/dev/null || sleep 0.1
-    done
 }
 
 # -----------------------------------------------------------------

@@ -9,7 +9,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_env.sh"
+
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../common.sh"
 
 # ------------------------------------------
 # 引入环境变量
@@ -22,7 +26,7 @@ fi
 # ------------------------------------------
 # 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
-NODE_LIST_FILE="${NODES_FILE:-${SCRIPT_DIR}/node_list.txt}"
+NODE_LIST_FILE="${NODES_FILE:-${PROJECT_ROOT}/vllm/node_list.txt}"
 MAX_JOBS="${MAX_JOBS:-16}"
 SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
@@ -50,12 +54,7 @@ declare -a FAILED_NODES=()
 declare -a TIMEOUT_NODES=()
 
 # ------------------------------------------
-# 日志函数
-# ------------------------------------------
-log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_err()  { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_warn() { echo "[WARN] $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-
+# 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
 # 帮助信息
 # ------------------------------------------
@@ -117,14 +116,8 @@ cleanup_jobs() {
 trap cleanup_jobs INT TERM
 
 # ------------------------------------------
-# 辅助函数
+# 辅助函数 (ssh_target/limit_jobs from common.sh)
 # ------------------------------------------
-
-# 拼接 SSH 目标地址
-ssh_target() {
-    local node="$1"
-    printf "%s%s" "$SSH_USER_HOST_PREFIX" "$node"
-}
 
 # 执行带超时的 SSH 命令
 ssh_run_with_timeout() {
@@ -162,16 +155,6 @@ ssh_run_with_timeout() {
 escape_regex() {
     # 转义 . * + ? ^ $ ( ) [ ] { } | \
     sed 's/[.*+?^${}()|[\]/\\&/g' <<< "$1"
-}
-
-# 并发数控制
-limit_jobs() {
-    local max="$1"
-    while [[ "$(jobs -rp 2>/dev/null | wc -l)" -ge "$max" ]]; do
-        # 使用 wait -n 等待任意一个作业完成，忽略中断信号
-        wait -n 2>/dev/null || true
-        sleep 0.1
-    done
 }
 
 # ------------------------------------------

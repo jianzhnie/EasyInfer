@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================
-# Docker 容器文件复制脚本 (copy_to_docker.sh)
+# Docker 容器文件复制脚本 (copy_file_to_containers.sh)
 # 将文件复制到集群各节点的 Docker 容器内
 # ==========================================
 
@@ -9,6 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../common.sh"
+
 # ------------------------------------------
 # 引入环境变量
 # ------------------------------------------
@@ -16,15 +19,9 @@ if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
   source "${ENV_FILE}"
 else
-  echo "[ERROR] 环境配置文件未找到: ${ENV_FILE}" >&2
+  log_err "环境配置文件未找到: ${ENV_FILE}"
   exit 1
 fi
-
-# ------------------------------------------
-# 日志函数
-# ------------------------------------------
-log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_err()  { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
 
 # ------------------------------------------
 # 帮助信息
@@ -111,27 +108,9 @@ PARALLELISM="${PARALLELISM_ARG:-${PARALLELISM:-8}}"
 # 辅助函数
 # ------------------------------------------
 
-# 获取非空节点列表
-read_nodes() {
-  if [[ ! -f "$NODES_FILE" ]]; then
-    log_err "节点列表文件未找到: $NODES_FILE"
-    exit 2
-  fi
-  awk 'NF {print $1}' "$NODES_FILE"
-}
-
-# 拼接 SSH 目标地址
-ssh_target() {
-  local node="$1"
-  printf "%s%s" "$SSH_USER_HOST_PREFIX" "$node"
-}
-
-# 并发数控制
-limit_jobs() {
-  local max="$1"
-  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$max" ]]; do
-    wait -n 2>/dev/null || sleep 0.1
-  done
+# 获取非空节点列表 (wrapper for local NODES_FILE)
+_nodes() {
+  read_nodes "$NODES_FILE"
 }
 
 # ------------------------------------------
@@ -263,7 +242,7 @@ if [[ ${#SPECIFIC_NODES[@]} -gt 0 ]]; then
   nodes="${SPECIFIC_NODES[*]}"
   log_info "指定节点: $nodes"
 else
-  nodes="$(read_nodes)"
+  nodes="$(_nodes)"
   if [[ -z "$nodes" ]]; then
     log_err "NODES_FILE 中未找到任何节点信息"
     exit 2

@@ -21,15 +21,10 @@ if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
 fi
 
 # 加载 ATB 环境（如果存在）
-# 尝试多个可能的路径
-_ATB_PATHS=(
-    "/usr/local/Ascend/nnal/atb/set_env.sh"
-    "/llm_workspace_1P/expert_monitor/ATB/ascend-transformer-boost-master/output/atb/set_env.sh"
-    )
+if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
 
-for _atb_path in "${_ATB_PATHS[@]}"; do
-    if [ -f "$_atb_path" ]; then
-        source "$_atb_path"
-        break
-    fi
-done
+
+
+set -u
