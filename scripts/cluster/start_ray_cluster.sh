@@ -13,8 +13,9 @@ set -euo pipefail
 # 配置与常量
 # -----------------------------------------------------------------
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${PROJECT_DIR}/set_env.sh"
-NODE_LIST_FILE="${NODES_FILE:-${PROJECT_DIR}/../node_list.txt}"
+SCRIPTS_DIR="$(cd "${PROJECT_DIR}/.." && pwd)"
+ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
+NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/vllm/node_list.txt}"
 PARALLELISM="${PARALLELISM:-16}"
 
 # 加载共享工具函数
@@ -29,7 +30,7 @@ ssh_cmd() {
 
 remote_exec() {
     local node=$1 cmd=$2
-    ssh_cmd "$node" "cd '${PROJECT_DIR}' && source set_env.sh 2>/dev/null && \
+    ssh_cmd "$node" "cd '${PROJECT_DIR}' && source '${ENV_FILE}' 2>/dev/null && \
         docker exec -i '${CONTAINER_NAME}' bash -c '${cmd}'"
 }
 
@@ -108,8 +109,8 @@ check_env() {
 
 check_node() {
     local node=$1
-    ssh_cmd -q "$node" "test -d '$PROJECT_DIR' -a -f '$PROJECT_DIR/set_env.sh'" 2>/dev/null || {
-        log_error "SSH failed or missing files on: $node"
+    ssh_cmd -q "$node" "test -f '$ENV_FILE'" 2>/dev/null || {
+        log_err "SSH failed or missing env file on: $node"
         return 1
     }
 }
@@ -197,7 +198,7 @@ main() {
     echo ""
     echo -e "${BLUE}=============================================${NC}"
     if [[ ${#failed_nodes[@]} -eq 0 ]]; then
-        log "SUCCESS" "$GREEN" "Ray cluster started successfully!"
+        log_info "Ray cluster started successfully!"
     else
         log_warn "Cluster started with ${#failed_nodes[@]} failed worker(s)"
         log_info "Failed nodes: ${failed_nodes[*]}"
@@ -208,7 +209,7 @@ main() {
     
     # 显示状态
     log_info "Ray cluster status:"
-    ssh_cmd "$master" "cd '${PROJECT_DIR}' && source set_env.sh 2>/dev/null && \
+    ssh_cmd "$master" "source '${ENV_FILE}' 2>/dev/null && \
         docker exec -i '${CONTAINER_NAME}' \
         bash -c 'ray status'" 2>/dev/null || log_warn "Could not retrieve Ray status"
 }
