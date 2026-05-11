@@ -14,12 +14,14 @@ export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 
 # ------------------------------------------
 # 网络及Ascend配置
+# 注意: 网卡名称需与实际机器匹配，可通过 ip link show 查看
+# 多机部署时各节点可能不同，应通过环境变量覆盖
 # ------------------------------------------
 export HCCL_P2P_DISABLE=1
 export ACLNN_ALLOW_DTYPE_CONVERT=1
-export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-enp66s0f0}"
-export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
-export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
+export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-enp66s0f5}"
+export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f5}"
+export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
 export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
