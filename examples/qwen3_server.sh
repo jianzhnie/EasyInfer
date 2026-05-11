@@ -70,8 +70,8 @@ export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 # 加速特性
 # ------------------------------------------------------------------------------
 export PREFIX_CACHING="${PREFIX_CACHING:-1}"
-# GPU 环境设 0 启用 CUDA Graph 加速；NPU 环境设 1 禁用
-export ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+# NPU 环境必须设 1 (禁用 CUDA Graph)；NVIDIA GPU 可设 0 启用
+export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-4}"
 
 # ------------------------------------------------------------------------------
