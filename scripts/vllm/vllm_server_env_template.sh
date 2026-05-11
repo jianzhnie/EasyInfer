@@ -12,6 +12,14 @@
 #
 # 注意: 所有变量都有默认值，只需覆盖需要修改的变量
 # ==============================================================================
+# 使用方法:
+#   1. 复制此文件: cp vllm_server_env_template.sh vllm_server_env.sh
+#   2. 编辑 vllm_server_env.sh 中的配置
+#   3. 启动主脚本: ./vllm_model_server.sh  (会自动加载 vllm_server_env.sh)
+#
+#   也可以通过环境变量指定配置文件:
+#   VLLM_ENV_FILE=/path/to/my_env.sh ./vllm_model_server.sh
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
 # 1. 基础环境变量配置
@@ -31,6 +39,11 @@ export HOST="${HOST:-0.0.0.0}"
 
 # 服务监听端口
 export PORT="${PORT:-8000}"
+
+# 当前节点 IP (多节点 Ray 集群必需)
+# 主节点设置为 Master IP，工作节点设置为当前节点的 IP
+# 单节点部署可留空或设为 127.0.0.1
+export VLLM_HOST_IP="${VLLM_HOST_IP:-}"
 
 # 日志级别: debug, info, warning, error
 export LOG_LEVEL="${LOG_LEVEL:-info}"
@@ -54,7 +67,8 @@ export TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 
 # 流水线并行大小 (Pipeline Parallel)
 # 建议: 根据节点数设置，跨节点并行
-export PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-8}"
+# PP=1 表示单节点，PP=N 表示 N 个节点
+export PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-16}"
 
 # 分布式执行后端
 # 可选: ray, mp (多进程)
@@ -185,6 +199,15 @@ export VLLM_LOGGING_LEVEL="${VLLM_LOGGING_LEVEL:-$LOG_LEVEL}"
 # API 密钥 (生产环境强烈建议设置)
 # 留空表示不启用认证
 export API_KEY="${API_KEY:-}"
+
+# 工具调用开关 (Claude Code 集成必需)
+# 1 = 启用，0 = 禁用
+export ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
+
+# 工具调用解析器
+# 根据模型选择: hermes (Qwen), llama (Llama), mistral, deepseekv3 等
+# 完整列表参见 vllm tool_parsers/ 目录
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 
 # Prometheus 指标导出开关
 # 1 = 启用，0 = 禁用

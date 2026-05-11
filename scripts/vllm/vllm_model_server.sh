@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # =============================================================================
-# vLLM Model Server Startup Script (Kimi-K2-Base on NPU Cluster)
+# vLLM Model Server Startup Script (MoE Models on NPU Cluster)
 # =============================================================================
 # 架构: 多节点 NPU 集群 (建议 8+ 节点, 每节点 8 NPU)
-# 模型: DeepseekV3 MoE (~32B 激活 / ~600B+ 总计, FP8 量化)
+# 模型: Kimi-K2-Base (MoE 架构, FP8 量化)
 #
 # 用法:
 #   1. 默认启动: ./vllm_model_server.sh
@@ -104,10 +104,10 @@ ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
 # 模型数据类型
 # 可选: float16, bfloat16, float32
 # 即使权重是 FP8 量化，激活仍使用此类型
-DTYPE="${DTYPE:-float16}"
+DTYPE="${DTYPE:-bfloat16}"
 # 量化方式
 # 可选: fp8, awq, gptq, squeezellm, marlin, 或留空表示无
-QUANTIZATION="${QUANTIZATION:-}"
+QUANTIZATION="${QUANTIZATION:-fp8}"
 # 模型加载格式
 # 可选: safetensors, pt, auto
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
@@ -118,7 +118,7 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # CPU 交换空间大小 (GiB)
 # 用于 KV Cache 驱逐时的缓冲，MoE 模型建议设置较大值
 # 注意：当 TP*PP 较大时，总交换空间 = SWAP_SPACE * TP，需要确保不超过系统内存
-SWAP_SPACE="${SWAP_SPACE:-16}"
+SWAP_SPACE="${SWAP_SPACE:-128}"
 
 # ------------------------------------------------------------------------------
 # 4. 吞吐量与序列调度优化
@@ -155,6 +155,10 @@ ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 # CUDA Graph 捕获的最大序列长度
 # 仅在 ENFORCE_EAGER=0 时有效，对于 MoE 模型建议保持较小值
 MAX_SEQ_LEN_TO_CAPTURE="${MAX_SEQ_LEN_TO_CAPTURE:-8192}"
+# 多步调度步数 (Multi-step Scheduling)
+# 减少框架在各个 NPU 之间的调度通信开销
+# 建议值: 4-8，较大的值提高吞吐但增加延迟
+NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
 # 自动检测 vLLM 版本支持的参数
 # 1 = 自动检测，0 = 使用预设参数
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
@@ -166,6 +170,12 @@ AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 # API 密钥 (生产环境强烈建议设置)
 # 留空表示不启用认证
 API_KEY="${API_KEY:-}"
+# 工具调用开关 (Claude Code 集成必需)
+# 1 = 启用，0 = 禁用
+ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
+# 工具调用解析器
+# 根据模型选择: hermes (Qwen), llama (Llama), mistral, deepseekv3 等
+TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 # Prometheus 指标导出开关
 # 1 = 启用，0 = 禁用
 ENABLE_METRICS="${ENABLE_METRICS:-0}"
@@ -183,7 +193,7 @@ ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 # ------------------------------------------------------------------------------
 # 最大重试次数
 # 服务崩溃后自动重启的次数
-export MAX_RETRIES="${MAX_RETRIES:-1}"
+export MAX_RETRIES="${MAX_RETRIES:-3}"
 # 重试间隔 (秒)
 export RETRY_DELAY="${RETRY_DELAY:-10}"
 
@@ -234,9 +244,16 @@ args=(
 [[ "$ENABLE_CHUNKED_PREFILL" == "1" ]] && args+=(--enable-chunked-prefill)
 # API Key
 [[ -n "$API_KEY" ]] && args+=(--api-key "$API_KEY")
+# Tool Calling (Claude Code 集成必需)
+if [[ "$ENABLE_TOOL_CALLING" == "1" ]]; then
+    args+=(--enable-auto-tool-choice)
+    [[ -n "$TOOL_CALL_PARSER" ]] && args+=(--tool-call-parser "$TOOL_CALL_PARSER")
+fi
 # max_tokens_per_sequence (如果定义且 vLLM 支持)
 [[ -n "${MAX_TOKENS_PER_SEQUENCE:-}" ]] && has_flag "--max-tokens-per-sequence" && \
     args+=(--max-tokens-per-sequence "$MAX_TOKENS_PER_SEQUENCE")
+# num-scheduler-steps (如果定义且 vLLM 支持)
+has_flag "--num-scheduler-steps" && args+=(--num-scheduler-steps "$NUM_SCHEDULER_STEPS")
 
 # 动态特性检测
 if [[ "$AUTO_DETECT_FLAGS" == "1" ]]; then
@@ -264,7 +281,8 @@ if [[ "$AUTO_DETECT_FLAGS" == "1" ]]; then
     
     # Metrics
     if [[ "$ENABLE_METRICS" == "1" ]] && has_flag "--enable-metrics"; then
-        args+=(--enable-metrics --metrics-port "$METRICS_PORT")
+        args+=(--enable-metrics)
+        has_flag "--metrics-port" && args+=(--metrics-port "$METRICS_PORT")
     fi
     
     # 其他
@@ -272,13 +290,15 @@ if [[ "$AUTO_DETECT_FLAGS" == "1" ]]; then
     [[ "$DISABLE_LOG_REQUESTS" == "1" ]] && has_flag "--disable-log-requests" && args+=(--disable-log-requests)
 fi
 
-# 添加用户传入的额外参数 (去重：如果已存在则跳过)
+# 添加用户传入的额外参数 (按 flag 名去重)
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     for extra_arg in "${EXTRA_ARGS[@]}"; do
-        # 简单去重：检查是否已包含该参数名
         skip=false
+        # 提取 flag 名 (支持 --flag=value 和 --flag value 格式)
+        flag_name="${extra_arg%%=*}"
         for existing in "${args[@]}"; do
-            if [[ "$existing" == "$extra_arg" ]]; then
+            existing_name="${existing%%=*}"
+            if [[ "$existing_name" == "$flag_name" ]]; then
                 skip=true
                 break
             fi
@@ -303,8 +323,8 @@ cat << EOF
 --------------------------------------------------------------------------------
   Memory:       dtype=$DTYPE, quant=$QUANTIZATION, gpu_util=$GPU_MEMORY_UTILIZATION
 --------------------------------------------------------------------------------
-  Scheduling:   max_seqs=$MAX_NUM_SEQS, max_len=$MAX_MODEL_LEN, batched=$MAX_NUM_BATCHED_TOKENS
-  Features:     chunked=$ENABLE_CHUNKED_PREFILL, prefix=$PREFIX_CACHING
+  Scheduling:   max_seqs=$MAX_NUM_SEQS, max_len=$MAX_MODEL_LEN, batched=$MAX_NUM_BATCHED_TOKENS, scheduler_steps=$NUM_SCHEDULER_STEPS
+  Features:     chunked=$ENABLE_CHUNKED_PREFILL, prefix=$PREFIX_CACHING, tool_call=$ENABLE_TOOL_CALLING
 --------------------------------------------------------------------------------
   Metrics:      enabled=$ENABLE_METRICS, port=$METRICS_PORT
 ================================================================================
