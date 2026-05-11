@@ -231,7 +231,6 @@ args=(
     --pipeline-parallel-size "$PIPELINE_PARALLEL_SIZE"
     --distributed-executor-backend "$DISTRIBUTED_EXECUTOR_BACKEND"
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
-    --swap-space "$SWAP_SPACE"
     --max-num-seqs "$MAX_NUM_SEQS"
     --max-model-len "$MAX_MODEL_LEN"
     --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS"
@@ -242,6 +241,8 @@ args=(
 [[ -n "$LOAD_FORMAT" ]] && args+=(--load-format "$LOAD_FORMAT")
 # Chunked Prefill
 [[ "$ENABLE_CHUNKED_PREFILL" == "1" ]] && args+=(--enable-chunked-prefill)
+# Swap Space (vLLM v1 已移除此参数)
+has_flag "--swap-space" && args+=(--swap-space "$SWAP_SPACE")
 # API Key
 [[ -n "$API_KEY" ]] && args+=(--api-key "$API_KEY")
 # Tool Calling (Claude Code 集成必需)
