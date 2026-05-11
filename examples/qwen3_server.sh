@@ -62,6 +62,8 @@ export SWAP_SPACE="${SWAP_SPACE:-16}"
 # ------------------------------------------------------------------------------
 # Qwen3-32B config.json 中 max_position_embeddings=40960，不能超过此值
 export MAX_MODEL_LEN="${MAX_MODEL_LEN:-40960}"
+# 限制每个序列的最大 tokens (prefill + decode)，给输入留空间，避免 Claude Code 的 32k max_tokens 导致溢出
+export MAX_TOKENS_PER_SEQUENCE="${MAX_TOKENS_PER_SEQUENCE:-40000}"
 export MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
