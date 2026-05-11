@@ -61,8 +61,8 @@ export SWAP_SPACE="${SWAP_SPACE:-16}"
 # 序列调度
 # ------------------------------------------------------------------------------
 # Qwen3-32B 原生支持 131072，可根据显存调整
-export MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-export MAX_NUM_SEQS="${MAX_NUM_SEQS:-512}"
+export MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+export MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 
