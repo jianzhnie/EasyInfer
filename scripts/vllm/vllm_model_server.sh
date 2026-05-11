@@ -87,8 +87,8 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-16}"
 # 分布式执行后端
 # 可选: ray, mp (多进程)
-# Ray 推荐用于多节点部署
-DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-ray}"
+# 留空则由 vLLM 自动选择: 单节点→mp, 多节点→ray
+DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
 # 专家并行开关 (Expert Parallel)
 # MoE 模型强烈建议启用，可显著提升性能
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
@@ -229,7 +229,6 @@ args=(
     --dtype "$DTYPE"
     --tensor-parallel-size "$TENSOR_PARALLEL_SIZE"
     --pipeline-parallel-size "$PIPELINE_PARALLEL_SIZE"
-    --distributed-executor-backend "$DISTRIBUTED_EXECUTOR_BACKEND"
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
     --max-num-seqs "$MAX_NUM_SEQS"
     --max-model-len "$MAX_MODEL_LEN"
@@ -239,6 +238,8 @@ args=(
 # 条件参数
 [[ -n "$QUANTIZATION" && "$QUANTIZATION" != "none" ]] && args+=(--quantization "$QUANTIZATION")
 [[ -n "$LOAD_FORMAT" ]] && args+=(--load-format "$LOAD_FORMAT")
+# 分布式执行后端 (留空则由 vLLM 自动选择)
+[[ -n "$DISTRIBUTED_EXECUTOR_BACKEND" ]] && args+=(--distributed-executor-backend "$DISTRIBUTED_EXECUTOR_BACKEND")
 # Chunked Prefill
 [[ "$ENABLE_CHUNKED_PREFILL" == "1" ]] && args+=(--enable-chunked-prefill)
 # Swap Space (vLLM v1 已移除此参数)
@@ -320,7 +321,7 @@ cat << EOF
   Listen:       $HOST:$PORT
 --------------------------------------------------------------------------------
   Parallel:     TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, EP=$EXPERT_PARALLEL_SIZE
-  Backend:      $DISTRIBUTED_EXECUTOR_BACKEND
+  Backend:      ${DISTRIBUTED_EXECUTOR_BACKEND:-auto}
 --------------------------------------------------------------------------------
   Memory:       dtype=$DTYPE, quant=$QUANTIZATION, gpu_util=$GPU_MEMORY_UTILIZATION
 --------------------------------------------------------------------------------

@@ -66,8 +66,8 @@ export PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-16}"
 
 # 分布式执行后端
 # 可选: ray, mp (多进程)
-# Ray 推荐用于多节点部署
-export DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-ray}"
+# 留空则由 vLLM 自动选择: 单节点→mp, 多节点→ray
+export DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
 
 # 专家并行开关 (Expert Parallel)
 # MoE 模型强烈建议启用，可显著提升性能
