@@ -93,12 +93,26 @@ start_head() {
     local node=$1
     log_info "[HEAD] Starting Ray head on $node"
 
-    # 在容器内取 TP_SOCKET_IFNAME 接口的 IPv4 地址，保证与 set_env.sh 中 VLLM_HOST_IP 一致
+    # 在容器内 source set_env.sh，使用 VLLM_HOST_IP（已通过 _detect_host_ip 带 Python
+    # fallback 检测）；若容器内无 set_env.sh，则以 Python socket 连接 223.5.5.5 兜底
     local cmd
     printf -v cmd \
-        'NODE_IP=$(ip -4 addr show "${TP_SOCKET_IFNAME}" 2>/dev/null | awk "/inet / {print \$2}" | cut -d/ -f1 | head -1) && \
-         ray start --head --node-ip-address="${NODE_IP}" --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$MASTER_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
+        'set +u && source "%s" 2>/dev/null || true && set -u
+if [ -z "${VLLM_HOST_IP:-}" ]; then
+    VLLM_HOST_IP=$(python3 -c "
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('"'"'223.5.5.5'"'"', 53))
+    print(s.getsockname()[0])
+except Exception:
+    pass
+" 2>/dev/null)
+fi
+[ -n "${VLLM_HOST_IP:-}" ] || { echo "[ERROR] Cannot detect node IP on $(hostname)" >&2; exit 1; }
+echo "[INFO] Ray head node IP: ${VLLM_HOST_IP}"
+ray start --head --node-ip-address="${VLLM_HOST_IP}" --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$ENV_FILE" "$MASTER_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
 
     remote_exec "$node" "$cmd"
 }
@@ -107,12 +121,25 @@ start_worker() {
     local node=$1 master=$2
     log_info "[WORKER] Starting Ray worker on $node"
 
-    # 在容器内取 TP_SOCKET_IFNAME 接口的 IPv4 地址，保证与 set_env.sh 中 VLLM_HOST_IP 一致
+    # 与 start_head 相同的 IP 检测逻辑
     local cmd
     printf -v cmd \
-        'NODE_IP=$(ip -4 addr show "${TP_SOCKET_IFNAME}" 2>/dev/null | awk "/inet / {print \$2}" | cut -d/ -f1 | head -1) && \
-         ray start --address=%s:%s --node-ip-address="${NODE_IP}" --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$master" "$MASTER_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
+        'set +u && source "%s" 2>/dev/null || true && set -u
+if [ -z "${VLLM_HOST_IP:-}" ]; then
+    VLLM_HOST_IP=$(python3 -c "
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('"'"'223.5.5.5'"'"', 53))
+    print(s.getsockname()[0])
+except Exception:
+    pass
+" 2>/dev/null)
+fi
+[ -n "${VLLM_HOST_IP:-}" ] || { echo "[ERROR] Cannot detect node IP on $(hostname)" >&2; exit 1; }
+echo "[INFO] Ray worker node IP: ${VLLM_HOST_IP}"
+ray start --address=%s:%s --node-ip-address="${VLLM_HOST_IP}" --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$ENV_FILE" "$master" "$MASTER_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
 
     remote_exec "$node" "$cmd"
 }
