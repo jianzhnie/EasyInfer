@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:main-a3}"
+IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-openeuler}"
 CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 
 # Check if container exists
@@ -48,6 +48,7 @@ docker run -d \
     -v /etc/ascend_install.info:/etc/ascend_install.info \
     -v /root/.cache:/root/.cache \
     -v /llm_workspace_1P:/llm_workspace_1P:rw \
+    -v /home/jianzhnie/llmtuner:/home/jianzhnie/llmtuner:rw \
     -v /root/.ssh:/root/.ssh \
     -it ${IMAGE_NAME} \
     /bin/bash -c "while true; do sleep 1000; done"
