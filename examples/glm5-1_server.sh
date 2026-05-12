@@ -9,6 +9,14 @@ if [[ -f "$SET_ENV_FILE" ]]; then
     set -u
 fi
 
+# 确保 VLLM_HOST_IP 已正确设置，避免 Ray placement group 使用错误的节点 IP
+if [[ -z "${VLLM_HOST_IP:-}" ]]; then
+    echo "[ERROR] VLLM_HOST_IP is not set. Please set it to this node's IP address visible to the Ray cluster." >&2
+    echo "Example: export VLLM_HOST_IP=\$(ip -4 addr show enp66s0f5 | awk '/inet / {print \$2}' | cut -d/ -f1)" >&2
+    exit 1
+fi
+echo "[INFO] VLLM_HOST_IP = ${VLLM_HOST_IP}"
+
 export HCCL_OP_EXPANSION_MODE="AIV"
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
