@@ -30,6 +30,11 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_BUFFSIZE=1024
 export TASK_QUEUE_ENABLE=1
 
+# 当前节点在 Ray 集群中的 IP 地址
+# 默认通过 hostname 解析获取（与 start_ray_cluster.sh 的 resolve_hostname 使用相同方式）
+# 多网卡节点若解析结果不对，请显式设置此变量
+export VLLM_HOST_IP="${VLLM_HOST_IP:-$(getent hosts "$(hostname)" 2>/dev/null | awk '$1 !~ /:/ {print $1; exit}')}"
+
 # Ray 启动超时配置
 export RAY_START_TIMEOUT="${RAY_START_TIMEOUT:-120}"
 export RAY_CONNECT_TIMEOUT="${RAY_CONNECT_TIMEOUT:-60}"
