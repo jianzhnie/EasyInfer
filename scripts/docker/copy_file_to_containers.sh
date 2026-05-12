@@ -105,103 +105,79 @@ done
 PARALLELISM="${PARALLELISM_ARG:-${PARALLELISM:-8}}"
 
 # ------------------------------------------
-# 辅助函数
-# ------------------------------------------
-
-# 获取非空节点列表 (wrapper for local NODES_FILE)
-_nodes() {
-  read_nodes "$NODES_FILE"
-}
-
-# ------------------------------------------
 # 文件复制函数 - 远程模式（文件已在远程节点）
 # ------------------------------------------
 copy_remote_to_docker() {
-  local node="$1"
-  local source="$2"
-  local dest="$3"
-  local container="${CONTAINER_NAME:-vllm-ascend-env-a3}"
+    local node="$1" source="$2" dest="$3"
+    local container="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 
-  local target
-  target=$(ssh_target "$node")
-
-  # 直接在远程执行 docker cp
-  if ! ssh ${SSH_OPTS} "$target" "docker cp '${source}' '${container}:${dest}'" 2>/dev/null; then
-    log_err "[${node}] docker cp 失败: ${source} -> ${container}:${dest}"
-    return 1
-  fi
-
-  echo "[${node}] OK"
+    if ! ssh_run "$node" "docker cp '${source}' '${container}:${dest}'"; then
+        log_err "[${node}] docker cp 失败: ${source} -> ${container}:${dest}"
+        return 1
+    fi
+    log_info "[${node}] OK"
 }
 
 # ------------------------------------------
 # 文件复制函数 - 本地模式（文件在本地）
 # ------------------------------------------
 copy_local_to_docker() {
-  local node="$1"
-  local source="$2"
-  local dest="$3"
-  local container="${CONTAINER_NAME:-vllm-ascend-env-a3}"
+    local node="$1" source="$2" dest="$3"
+    local container="${CONTAINER_NAME:-vllm-ascend-env-a3}"
+    local target
+    target=$(ssh_target "$node")
+    local temp_remote_file="/tmp/copy_to_docker_$(basename "$source").$$.$(date +%s%N)"
 
-  local target
-  target=$(ssh_target "$node")
+    # shellcheck disable=SC2086
+    if ! scp ${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10} "$source" "${target}:${temp_remote_file}" 2>/dev/null; then
+        log_err "[${node}] scp 传输失败"
+        return 1
+    fi
 
-  # 首先将文件复制到远程节点的临时目录
-  local temp_remote_file="/tmp/copy_to_docker_$(basename "$source").$$.$(date +%s%N)"
-
-  if ! scp ${SSH_OPTS} "$source" "${target}:${temp_remote_file}" 2>/dev/null; then
-    log_err "[${node}] scp 传输失败"
-    return 1
-  fi
-
-  # 然后在远程节点执行 docker cp
-  if ! ssh ${SSH_OPTS} "$target" "docker cp '${temp_remote_file}' '${container}:${dest}' && rm -f '${temp_remote_file}'" 2>/dev/null; then
-    # 清理临时文件
-    ssh ${SSH_OPTS} "$target" "rm -f '${temp_remote_file}'" 2>/dev/null || true
-    log_err "[${node}] docker cp 失败"
-    return 1
-  fi
-
-  echo "[${node}] OK"
+    if ! ssh_run "$node" "docker cp '${temp_remote_file}' '${container}:${dest}' && rm -f '${temp_remote_file}'"; then
+        ssh_run "$node" "rm -f '${temp_remote_file}'" 2>/dev/null || true
+        log_err "[${node}] docker cp 失败"
+        return 1
+    fi
+    log_info "[${node}] OK"
 }
 
 # ------------------------------------------
 # 批量复制（配置文件模式）
 # ------------------------------------------
 run_batch_copy() {
-  local config_file="$1"
+    local config_file="$1"
 
-  if [[ ! -f "$config_file" ]]; then
-    log_err "配置文件不存在: $config_file"
-    exit 2
-  fi
+    if [[ ! -f "$config_file" ]]; then
+        log_err "配置文件不存在: $config_file"
+        exit 2
+    fi
 
-  log_info "使用配置文件: $config_file"
+    log_info "使用配置文件: $config_file"
 
-  # 读取配置文件，格式: source_path|dest_path
-  local line_num=0
-  while IFS='|' read -r source dest || [[ -n "$source" ]]; do
-    ((line_num++))
+    local line_num=0
+    while IFS='|' read -r source dest || [[ -n "$source" ]]; do
+        ((line_num++))
 
-    # 跳过空行和注释
-    [[ -z "$source" || "$source" =~ ^[[:space:]]*# ]] && continue
+        # 跳过空行和注释
+        [[ -z "$source" || "$source" == \#* ]] && continue
 
-    # 去除前后空格
-    source=$(echo "$source" | xargs)
-    dest=$(echo "$dest" | xargs)
+        # 去除前后空格
+        source=$(echo "$source" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-    log_info "复制任务 #${line_num}: ${source} -> ${dest}"
+        log_info "复制任务 #${line_num}: ${source} -> ${dest}"
 
-    for node in $nodes; do
-      limit_jobs "$PARALLELISM"
-      if $REMOTE_MODE; then
-        (copy_remote_to_docker "$node" "$source" "$dest") &
-      else
-        (copy_local_to_docker "$node" "$source" "$dest") &
-      fi
-    done
-    wait
-  done < "$config_file"
+        for node in $nodes; do
+            limit_jobs "$PARALLELISM"
+            if $REMOTE_MODE; then
+                (copy_remote_to_docker "$node" "$source" "$dest") &
+            else
+                (copy_local_to_docker "$node" "$source" "$dest") &
+            fi
+        done
+        wait
+    done < "$config_file"
 }
 
 # ------------------------------------------
@@ -242,12 +218,12 @@ if [[ ${#SPECIFIC_NODES[@]} -gt 0 ]]; then
   nodes="${SPECIFIC_NODES[*]}"
   log_info "指定节点: $nodes"
 else
-  nodes="$(_nodes)"
+  nodes="$(read_nodes "$NODES_FILE")"
   if [[ -z "$nodes" ]]; then
     log_err "NODES_FILE 中未找到任何节点信息"
     exit 2
   fi
-  log_info "目标节点: $(echo $nodes | tr '\n' ' ')"
+  log_info "目标节点: $nodes"
 fi
 
 log_info "容器名称: ${CONTAINER_NAME:-vllm-ascend-env-a3}"
