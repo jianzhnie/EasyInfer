@@ -127,10 +127,6 @@ check_dependencies
 # 辅助函数
 # ------------------------------------------
 
-# 获取非空节点列表 (wrapper for local NODES_FILE)
-_nodes() {
-  read_nodes "$NODES_FILE"
-}
 
 # ------------------------------------------
 # 容器准备远程执行逻辑定义
@@ -225,13 +221,13 @@ prepare_node() {
 # 主流程入口
 # ------------------------------------------
 
-nodes="$(_nodes)"
+nodes="$(read_nodes "$NODES_FILE")"
 if [[ -z "$nodes" ]]; then
   log_err "NODES_FILE 中未找到任何节点信息"
   exit 2
 fi
 
-log_info "目标节点列表: $(echo $nodes | tr '\n' ' ')"
+log_info "目标节点列表: $nodes"
 log_info "动作模式: ${ACTION}"
 log_info "=== 开始准备节点 ==="
 

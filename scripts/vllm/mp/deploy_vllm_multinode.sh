@@ -35,7 +35,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_LIST_FILE="${SCRIPT_DIR}/../../node_list.txt"
-SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 
 # 加载共享工具函数
@@ -76,10 +76,9 @@ if [[ ! -f "${NODE_LIST_FILE}" ]]; then
 fi
 
 ALL_NODES=()
-while IFS= read -r line || [[ -n "${line}" ]]; do
-    line="$(echo "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    [[ -n "${line}" && ! "${line}" =~ ^# ]] && ALL_NODES+=("${line}")
-done < "${NODE_LIST_FILE}"
+while IFS= read -r line; do
+    ALL_NODES+=("$line")
+done < <(read_nodes "${NODE_LIST_FILE}")
 TOTAL_NODES=${#ALL_NODES[@]}
 
 if [[ ${TOTAL_NODES} -lt 2 ]]; then
@@ -161,7 +160,7 @@ if [[ "${SKIP_ENV_CHECK}" != "true" && "${DRY_RUN}" != "true" && "${DRY_RUN}" !=
     failed=0
     for node in "${ALL_NODES[@]}"; do
         if ! ssh ${SSH_OPTS} -o ConnectTimeout=5 "${node}" "echo OK" >/dev/null 2>&1; then
-            log_error "SSH failed: ${node}"
+            log_err "SSH failed: ${node}"
             failed=1
         fi
     done
