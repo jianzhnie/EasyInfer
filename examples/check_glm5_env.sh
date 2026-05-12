@@ -43,7 +43,7 @@ echo ""
 # 检查 NPU 数量
 echo "[1/8] 检查 NPU 设备..."
 if command -v npu-smi &> /dev/null; then
-    NPU_COUNT=$(npu-smi info -l | grep -c "NPU ID" || echo "0")
+    NPU_COUNT=$(npu-smi info -l 2>/dev/null | grep -c "NPU ID" || echo "0")
     echo "  ✓ NPU 数量: $NPU_COUNT"
 
     case "$HARDWARE" in

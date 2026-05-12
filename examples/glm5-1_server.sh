@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# 加载共享环境配置（VLLM_HOST_IP, NPU 网络接口等）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SET_ENV_FILE="${SCRIPT_DIR}/../scripts/vllm/set_env.sh"
+if [[ -f "$SET_ENV_FILE" ]]; then
+    set +u
+    source "$SET_ENV_FILE" 2>/dev/null || true
+    set -u
+fi
+
 export HCCL_OP_EXPANSION_MODE="AIV"
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1

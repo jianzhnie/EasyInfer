@@ -125,6 +125,7 @@ ssh_run_with_timeout() {
     
     # 优先使用 timeout 命令，回退到 Perl 实现
     if command -v timeout >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
         timeout "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     else
         perl -e '
@@ -143,6 +144,7 @@ ssh_run_with_timeout() {
                 exit 124;
             }
             exit $? >> 8;
+        # shellcheck disable=SC2086
         ' "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     fi
     
@@ -413,8 +415,11 @@ if [[ ! -f "$NODE_LIST_FILE" ]]; then
     exit 1
 fi
 
-# 读取节点列表
-mapfile -t NODES < <(awk 'NF && !/^#/ {print $1}' "$NODE_LIST_FILE")
+# 读取节点列表 (兼容 bash 3.x / macOS)
+NODES=()
+while IFS= read -r line; do
+    NODES+=("$line")
+done < <(awk 'NF && !/^#/ {print $1}' "$NODE_LIST_FILE")
 
 if [[ ${#NODES[@]} -eq 0 ]]; then
     log_err "节点列表为空: $NODE_LIST_FILE"
@@ -463,6 +468,7 @@ declare -i TIMEOUT_COUNT=0
 # 创建临时目录和文件
 TMP_LOG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kill_nodes_$$.XXXXXX")
 export TMP_LOG_DIR
+trap 'rm -rf "$TMP_LOG_DIR"' EXIT
 
 # 为每个节点创建独立的日志文件以避免竞争
 for node in "${NODES[@]}"; do
@@ -504,7 +510,6 @@ if [[ -d "$TMP_LOG_DIR" ]]; then
             esac
         done < "$log_file"
     done
-    rm -rf "$TMP_LOG_DIR"
 fi
 
 # 输出汇总
