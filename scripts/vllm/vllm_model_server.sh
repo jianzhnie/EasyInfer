@@ -3,37 +3,35 @@
 # =============================================================================
 # vLLM Model Server Startup Script (MoE Models on NPU Cluster)
 # =============================================================================
-# 架构: 多节点 NPU 集群 (建议 8+ 节点, 每节点 8 NPU)
-# 模型: Kimi-K2-Base (MoE 架构, FP8 量化)
+# 所有变量均支持通过环境变量或 set_env.sh 外部覆盖。
+# 变量详细说明参见 vllm_server_env_template.sh —— 本脚本只保留操作摘要。
 #
 # 用法:
 #   1. 默认启动: ./vllm_model_server.sh
 #   2. 环境变量覆盖: MODEL_PATH=/path/to/model ./vllm_model_server.sh
-#   3. 外部配置: VLLM_ENV_FILE=/path/to/env.sh ./vllm_model_server.sh
+#   3. 外部配置: SET_ENV_FILE=/path/to/env.sh ./vllm_model_server.sh
 #   4. 命令行参数: ./vllm_model_server.sh --port 8080 --tensor-parallel-size 4
 # =============================================================================
 
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# 配置加载 (外部配置文件可选，用于向后兼容)
+# 配置加载
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 首先加载 set_env.sh (包含 VLLM_HOST_IP 等关键环境变量)
+# 首先加载 set_env.sh 
 SET_ENV_FILE="${SCRIPT_DIR}/set_env.sh"
-[[ -f "$SET_ENV_FILE" ]] && source "$SET_ENV_FILE" 2>/dev/null || true
-
-# 然后加载用户自定义配置 (如果有)
-VLLM_ENV_FILE="${VLLM_ENV_FILE:-${SCRIPT_DIR}/vllm_server_env.sh}"
-[[ -f "$VLLM_ENV_FILE" ]] && source "$VLLM_ENV_FILE" 2>/dev/null || true
+if [[ -f "$SET_ENV_FILE" ]]; then
+    source "$SET_ENV_FILE" 2>/dev/null || echo "[WARN] Failed to source ${SET_ENV_FILE}, continuing..." >&2
+fi
 
 # ------------------------------------------------------------------------------
-# 1. 基础环境变量配置
+# 1. 基础环境变量 — 详见 vllm_server_env_template.sh
 # ------------------------------------------------------------------------------
 # 模型路径: 指向 Hugging Face 模型目录
 # 必须包含 config.json, tokenizer 文件和模型权重
-MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/models/moonshotai/Kimi-K2-Base}"
+MODEL_PATH="${MODEL_PATH:-moonshotai/Kimi-K2-Base}"
 # 服务对外暴露的模型名称
 # 客户端调用 API 时使用此名称
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-kimi-k2-base}"
@@ -68,30 +66,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ------------------------------------------------------------------------------
-# 2. 分布式并行配置 (核心调整)
+# 2. 分布式并行配置 — 详见 vllm_server_env_template.sh
 # ------------------------------------------------------------------------------
-# Kimi-K2 采用 MoE 架构，参数量巨大，需要合理配置并行策略
-#
-# 推荐配置参考:
-#   128 NPU (16节点 * 8 NPU): TP=8, PP=16, EP=128
-#   64 NPU  (8节点 * 8 NPU):  TP=8, PP=8,  EP=64
-#   32 NPU  (4节点 * 8 NPU):  TP=8, PP=4,  EP=32
-#   16 NPU  (2节点 * 8 NPU):  TP=8, PP=2,  EP=16
-#   8 NPU   (1节点 * 8 NPU):  TP=8, PP=1,  EP=8
+# 推荐配置参考 (Kimi-K2 MoE, 384 experts):
+#   128 NPU (16*8): TP=8, PP=16, EP=128
+#   64 NPU  (8*8):  TP=8, PP=8,  EP=64
+#   32 NPU  (4*8):  TP=8, PP=4,  EP=32
+#   16 NPU  (2*8):  TP=8, PP=2,  EP=16
+#   8 NPU   (1*8):  TP=8, PP=1,  EP=8
 # ------------------------------------------------------------------------------
 # 张量并行大小 (Tensor Parallel)
 # 建议: 节点内 NPU 数量，通常设为 8
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 # 流水线并行大小 (Pipeline Parallel)
 # 建议: 根据节点数设置，跨节点并行
-PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-16}"
+PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-1}"
 # 分布式执行后端
 # 可选: ray, mp (多进程)
 # 留空则由 vLLM 自动选择: 单节点→mp, 多节点→ray
-DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
+DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"    # 留空→自动选择
 # 专家并行开关 (Expert Parallel)
 # MoE 模型强烈建议启用，可显著提升性能
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
+# EP 自动计算为 TP×PP，确保能被 384 experts 整除
 # 专家并行大小
 # 默认自动计算为 TP * PP，确保专家均匀分布
 # Kimi-K2 有 384 个专家，建议 EP 能整除 384
@@ -99,7 +96,7 @@ ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
 : "${EXPERT_PARALLEL_SIZE:=$((TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE))}"
 
 # ------------------------------------------------------------------------------
-# 3. 内存与量化配置
+# 3. 内存与量化 — 详见 vllm_server_env_template.sh
 # ------------------------------------------------------------------------------
 # 模型数据类型
 # 可选: float16, bfloat16, float32
@@ -121,7 +118,7 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 SWAP_SPACE="${SWAP_SPACE:-128}"
 
 # ------------------------------------------------------------------------------
-# 4. 吞吐量与序列调度优化
+# 4. 吞吐量与序列调度 — 详见 vllm_server_env_template.sh
 # ------------------------------------------------------------------------------
 # 最大模型长度 (上下文窗口)
 # 模型原生支持 131072，但为内存和吞吐折中，可限制为 32k-64k
@@ -143,7 +140,7 @@ MAX_TOKENS_PER_SEQUENCE="${MAX_TOKENS_PER_SEQUENCE:-32768}"
 
 
 # ------------------------------------------------------------------------------
-# 5. 高级加速特性
+# 5. 高级加速特性 — 详见 vllm_server_env_template.sh
 # ------------------------------------------------------------------------------
 # 前缀缓存开关 (Prefix Caching)
 # 对于多轮对话或大量重复 system prompt 极其有效，强烈建议启用
@@ -165,7 +162,8 @@ AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 
 
 # ------------------------------------------------------------------------------
-# 6. API 和监控配置
+# 6. API 和监控 — 详见 vllm_server_env_template.sh
+#     注意: 模板 ENABLE_METRICS=1（推荐生产开启），本脚本保守默认 0
 # ------------------------------------------------------------------------------
 # API 密钥 (生产环境强烈建议设置)
 # 留空表示不启用认证
@@ -189,7 +187,7 @@ DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-0}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 
 # ------------------------------------------------------------------------------
-# 7. 启动与重试配置
+# 7. 启动与重试
 # ------------------------------------------------------------------------------
 # 最大重试次数
 # 服务崩溃后自动重启的次数
@@ -246,15 +244,15 @@ args=(
 has_flag "--swap-space" && args+=(--swap-space "$SWAP_SPACE")
 # API Key
 [[ -n "$API_KEY" ]] && args+=(--api-key "$API_KEY")
-# Tool Calling (Claude Code 集成必需)
+# Tool Calling
 if [[ "$ENABLE_TOOL_CALLING" == "1" ]]; then
     args+=(--enable-auto-tool-choice)
     [[ -n "$TOOL_CALL_PARSER" ]] && args+=(--tool-call-parser "$TOOL_CALL_PARSER")
 fi
-# max_tokens_per_sequence (如果定义且 vLLM 支持)
+# max_tokens_per_sequence
 [[ -n "${MAX_TOKENS_PER_SEQUENCE:-}" ]] && has_flag "--max-tokens-per-sequence" && \
     args+=(--max-tokens-per-sequence "$MAX_TOKENS_PER_SEQUENCE")
-# num-scheduler-steps (如果定义且 vLLM 支持)
+# num-scheduler-steps
 has_flag "--num-scheduler-steps" && args+=(--num-scheduler-steps "$NUM_SCHEDULER_STEPS")
 
 # 动态特性检测
@@ -263,40 +261,38 @@ if [[ "$AUTO_DETECT_FLAGS" == "1" ]]; then
     if [[ "$ENABLE_EXPERT_PARALLEL" == "1" ]] && has_flag "--enable-expert-parallel"; then
         args+=("--enable-expert-parallel")
     fi
-    
-    # Prefix Caching - 修正逻辑：只有明确禁用时才添加 disable 参数
+
+    # Prefix Caching — 优先 enable，否则按 disable 处理
     if [[ "$PREFIX_CACHING" == "1" ]] && has_flag "--enable-prefix-caching"; then
         args+=("--enable-prefix-caching")
     elif [[ "$PREFIX_CACHING" == "0" ]] && has_flag "--disable-prefix-caching"; then
         args+=("--disable-prefix-caching")
     fi
-    
-    # CUDA Graph
+
+    # CUDA Graph (enforce-eager 须检测版本支持)
     if [[ "$ENFORCE_EAGER" == "1" ]]; then
-        args+=(--enforce-eager)
+        has_flag "--enforce-eager" && args+=(--enforce-eager)
     elif has_flag "--max-seq-len-to-capture"; then
         args+=(--max-seq-len-to-capture "$MAX_SEQ_LEN_TO_CAPTURE")
     fi
-    
+
     # 日志级别
     has_flag "--log-level" && args+=(--log-level "$LOG_LEVEL")
-    
+
     # Metrics
     if [[ "$ENABLE_METRICS" == "1" ]] && has_flag "--enable-metrics"; then
         args+=(--enable-metrics)
         has_flag "--metrics-port" && args+=(--metrics-port "$METRICS_PORT")
     fi
-    
-    # 其他
+
     has_flag "--allowed-origins" && args+=(--allowed-origins "$ALLOWED_ORIGINS")
     [[ "$DISABLE_LOG_REQUESTS" == "1" ]] && has_flag "--disable-log-requests" && args+=(--disable-log-requests)
 fi
 
-# 添加用户传入的额外参数 (按 flag 名去重)
+# 额外参数去重
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     for extra_arg in "${EXTRA_ARGS[@]}"; do
         skip=false
-        # 提取 flag 名 (支持 --flag=value 和 --flag value 格式)
         flag_name="${extra_arg%%=*}"
         for existing in "${args[@]}"; do
             existing_name="${existing%%=*}"
@@ -338,20 +334,24 @@ EOF
 # 启动 (带重试)
 # -----------------------------------------------------------------------------
 RETRY_COUNT=0
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
     vllm "${args[@]}"
     EXIT_CODE=$?
-    
-    if [ $EXIT_CODE -eq 0 ]; then
+
+    if [[ $EXIT_CODE -eq 0 ]]; then
         echo "[INFO] vLLM server exited normally."
         break
-    elif [ $EXIT_CODE -eq 130 ] || [ $EXIT_CODE -eq 137 ]; then
+    elif [[ $EXIT_CODE -eq 130 || $EXIT_CODE -eq 137 ]]; then
         echo "[INFO] Terminated by signal (exit $EXIT_CODE)."
         exit 0
     else
-        RETRY_COUNT=$((RETRY_COUNT+1))
-        [ $RETRY_COUNT -lt $MAX_RETRIES ] && \
-            { echo "[WARN] Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"; sleep $RETRY_DELAY; } || \
-            { echo "[FATAL] Max retries reached."; exit $EXIT_CODE; }
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
+            echo "[WARN] Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"
+            sleep "$RETRY_DELAY"
+        else
+            echo "[FATAL] Max retries reached."
+            exit "$EXIT_CODE"
+        fi
     fi
 done
