@@ -30,18 +30,6 @@ source "${SCRIPTS_DIR}/common.sh"
 # 远程执行辅助函数
 # -----------------------------------------------------------------
 
-# 解析主机名 → IP 地址（与 Ray --node-ip-address 保持一致）
-resolve_hostname() {
-    local host=$1
-    local ip
-    ip=$(getent hosts "$host" 2>/dev/null | awk '$1 !~ /:/ {print $1; exit}')
-    if [[ -z "$ip" ]]; then
-        log_err "Cannot resolve hostname: $host"
-        return 1
-    fi
-    printf '%s' "$ip"
-}
-
 # 增强版 ssh，支持 -q 等前置 flag 和 SSH_USER_HOST_PREFIX/SSH_OPTS
 ssh_cmd() {
     local flags=()
@@ -103,29 +91,28 @@ stop_all_ray() {
 
 start_head() {
     local node=$1
-    local node_ip
-    node_ip=$(resolve_hostname "$node") || return 1
-    log_info "[HEAD] Starting Ray head on $node ($node_ip)"
+    log_info "[HEAD] Starting Ray head on $node"
 
-    # 由 remote_exec 的 base64 编码保护，JSON 无需额外转义
+    # 在容器内取 TP_SOCKET_IFNAME 接口的 IPv4 地址，保证与 set_env.sh 中 VLLM_HOST_IP 一致
     local cmd
     printf -v cmd \
-        'ray start --head --node-ip-address=%s --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$node_ip" "$MASTER_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
+        'NODE_IP=$(ip -4 addr show "${TP_SOCKET_IFNAME}" 2>/dev/null | awk "/inet / {print \$2}" | cut -d/ -f1 | head -1) && \
+         ray start --head --node-ip-address="${NODE_IP}" --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$MASTER_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
 
     remote_exec "$node" "$cmd"
 }
 
 start_worker() {
     local node=$1 master=$2
-    local node_ip
-    node_ip=$(resolve_hostname "$node") || return 1
-    log_info "[WORKER] Starting Ray worker on $node ($node_ip)"
+    log_info "[WORKER] Starting Ray worker on $node"
 
+    # 在容器内取 TP_SOCKET_IFNAME 接口的 IPv4 地址，保证与 set_env.sh 中 VLLM_HOST_IP 一致
     local cmd
     printf -v cmd \
-        'ray start --address=%s:%s --node-ip-address=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$master" "$MASTER_PORT" "$node_ip" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
+        'NODE_IP=$(ip -4 addr show "${TP_SOCKET_IFNAME}" 2>/dev/null | awk "/inet / {print \$2}" | cut -d/ -f1 | head -1) && \
+         ray start --address=%s:%s --node-ip-address="${NODE_IP}" --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$master" "$MASTER_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
 
     remote_exec "$node" "$cmd"
 }
