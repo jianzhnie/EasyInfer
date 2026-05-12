@@ -20,10 +20,16 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 首先加载 set_env.sh 
+# 首先加载 set_env.sh
 SET_ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 if [[ -f "$SET_ENV_FILE" ]]; then
     source "$SET_ENV_FILE" 2>/dev/null || echo "[WARN] Failed to source ${SET_ENV_FILE}, continuing..." >&2
+fi
+
+# 然后加载 vllm_server_env.sh（用户自定义覆盖）
+VLLM_ENV_FILE="${VLLM_ENV_FILE:-${SCRIPT_DIR}/vllm_server_env.sh}"
+if [[ -f "$VLLM_ENV_FILE" ]]; then
+    source "$VLLM_ENV_FILE" 2>/dev/null || echo "[WARN] Failed to source ${VLLM_ENV_FILE}, continuing..." >&2
 fi
 
 # ------------------------------------------------------------------------------
@@ -81,18 +87,12 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 # 流水线并行大小 (Pipeline Parallel)
 # 建议: 根据节点数设置，跨节点并行
 PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-1}"
-# 分布式执行后端
-# 可选: ray, mp (多进程)
-# 留空则由 vLLM 自动选择: 单节点→mp, 多节点→ray
-DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"    # 留空→自动选择
+# 分布式执行后端: ray, mp; 留空→自动选择
+DISTRIBUTED_EXECUTOR_BACKEND="${DISTRIBUTED_EXECUTOR_BACKEND:-}"
 # 专家并行开关 (Expert Parallel)
 # MoE 模型强烈建议启用，可显著提升性能
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
-# EP 自动计算为 TP×PP，确保能被 384 experts 整除
-# 专家并行大小
-# 默认自动计算为 TP * PP，确保专家均匀分布
-# Kimi-K2 有 384 个专家，建议 EP 能整除 384
-# 延迟计算：在 TP/PP 可能被外部配置覆盖后再计算
+# EP 自动计算为 TP×PP（Kimi-K2 有 384 experts，须能整除）
 : "${EXPERT_PARALLEL_SIZE:=$((TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE))}"
 
 # ------------------------------------------------------------------------------
@@ -191,9 +191,8 @@ ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 # ------------------------------------------------------------------------------
 # 最大重试次数
 # 服务崩溃后自动重启的次数
-export MAX_RETRIES="${MAX_RETRIES:-3}"
-# 重试间隔 (秒)
-export RETRY_DELAY="${RETRY_DELAY:-10}"
+MAX_RETRIES="${MAX_RETRIES:-3}"
+RETRY_DELAY="${RETRY_DELAY:-10}"
 
 # -----------------------------------------------------------------------------
 # 辅助函数
