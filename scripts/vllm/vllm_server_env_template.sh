@@ -37,6 +37,8 @@ export PORT="${PORT:-8000}"
 # 当前节点 IP (多节点 Ray 集群必需)
 # 主节点设置为 Master IP，工作节点设置为当前节点的 IP
 # 单节点部署可留空或设为 127.0.0.1
+# 默认: 通过 hostname 解析获取（与 start_ray_cluster.sh 使用相同方式）
+# 注意: 多网卡节点上自动探测可能选错 IP，请在此显式设置
 export VLLM_HOST_IP="${VLLM_HOST_IP:-}"
 
 # 日志级别: debug, info, warning, error
