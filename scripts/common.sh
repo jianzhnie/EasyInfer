@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# 共享工具函数库 (common.sh)
-# 供 scripts/ 下各子目录的脚本 source 使用
-# ==============================================================================
+#
+# 共享工具函数库 — 供 scripts/ 下各子目录的脚本 source 使用
+#
+# 注意: 本文件被 source 而非直接执行，刻意不加 set -euo pipefail，
+#       以免影响调用脚本的 shell 选项。所有函数内部自行处理错误。
 
 # 颜色常量
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly NC='\033[0m'
 
 # ------------------------------------------------------------------------------
 # 日志函数
@@ -39,8 +40,11 @@ ssh_target() {
     printf "%s%s" "${SSH_USER_HOST_PREFIX:-}" "$1"
 }
 
+# SSH_OPTS 通过词分割传递多个选项（如 "-o BatchMode=yes -o ConnectTimeout=10"）。
+# 这是有意设计的简单约定，不改为数组以保持向后兼容。
 ssh_run() {
     local node="$1"; shift
+    # shellcheck disable=SC2086
     ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@"
 }
 
@@ -65,10 +69,11 @@ get_node_ip() {
     elif command -v ifconfig >/dev/null 2>&1; then
         ip=$(ifconfig "${interface}" 2>/dev/null | awk '/inet / {print $2}' | head -n 1)
     fi
-    echo "$ip"
+    printf "%s" "$ip"
 }
 
 # ------------------------------------------------------------------------------
 # scripts 目录路径 (基于 common.sh 的位置)
 # ------------------------------------------------------------------------------
 SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPTS_ROOT
