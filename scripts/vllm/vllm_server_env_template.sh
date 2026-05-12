@@ -205,6 +205,7 @@ export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 
 # Prometheus 指标导出开关
 # 1 = 启用，0 = 禁用
+# 注意: 本模板推荐生产开启(1)，vllm_model_server.sh 保守默认关闭(0)
 export ENABLE_METRICS="${ENABLE_METRICS:-1}"
 
 # Prometheus 指标导出端口
