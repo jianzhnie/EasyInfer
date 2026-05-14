@@ -19,6 +19,9 @@ SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPTS_ROOT}/common.sh"
 source "${SCRIPT_DIR}/set_ray_env.sh"
 
+# 强制设置 SSH 选项以确保输出纯净
+export SSH_OPTS="-q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no"
+
 # -----------------------------------------------------------------
 # 参数解析
 # -----------------------------------------------------------------
@@ -88,8 +91,8 @@ start_head() {
     log_info "正在启动 Ray head 节点: $node"
     local cmd
     printf -v cmd \
-        'ray start --head --port=%s --node-ip-address=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$RAY_PORT" "$node" "$DASHBOARD_PORT" "$NPUS_PER_NODE"
+        'ray start --head --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$RAY_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE"
     remote_exec "$node" "$cmd"
 }
 
@@ -194,10 +197,12 @@ log_info "[5/5] 验证集群状态..."
 start_time=$(date +%s)
 
 while true; do
+    # 使用 grep | wc -l 避免 grep -c 在未匹配时返回非零状态导致的 || echo "0" 重复输出问题
     status_output=$(remote_exec "$HEAD_NODE" "ray status" 2>/dev/null || echo "")
-    current_nodes=$(echo "$status_output" | grep -c "node_id" 2>/dev/null || echo "0")
+    # 使用 wc -l 统计并用 xargs 去除空白字符
+    current_nodes=$(echo "$status_output" | grep "node_id" | wc -l | xargs)
 
-    if [[ "$current_nodes" -ge "${#NODES[@]}" ]]; then
+    if [[ -n "$current_nodes" && "$current_nodes" -ge "${#NODES[@]}" ]]; then
         log_info "所有 ${#NODES[@]} 个节点已成功加入集群."
         break
     fi

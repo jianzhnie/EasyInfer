@@ -22,6 +22,12 @@ export HCCL_WHITELIST_DISABLE=1
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f5}"
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
 
+# 自动获取业务网 IP 并设置 VLLM_HOST_IP，确保与 Ray 资源标签一致
+if [[ -n "${HCCL_SOCKET_IFNAME:-}" ]]; then
+    _HOST_IP=$(ip -4 addr show "${HCCL_SOCKET_IFNAME}" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
+    export VLLM_HOST_IP="${VLLM_HOST_IP:-$_HOST_IP}"
+fi
+
 # -----------------------------------------------------------------
 # 3. 性能调优
 # -----------------------------------------------------------------
@@ -52,7 +58,7 @@ export DASHBOARD_PORT="${DASHBOARD_PORT:-8265}"
 export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
 export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
 export WAIT_TIME="${WAIT_TIME:-5}"
-export NODE_LIST="${NODE_LIST:-}"
+export NODE_LIST="${NODE_LIST:-/home/jianzhnie/llmtuner/llm/EasyInfer/scripts/node_list.txt}"
 
 # 容器内 set_ray_env.sh 的路径
 export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/workspace/scripts/cluster/set_ray_env.sh}"
