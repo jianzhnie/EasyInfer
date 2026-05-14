@@ -24,16 +24,10 @@ source "${SCRIPT_DIR}/set_ray_env.sh"
 # -----------------------------------------------------------------
 usage() {
     cat <<EOF
-Usage: $0 <start|stop> [options]
+Usage: $0 <start|stop> [--file <node_list>]
 
-Options:
-  --file, -f         节点列表文件   (默认: \$NODE_LIST)
-  --container, -c    容器名称       (默认: $CONTAINER_NAME)
-  --port, -p         Ray 端口       (默认: $RAY_PORT)
-  --dashboard-port   Dashboard 端口 (默认: $DASHBOARD_PORT)
-  --npus, -n         每节点 NPU 数  (默认: $NPUS_PER_NODE)
-  --parallel, -j     最大 SSH 并发  (默认: $MAX_SSH_PARALLELISM)
-  --help, -h         显示帮助
+所有集群配置（端口、容器名、NPU 数等）请在 set_ray_env.sh 中设置。
+可通过环境变量覆盖，例如: RAY_PORT=6380 $0 start
 EOF
     exit 1
 }
@@ -42,13 +36,8 @@ ACTION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         start|stop) ACTION="$1"; shift ;;
-        --file|-f)          NODE_LIST="$2"; shift 2 ;;
-        --container|-c)     CONTAINER_NAME="$2"; shift 2 ;;
-        --port|-p)          RAY_PORT="$2"; shift 2 ;;
-        --dashboard-port)   DASHBOARD_PORT="$2"; shift 2 ;;
-        --npus|-n)          NPUS_PER_NODE="$2"; shift 2 ;;
-        --parallel|-j)      MAX_SSH_PARALLELISM="$2"; shift 2 ;;
-        --help|-h)          usage ;;
+        --file|-f)  NODE_LIST="$2"; shift 2 ;;
+        --help|-h)  usage ;;
         *) log_err "未知参数: $1"; usage ;;
     esac
 done
@@ -82,8 +71,8 @@ remote_exec() {
     local node=$1 cmd=$2
     local b64cmd
     b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
-    ssh_run "$node" "docker exec -i ${CONTAINER_NAME} bash -c \"
-        [ -f ${RAY_ENV_SCRIPT} ] && source ${RAY_ENV_SCRIPT} 2>/dev/null
+    ssh_run "$node" "docker exec -i \"${CONTAINER_NAME}\" bash -c \"
+        [ -f \\\"${RAY_ENV_SCRIPT}\\\" ] && source \\\"${RAY_ENV_SCRIPT}\\\" 2>/dev/null
         echo '${b64cmd}' | base64 -d | bash\""
 }
 
@@ -189,7 +178,10 @@ if [[ ${#WORKERS[@]} -gt 0 ]]; then
     for node in "${WORKERS[@]}"; do
         limit_jobs "$MAX_SSH_PARALLELISM"
         (
-            start_worker "$node" "$HEAD_NODE" || log_err "Worker 启动失败: $node"
+            if ! start_worker "$node" "$HEAD_NODE"; then
+                log_err "Worker 启动失败: $node"
+                touch "${_TEMP_DIR}/worker_fail"
+            fi
         ) &
     done
     wait
@@ -227,6 +219,10 @@ log_info "============================================="
 echo ""
 remote_exec "$HEAD_NODE" "ray status" 2>&1 || log_warn "无法获取 Ray 集群状态"
 echo ""
-log_info "Ray 集群启动完成!"
+if [[ -f "${_TEMP_DIR}/worker_fail" ]]; then
+    log_warn "Ray 集群部分启动 (有 Worker 失败)"
+else
+    log_info "Ray 集群启动完成!"
+fi
 log_info "Dashboard: http://${HEAD_NODE}:${DASHBOARD_PORT}"
 log_info "============================================="
