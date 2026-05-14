@@ -82,10 +82,12 @@ log_info "Step 1: Starting Ray Head on $HEAD_NODE..."
 if ! remote_exec "$HEAD_NODE" "bash $HEAD_NODE_SCRIPT"; then
     log_fatal "Failed to start Ray Head on $HEAD_NODE"
 fi
+log_info "Ray Head started. Waiting 5s for initialization..."
+sleep 5
 
 # Step 2: Start Ray Workers
 if [ ${#WORKERS[@]} -gt 0 ]; then
-    log_info "Step 2: Starting ${#WORKERS[@]} Ray Workers..."
+    log_info "Step 2: Starting ${#WORKERS[@]} Ray Workers in parallel..."
     for node in "${WORKERS[@]}"; do
         limit_jobs "$MAX_SSH_PARALLELISM"
         (
@@ -96,6 +98,7 @@ if [ ${#WORKERS[@]} -gt 0 ]; then
         ) &
     done
     wait
+    log_info "All worker join commands issued."
 fi
 
 # Step 3: Verify Cluster
@@ -104,8 +107,7 @@ start_time=$(date +%s)
 expected_nodes=${#NODES[@]}
 
 while true; do
-    # Try to get active node count. We use a simple grep on 'ray status' output.
-    # Usually 'ray status' shows a list of nodes.
+    # Try to get active node count.
     current_nodes=$(remote_exec "$HEAD_NODE" "ray status 2>/dev/null | grep -c 'node_id:'" || echo "0")
     
     if [ "$current_nodes" -ge "$expected_nodes" ]; then
@@ -120,7 +122,7 @@ while true; do
     fi
     
     log_info "Waiting for nodes to join ($current_nodes/$expected_nodes)..."
-    sleep 5
+    sleep 2
 done
 
 log_info "Final Cluster Status:"
