@@ -1,175 +1,232 @@
 #!/usr/bin/env bash
 #
-# Optimized Ray Cluster Launcher
-# High-performance and robust deployment of Ray clusters on Docker containers.
+# Ray Cluster Launcher — 启动 / 停止多节点 Ray 集群
 #
+# 用法:
+#   start_ray_cluster.sh start  [options]
+#   start_ray_cluster.sh stop   [options]
+#
+# 依赖:
+#   - 所有节点配置无密码 SSH
+#   - 目标容器已运行
+#   - set_ray_env.sh 在容器内可访问 ($RAY_ENV_SCRIPT)
 
 set -euo pipefail
 
-# -----------------------------------------------------------------
-# 1. Configuration & Environment
-# -----------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Source common utilities and environment variables
-# shellcheck source=../common.sh
 source "${SCRIPTS_ROOT}/common.sh"
-
-# Source ray environment variables for defaults
-RAY_ENV_SCRIPT="${SCRIPT_DIR}/set_ray_env.sh"
-# Source without arguments to avoid triggering startup logic
-# shellcheck source=./set_ray_env.sh
-if [[ -f "$RAY_ENV_SCRIPT" ]]; then
-    source "$RAY_ENV_SCRIPT" ""
-fi
+source "${SCRIPT_DIR}/set_ray_env.sh"
 
 # -----------------------------------------------------------------
-# 2. Node Preparation
+# 参数解析
 # -----------------------------------------------------------------
-if [[ ! -f "$ARG_NODE_LIST" ]]; then
-    log_fatal "Node list file not found: $ARG_NODE_LIST"
-fi
+usage() {
+    cat <<EOF
+Usage: $0 <start|stop> [options]
 
-NODES=($(read_nodes "$ARG_NODE_LIST"))
-if [ ${#NODES[@]} -eq 0 ]; then
-    log_fatal "No nodes found in $ARG_NODE_LIST"
-fi
+Options:
+  --file, -f         节点列表文件   (默认: \$NODE_LIST)
+  --container, -c    容器名称       (默认: $CONTAINER_NAME)
+  --port, -p         Ray 端口       (默认: $RAY_PORT)
+  --dashboard-port   Dashboard 端口 (默认: $DASHBOARD_PORT)
+  --npus, -n         每节点 NPU 数  (默认: $NPUS_PER_NODE)
+  --parallel, -j     最大 SSH 并发  (默认: $MAX_SSH_PARALLELISM)
+  --help, -h         显示帮助
+EOF
+    exit 1
+}
 
-HEAD_NODE=${NODES[0]}
+ACTION=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        start|stop) ACTION="$1"; shift ;;
+        --file|-f)          NODE_LIST="$2"; shift 2 ;;
+        --container|-c)     CONTAINER_NAME="$2"; shift 2 ;;
+        --port|-p)          RAY_PORT="$2"; shift 2 ;;
+        --dashboard-port)   DASHBOARD_PORT="$2"; shift 2 ;;
+        --npus|-n)          NPUS_PER_NODE="$2"; shift 2 ;;
+        --parallel|-j)      MAX_SSH_PARALLELISM="$2"; shift 2 ;;
+        --help|-h)          usage ;;
+        *) log_err "未知参数: $1"; usage ;;
+    esac
+done
+
+[[ -n "${ACTION:-}" ]] || { log_err "缺少操作 (start 或 stop)"; usage; }
+
+# -----------------------------------------------------------------
+# 临时目录 & 清理
+# -----------------------------------------------------------------
+_TEMP_DIR=$(mktemp -d)
+cleanup() {
+    local rc=$?
+    [[ -n "${_TEMP_DIR:-}" && -d "$_TEMP_DIR" ]] && rm -rf "$_TEMP_DIR"
+    exit $rc
+}
+trap cleanup EXIT INT TERM
+
+# -----------------------------------------------------------------
+# 辅助函数
+# -----------------------------------------------------------------
+
+# 检查容器是否在指定节点运行
+check_container() {
+    local node=$1
+    ssh_run "$node" "docker ps --format '{{.Names}}' | grep -qx '${CONTAINER_NAME}'" 2>/dev/null
+}
+
+# 在远程节点的容器内执行命令
+# 使用 base64 编码避免多层引号转义问题
+remote_exec() {
+    local node=$1 cmd=$2
+    local b64cmd
+    b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
+    ssh_run "$node" "docker exec -i ${CONTAINER_NAME} bash -c \"
+        [ -f ${RAY_ENV_SCRIPT} ] && source ${RAY_ENV_SCRIPT} 2>/dev/null
+        echo '${b64cmd}' | base64 -d | bash\""
+}
+
+# 停止单个节点的 Ray（容错，静默）
+stop_ray_on_node() {
+    local node=$1
+    remote_exec "$node" "ray stop -f 2>/dev/null || true" >/dev/null 2>&1 || true
+}
+
+# 启动 Ray Head
+start_head() {
+    local node=$1
+    log_info "正在启动 Ray head 节点: $node"
+    local cmd
+    printf -v cmd \
+        'ray start --head --port=%s --node-ip-address=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$RAY_PORT" "$node" "$DASHBOARD_PORT" "$NPUS_PER_NODE"
+    remote_exec "$node" "$cmd"
+}
+
+# 启动 Ray Worker
+start_worker() {
+    local node=$1 head_addr=$2
+    log_info "Worker 加入集群: $node"
+    local cmd
+    printf -v cmd \
+        'ray start --address=%s:%s --resources='"'"'{"NPU":%s}'"'" \
+        "$head_addr" "$RAY_PORT" "$NPUS_PER_NODE"
+    remote_exec "$node" "$cmd"
+}
+
+# -----------------------------------------------------------------
+# 主流程
+# -----------------------------------------------------------------
+
+# 读取节点列表
+[[ -n "${NODE_LIST:-}" && -f "$NODE_LIST" ]] || log_fatal "节点列表文件未找到: ${NODE_LIST:-未设置}"
+mapfile -t NODES < <(read_nodes "$NODE_LIST")
+[[ ${#NODES[@]} -gt 0 ]] || log_fatal "节点列表为空: $NODE_LIST"
+
+HEAD_NODE="${NODES[0]}"
 WORKERS=("${NODES[@]:1}")
 
 log_info "============================================="
-log_info "Ray Cluster Action: $ARG_ACTION"
-log_info "Head Node:      $HEAD_NODE"
-log_info "Worker Nodes:   ${WORKERS[*]:-None}"
-log_info "Container:      $ARG_CONTAINER_NAME"
-log_info "Parallelism:    $ARG_MAX_SSH_PARALLELISM"
-log_info "NPUs per Node:  $ARG_NPUS_PER_NODE"
-log_info "Ray Port:       $ARG_RAY_PORT"
+log_info "Ray 集群操作: $ACTION"
+log_info "Head:       $HEAD_NODE"
+log_info "Workers:    ${WORKERS[*]:-无}"
+log_info "Container:  $CONTAINER_NAME"
+log_info "Ray Port:   $RAY_PORT"
+log_info "Dashboard:  $DASHBOARD_PORT"
+log_info "NPUs/Node:  $NPUS_PER_NODE"
 log_info "============================================="
 
-# -----------------------------------------------------------------
-# 3. Helper Functions
-# -----------------------------------------------------------------
-
-# Checks if the target container is running on a remote node
-check_container() {
-    local node=$1
-    if ! ssh_run "$node" "docker ps --format '{{.Names}}' | grep -q '^$ARG_CONTAINER_NAME$'" >/dev/null 2>&1; then
-        log_err "Container '$ARG_CONTAINER_NAME' is not running on $node"
-        return 1
-    fi
-    return 0
-}
-
-# Executes a command inside the target container on a remote node
-remote_exec() {
-    local node=$1
-    local cmd=$2
-    local silent=${3:-false}
-    
-    local docker_cmd="docker exec -i $ARG_CONTAINER_NAME bash -c \"$cmd\""
-    
-    if [ "$silent" = true ]; then
-        ssh_run "$node" "$docker_cmd" >/dev/null 2>&1
-    else
-        ssh_run "$node" "$docker_cmd"
-    fi
-}
-
-# -----------------------------------------------------------------
-# 4. Main Process
-# -----------------------------------------------------------------
-
-if [[ "$ARG_ACTION" == "stop" ]]; then
-    log_info "Stopping Ray cluster on all nodes..."
+# --- stop ---
+if [[ "$ACTION" == "stop" ]]; then
+    log_info "正在停止所有节点上的 Ray 进程..."
     for node in "${NODES[@]}"; do
-        limit_jobs "$ARG_MAX_SSH_PARALLELISM"
-        remote_exec "$node" "bash $RAY_CLUSTER_SCRIPT stop" true || log_warn "Failed to stop Ray on $node" &
+        limit_jobs "$MAX_SSH_PARALLELISM"
+        stop_ray_on_node "$node" &
     done
     wait
-    log_info "Cluster stopped."
+    log_info "集群已停止."
     exit 0
 fi
 
-# Action is "start"
+# --- start ---
 
-# Step -1: Pre-flight checks
-log_info "Step -1: Performing pre-flight checks..."
+# Step 1: 前置检查（并行）
+log_info "[1/5] 检查容器状态..."
 for node in "${NODES[@]}"; do
-    limit_jobs "$ARG_MAX_SSH_PARALLELISM"
+    limit_jobs "$MAX_SSH_PARALLELISM"
     (
         if ! check_container "$node"; then
-            exit 1
+            log_err "容器 '$CONTAINER_NAME' 未在 $node 上运行"
+            touch "${_TEMP_DIR}/preflight_fail"
         fi
     ) &
 done
 wait
+[[ ! -f "${_TEMP_DIR}/preflight_fail" ]] || log_fatal "前置检查失败，请确认容器状态"
 
-# Step 0: Stop existing Ray processes on all nodes
-log_info "Step 0: Cleaning up existing Ray processes..."
-for node in "${NODES[@]}"; do
-    limit_jobs "$ARG_MAX_SSH_PARALLELISM"
-    remote_exec "$node" "bash $RAY_CLUSTER_SCRIPT stop" true || log_warn "Cleanup failed on $node (non-fatal)" &
+# Step 2: 清理已有 Ray 进程（执行两次确保干净）
+log_info "[2/5] 清理已有 Ray 进程..."
+for _ in 1 2; do
+    for node in "${NODES[@]}"; do
+        limit_jobs "$MAX_SSH_PARALLELISM"
+        stop_ray_on_node "$node" &
+    done
+    wait
+    sleep 2
 done
-wait
-log_info "Cleanup completed."
+log_info "清理完成."
 
-# Step 1: Start Ray Head
-log_info "Step 1: Starting Ray Head on $HEAD_NODE..."
-if ! remote_exec "$HEAD_NODE" "bash $RAY_CLUSTER_SCRIPT head $ARG_RAY_PORT $ARG_DASHBOARD_PORT $ARG_NPUS_PER_NODE $HEAD_NODE"; then
-    log_fatal "Failed to start Ray Head on $HEAD_NODE"
-fi
-log_info "Ray Head started. Waiting 5s for initialization..."
-sleep 5
+# Step 3: 启动 Head
+log_info "[3/5] 启动 Head 节点..."
+start_head "$HEAD_NODE" || log_fatal "Head 节点启动失败: $HEAD_NODE"
+log_info "等待 ${WAIT_TIME}s 完成初始化..."
+sleep "$WAIT_TIME"
 
-# Step 2: Start Ray Workers
-if [ ${#WORKERS[@]} -gt 0 ]; then
-    log_info "Step 2: Starting ${#WORKERS[@]} Ray Workers in parallel..."
+# Step 4: 并行启动 Workers
+if [[ ${#WORKERS[@]} -gt 0 ]]; then
+    log_info "[4/5] 并行启动 ${#WORKERS[@]} 个 Worker..."
     for node in "${WORKERS[@]}"; do
-        limit_jobs "$ARG_MAX_SSH_PARALLELISM"
+        limit_jobs "$MAX_SSH_PARALLELISM"
         (
-            log_info "Joining $node to cluster..."
-            if ! remote_exec "$node" "bash $RAY_CLUSTER_SCRIPT worker $HEAD_NODE:$ARG_RAY_PORT $ARG_NPUS_PER_NODE $node"; then
-                log_err "Failed to start Ray Worker on $node"
-            fi
+            start_worker "$node" "$HEAD_NODE" || log_err "Worker 启动失败: $node"
         ) &
     done
     wait
-    log_info "All worker join commands issued."
+else
+    log_info "[4/5] 单节点模式，跳过 Worker 启动."
 fi
 
-# Step 3: Verify Cluster
-log_info "Step 3: Verifying Ray Cluster status..."
+# Step 5: 验证集群
+log_info "[5/5] 验证集群状态..."
 start_time=$(date +%s)
-expected_nodes=${#NODES[@]}
 
 while true; do
-    status_output=$(remote_exec "$HEAD_NODE" "ray status" true || echo "")
-    current_nodes=$(echo "$status_output" | grep -A 20 "Active nodes" | grep -c "node_id" || echo "0")
-    
-    if [ "$current_nodes" -ge "$expected_nodes" ]; then
-        log_info "Success: All $expected_nodes nodes have joined the cluster."
+    status_output=$(remote_exec "$HEAD_NODE" "ray status" 2>/dev/null || echo "")
+    current_nodes=$(echo "$status_output" | grep -c "node_id" 2>/dev/null || echo "0")
+
+    if [[ "$current_nodes" -ge "${#NODES[@]}" ]]; then
+        log_info "所有 ${#NODES[@]} 个节点已成功加入集群."
         break
     fi
-    
+
     elapsed=$(( $(date +%s) - start_time ))
-    if [ "$elapsed" -gt "$VERIFY_TIMEOUT" ]; then
-        log_err "Timeout reached ($VERIFY_TIMEOUT s). Only $current_nodes/$expected_nodes nodes joined."
-        log_warn "Please check node connectivity and container logs."
+    if [[ "$elapsed" -gt "$VERIFY_TIMEOUT" ]]; then
+        log_err "验证超时 (${VERIFY_TIMEOUT}s). 当前: $current_nodes/${#NODES[@]}"
+        log_warn "请检查节点连通性和容器日志"
         break
     fi
-    
-    log_info "Progress: $current_nodes/$expected_nodes nodes joined... (Elapsed: ${elapsed}s)"
+
+    log_info "等待节点加入... $current_nodes/${#NODES[@]} (${elapsed}s)"
     sleep 5
 done
 
-log_info "Final Cluster Status Summary:"
-remote_exec "$HEAD_NODE" "ray status"
-
+# 显示最终状态
+echo ""
 log_info "============================================="
-log_info "Ray Cluster setup process finished!"
-log_info "Dashboard URL:  http://$HEAD_NODE:$ARG_DASHBOARD_PORT"
-log_info "To stop cluster: bash $0 stop --file $ARG_NODE_LIST"
+echo ""
+remote_exec "$HEAD_NODE" "ray status" 2>&1 || log_warn "无法获取 Ray 集群状态"
+echo ""
+log_info "Ray 集群启动完成!"
+log_info "Dashboard: http://${HEAD_NODE}:${DASHBOARD_PORT}"
 log_info "============================================="
