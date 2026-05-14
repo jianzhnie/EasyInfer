@@ -35,24 +35,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_ENV_FILE="${SCRIPT_DIR}/../scripts/vllm/set_env.sh"
-
-# -----------------------------------------------------------------------------
-# 加载共享环境配置
-# -----------------------------------------------------------------------------
-if [[ -f "$SET_ENV_FILE" ]]; then
-    set +u
-    source "$SET_ENV_FILE" 2>/dev/null || true
-    set -u
-fi
-
-# 确保 VLLM_HOST_IP 已设置
-if [[ -z "${VLLM_HOST_IP:-}" ]]; then
-    echo "[ERROR] VLLM_HOST_IP is not set." >&2
-    echo "  Set it manually: export VLLM_HOST_IP=\$(ip -4 addr show enp66s0f5 | awk '/inet / {print \$2}' | cut -d/ -f1)" >&2
-    exit 1
-fi
-
 # -----------------------------------------------------------------------------
 # 服务配置（均可通过环境变量覆盖）
 # -----------------------------------------------------------------------------
@@ -128,7 +110,6 @@ cat <<EOF
   max_num_seqs:    $MAX_NUM_SEQS
   max_batched_tok: $MAX_NUM_BATCHED_TOKENS
 --------------------------------------------------------------------------------
-  VLLM_HOST_IP:    $VLLM_HOST_IP
 ================================================================================
 EOF
 
