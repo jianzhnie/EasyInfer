@@ -25,7 +25,7 @@ docker run -d \
     --ipc=host \
     --net=host \
     --ulimit memlock=-1 \
-    --ulimit stack=67108864 \
+    --ulimit stack=-1 \
     --privileged=true \
     --device=/dev/davinci0 \
     --device=/dev/davinci1 \
@@ -38,11 +38,14 @@ docker run -d \
     --device=/dev/davinci_manager \
     --device=/dev/devmm_svm \
     --device=/dev/hisi_hdc \
+    --shm-size=256g \
+    -e HCCL_BUFFSIZE=1024 \
+    -e HCCL_BUFFER_FILE_SIZE=1024 \
+    -v /usr/local/dcmi:/usr/local/dcmi \
+    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
     -v /usr/local/Ascend/driver:/usr/local/Ascend/driver \
     -v /usr/local/Ascend/add-ons/:/usr/local/Ascend/add-ons/ \
-    -v /usr/local/dcmi:/usr/local/dcmi \
     -v /usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool \
-    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
     -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
     -v /etc/ascend_install.info:/etc/ascend_install.info \
