@@ -1,79 +1,46 @@
 #!/usr/bin/env bash
 # =============================================================================
-# GLM-5.1 (W8A8) vLLM 推理服务 — 最大上下文 + Claude Code 集成
+# GLM-5 (Full Parameter) vLLM 推理服务部署脚本
 # =============================================================================
+# 参考自: examples/glm5-1_server.sh
+# 
 # 用法:
-#   # 默认配置（128K 上下文）
-#   bash examples/glm5-1_server.sh
-#
-#   # 最大上下文长度
-#   MAX_MODEL_LEN=202752 bash examples/glm5-1_server.sh
-#
-#   # 自定义端口 / API Key
-#   PORT=8080 API_KEY=my-secret bash examples/glm5-1_server.sh
+#   bash examples/glm5_full_server.sh
 #
 # 环境变量（均可外部覆盖）:
-#   MODEL_PATH              - 模型路径
+#   MODEL_PATH              - 模型路径 (默认: /llm_workspace_1P/robin/hfhub/models/ZhipuAI/GLM-5)
 #   PORT                    - 服务端口 (默认: 8077)
 #   MAX_MODEL_LEN           - 最大上下文长度 (默认: 131072)
-#   TENSOR_PARALLEL_SIZE    - 张量并行度 (默认: 32)
+#   TENSOR_PARALLEL_SIZE    - 张量并行度 (默认: 32, GLM-5 全量模型建议 32 或以上)
 #   GPU_MEMORY_UTILIZATION  - 显存利用率 (默认: 0.95)
-#   API_KEY                 - API 认证密钥 (默认: 不启用)
-#   MAX_NUM_SEQS            - 最大并发请求数 (默认: 8)
 #   VLLM_HOST_IP            - 节点 IP (默认: 自动检测)
-#
-# Claude Code 连接:
-#   启动后设置环境变量:
-#     ANTHROPIC_BASE_URL=http://<HOST_IP>:<PORT>/v1
-#     ANTHROPIC_API_KEY=dummy
-#     ANTHROPIC_AUTH_TOKEN=dummy
-#     ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.1
-#     ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1
-#     ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.1
 # =============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_ENV_FILE="${SCRIPT_DIR}/../scripts/vllm/set_env.sh"
-
 # -----------------------------------------------------------------------------
-# 加载共享环境配置
+# 服务配置（针对 GLM-5 全量参数模型优化）
 # -----------------------------------------------------------------------------
-if [[ -f "$SET_ENV_FILE" ]]; then
-    set +u
-    source "$SET_ENV_FILE" 2>/dev/null || true
-    set -u
-fi
-
-# 确保 VLLM_HOST_IP 已设置
-if [[ -z "${VLLM_HOST_IP:-}" ]]; then
-    echo "[ERROR] VLLM_HOST_IP is not set." >&2
-    echo "  Set it manually: export VLLM_HOST_IP=\$(ip -4 addr show enp66s0f5 | awk '/inet / {print \$2}' | cut -d/ -f1)" >&2
-    exit 1
-fi
-
-# -----------------------------------------------------------------------------
-# 服务配置（均可通过环境变量覆盖）
-# -----------------------------------------------------------------------------
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w8a8}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.1}"
+MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/models/ZhipuAI/GLM-5}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8077}"
 API_KEY="${API_KEY:-}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-32}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-64}"
 PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-1}"
 DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 DTYPE="${DTYPE:-bfloat16}"
-QUANTIZATION="${QUANTIZATION:-ascend}"
+# 全量模型不使用量化参数
+QUANTIZATION="${QUANTIZATION:-}" 
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 SEED="${SEED:-1024}"
 
 # -----------------------------------------------------------------------------
-# NPU / HCCL 环境变量
+# NPU / HCCL 环境变量 (针对 MoE 架构优化)
 # -----------------------------------------------------------------------------
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND="${OMP_PROC_BIND:-false}"
@@ -81,6 +48,7 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-200}"
 export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 # export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+# export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 
 # -----------------------------------------------------------------------------
 # 前置检查
@@ -109,7 +77,7 @@ check_prereqs
 # -----------------------------------------------------------------------------
 cat <<EOF
 ================================================================================
-  GLM-5.1 vLLM Server — Claude Code Integration
+  GLM-5 (Full Parameter) vLLM Server
 ================================================================================
   Model:          $MODEL_PATH
   Served name:    $SERVED_MODEL_NAME
@@ -122,13 +90,12 @@ cat <<EOF
   Distributed Backend:  ray
 --------------------------------------------------------------------------------
   dtype:           $DTYPE
-  quantization:    $QUANTIZATION
+  quantization:    ${QUANTIZATION:-None (Full Parameter)}
   GPU memory:      ${GPU_MEMORY_UTILIZATION}
   max_model_len:   $MAX_MODEL_LEN
   max_num_seqs:    $MAX_NUM_SEQS
   max_batched_tok: $MAX_NUM_BATCHED_TOKENS
 --------------------------------------------------------------------------------
-  VLLM_HOST_IP:    $VLLM_HOST_IP
 ================================================================================
 EOF
 
@@ -156,8 +123,8 @@ vllm_args=(
     --max-num-seqs "$MAX_NUM_SEQS"
     --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS"
 
-    # 量化
-    --quantization "$QUANTIZATION"
+    # 全量模型不显式传递 --quantization 如果为空
+    ${QUANTIZATION:+--quantization "$QUANTIZATION"}
     --trust-remote-code
 
     # 加速特性
@@ -165,14 +132,14 @@ vllm_args=(
     --enable-prefix-caching
     # --async-scheduling # Ray 后端暂不支持异步调度
 
-    # 投机解码
+    # 投机解码 (根据 GLM-5 架构适配)
     --speculative-config '{"num_speculative_tokens": 3, "method": "mtp"}'
 
     # 编译优化
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [64]}'
     --additional-config '{"fuse_muls_add": true, "multistream_overlap_shared_expert": true, "ascend_compilation_config": {"enable_npugraph_ex": true}}'
 
-    # 工具调用 (Claude Code 集成必需)
+    # 工具调用
     --enable-auto-tool-choice
     --tool-call-parser glm47
     --reasoning-parser glm45
@@ -195,11 +162,11 @@ vllm "${vllm_args[@]}" &
 VLLM_PID=$!
 
 # -----------------------------------------------------------------------------
-# 等待服务就绪，然后输出 Claude Code 配置
+# 等待服务就绪
 # -----------------------------------------------------------------------------
 wait_for_server() {
     local url="http://${HOST}:${PORT}/health"
-    local max_wait=600  # 最多等 10 分钟
+    local max_wait=900  # 全量模型加载较慢，延长至 15 分钟
     local elapsed=0
     local interval=5
 
@@ -217,29 +184,6 @@ wait_for_server() {
                 echo "  Health check:  http://${HOST}:${PORT}/health"
                 echo "  API endpoint:  http://${HOST}:${PORT}/v1"
                 echo "  Models list:   http://${HOST}:${PORT}/v1/models"
-                echo ""
-                echo "  --- Claude Code 配置 ---"
-                echo ""
-                echo "  方式一: 写入 ~/.claude/settings.json"
-                echo '  {'
-                echo '    "env": {'
-                echo "      \"ANTHROPIC_BASE_URL\": \"http://${VLLM_HOST_IP}:${PORT}/v1\","
-                echo '      "ANTHROPIC_API_KEY": "dummy",'
-                echo '      "ANTHROPIC_AUTH_TOKEN": "dummy",'
-                echo "      \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"${SERVED_MODEL_NAME}\","
-                echo "      \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"${SERVED_MODEL_NAME}\","
-                echo "      \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"${SERVED_MODEL_NAME}\""
-                echo '    }'
-                echo '  }'
-                echo ""
-                echo "  方式二: 命令行直接使用"
-                echo "  ANTHROPIC_BASE_URL=http://${VLLM_HOST_IP}:${PORT}/v1 \\"
-                echo "  ANTHROPIC_API_KEY=dummy \\"
-                echo "  ANTHROPIC_AUTH_TOKEN=dummy \\"
-                echo "  ANTHROPIC_DEFAULT_SONNET_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  ANTHROPIC_DEFAULT_HAIKU_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  ANTHROPIC_DEFAULT_OPUS_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  claude"
                 echo ""
                 echo "================================================================================="
                 return 0
@@ -262,5 +206,5 @@ wait_for_server() {
 
 wait_for_server
 
-# 把控制权交还给 vLLM 进程，使脚本可以用 Ctrl-C 优雅退出
+# 把控制权交还给 vLLM 进程
 wait "$VLLM_PID"
