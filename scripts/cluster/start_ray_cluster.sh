@@ -1,283 +1,131 @@
 #!/usr/bin/env bash
 #
-# Ray Cluster Launcher
+# Optimized Ray Cluster Launcher
+# High-performance and robust deployment of Ray clusters on Docker containers.
 #
-# 启动多节点 Ray 集群，支持配置 NPU 资源
-# 依赖: 所有节点上安装 Ray 并配置无密码 SSH 登录
-#
-# 环境变量（均可通过外部覆盖）:
-#   NODES_FILE         - 节点列表文件路径（默认: scripts/node_list.txt）
-#   PARALLELISM        - 并发控制上限（默认: 16）
-#   MASTER_ADDR        - 指定主节点地址（默认: 节点列表第一个）
-#   SSH_USER_HOST_PREFIX - SSH 用户前缀，如 "user@"（默认: 空）
-#   SSH_OPTS           - 额外的 SSH 选项
 
 set -euo pipefail
 
 # -----------------------------------------------------------------
-# 路径配置
+# 1. Configuration & Environment
 # -----------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
-NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/node_list.txt}"
-PARALLELISM="${PARALLELISM:-16}"
+SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# 加载共享工具函数
-source "${SCRIPTS_DIR}/common.sh"
+# Source common utilities and environment variables
+# shellcheck source=../common.sh
+source "${SCRIPTS_ROOT}/common.sh"
+
+# Overrideable configurations
+NODE_LIST="${NODES_FILE:-/llm_workspace_1P/robin/EasyInfer/scripts/node_list.txt}"
+HEAD_NODE_SCRIPT="${HEAD_NODE_SCRIPT:-${SCRIPT_DIR}/ray_head.sh}"
+WORKER_NODE_SCRIPT="${WORKER_NODE_SCRIPT:-${SCRIPT_DIR}/ray_node.sh}"
+CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
+MAX_SSH_PARALLELISM="${PARALLELISM:-10}"
+VERIFY_TIMEOUT=${WAIT_TIME:-60}
 
 # -----------------------------------------------------------------
-# 远程执行辅助函数
+# 2. Node Preparation
 # -----------------------------------------------------------------
+if [[ ! -f "$NODE_LIST" ]]; then
+    log_fatal "Node list file not found: $NODE_LIST"
+fi
 
-# 增强版 ssh，支持 -q 等前置 flag 和 SSH_USER_HOST_PREFIX/SSH_OPTS
-ssh_cmd() {
-    local flags=()
-    while [[ $# -gt 0 && "$1" == -* ]]; do
-        flags+=("$1"); shift
-    done
-    local node="$1"; shift
-    ssh "${flags[@]}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-        -o ConnectTimeout=5 ${SSH_OPTS:-} \
-        "${SSH_USER_HOST_PREFIX:-}$node" "$@"
-}
+NODES=($(read_nodes "$NODE_LIST"))
+if [ ${#NODES[@]} -eq 0 ]; then
+    log_fatal "No nodes found in $NODE_LIST"
+fi
 
-# 在远程节点的容器内执行命令
-# 使用 base64 编码避免多层 Shell 引号转义问题
-# 注意: 不在本层吞掉 stderr —— 调用方按需处理
+HEAD_NODE=${NODES[0]}
+WORKERS=("${NODES[@]:1}")
+
+log_info "============================================="
+log_info "Ray Cluster Starting..."
+log_info "Head Node:      $HEAD_NODE"
+log_info "Worker Nodes:   ${WORKERS[*]:-None}"
+log_info "Container:      $CONTAINER_NAME"
+log_info "Parallelism:    $MAX_SSH_PARALLELISM"
+log_info "============================================="
+
+# -----------------------------------------------------------------
+# 3. Helper Function
+# -----------------------------------------------------------------
+# Executes a command inside the target container on a remote node
 remote_exec() {
-    local node=$1 cmd=$2
-    local b64cmd
-    b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
-    ssh_cmd "$node" "source '${ENV_FILE}' 2>/dev/null && \
-        docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64cmd}' | base64 -d | bash\""
-}
-
-# -----------------------------------------------------------------
-# Ray 操作函数
-# -----------------------------------------------------------------
-
-# 停止单个节点的 Ray 进程（允许失败，不打印错误信息）
-stop_ray_on_node() {
     local node=$1
-    log_info "[STOP] Stopping Ray on $node"
-    remote_exec "$node" "ray stop -f 2>/dev/null || true" 2>/dev/null || true
+    local cmd=$2
+    local silent=${3:-false}
+    
+    # Use ssh_run from common.sh for consistent SSH options
+    if [ "$silent" = true ]; then
+        ssh_run "$node" "docker exec -i $CONTAINER_NAME bash -c \"$cmd\"" >/dev/null 2>&1
+    else
+        ssh_run "$node" "docker exec -i $CONTAINER_NAME bash -c \"$cmd\""
+    fi
 }
 
-# 停止所有节点的 Ray 进程（并行执行）
-stop_all_ray() {
-    local nodes=("$@")
-    log_info "Stopping Ray on ${#nodes[@]} node(s)..."
+# -----------------------------------------------------------------
+# 4. Main Process
+# -----------------------------------------------------------------
 
-    local stopdir="${_TEMP_DIR}/stop"
-    mkdir -p "$stopdir"
+# Step 0: Stop existing Ray processes on all nodes
+log_info "Step 0: Cleaning up existing Ray processes..."
+for node in "${NODES[@]}"; do
+    limit_jobs "$MAX_SSH_PARALLELISM"
+    remote_exec "$node" "ray stop -f 2>/dev/null || true" true &
+done
+wait
+log_info "Cleanup completed."
 
-    for i in "${!nodes[@]}"; do
-        limit_jobs "$PARALLELISM"
+# Step 1: Start Ray Head
+log_info "Step 1: Starting Ray Head on $HEAD_NODE..."
+if ! remote_exec "$HEAD_NODE" "bash $HEAD_NODE_SCRIPT"; then
+    log_fatal "Failed to start Ray Head on $HEAD_NODE"
+fi
+
+# Step 2: Start Ray Workers
+if [ ${#WORKERS[@]} -gt 0 ]; then
+    log_info "Step 2: Starting ${#WORKERS[@]} Ray Workers..."
+    for node in "${WORKERS[@]}"; do
+        limit_jobs "$MAX_SSH_PARALLELISM"
         (
-            stop_ray_on_node "${nodes[$i]}" && echo "OK" > "$stopdir/$i" || echo "FAIL" > "$stopdir/$i"
+            log_info "Joining $node to cluster..."
+            if ! remote_exec "$node" "bash $WORKER_NODE_SCRIPT $HEAD_NODE:6379"; then
+                log_err "Failed to start Ray Worker on $node"
+            fi
         ) &
     done
-
     wait
-
-    local failed=0
-    for i in "${!nodes[@]}"; do
-        [[ "$(cat "$stopdir/$i" 2>/dev/null)" == "OK" ]] || ((failed++))
-    done
-
-    [[ $failed -eq 0 ]] && log_info "All Ray processes stopped" || log_warn "$failed node(s) failed to stop"
-}
-
-start_head() {
-    local node=$1
-    log_info "[HEAD] Starting Ray head on $node"
-
-    # 在容器内 source set_env.sh，使用 VLLM_HOST_IP（已通过 _detect_host_ip 带 Python
-    # fallback 检测）；若容器内无 set_env.sh，则以 Python socket 连接 223.5.5.5 兜底
-    local cmd
-    printf -v cmd \
-        'set +u && source "%s" 2>/dev/null || true && set -u
-if [ -z "${VLLM_HOST_IP:-}" ]; then
-    VLLM_HOST_IP=$(python3 -c "
-import socket
-try:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(('"'"'223.5.5.5'"'"', 53))
-    print(s.getsockname()[0])
-except Exception:
-    pass
-" 2>/dev/null)
 fi
-[ -n "${VLLM_HOST_IP:-}" ] || { echo "[ERROR] Cannot detect node IP on $(hostname)" >&2; exit 1; }
-echo "[INFO] Ray head node IP: ${VLLM_HOST_IP}"
-ray start --head --node-ip-address="${VLLM_HOST_IP}" --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$ENV_FILE" "$MASTER_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
 
-    remote_exec "$node" "$cmd"
-}
+# Step 3: Verify Cluster
+log_info "Step 3: Verifying Ray Cluster status..."
+start_time=$(date +%s)
+expected_nodes=${#NODES[@]}
 
-start_worker() {
-    local node=$1 master=$2
-    log_info "[WORKER] Starting Ray worker on $node"
-
-    # 与 start_head 相同的 IP 检测逻辑
-    local cmd
-    printf -v cmd \
-        'set +u && source "%s" 2>/dev/null || true && set -u
-if [ -z "${VLLM_HOST_IP:-}" ]; then
-    VLLM_HOST_IP=$(python3 -c "
-import socket
-try:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(('"'"'223.5.5.5'"'"', 53))
-    print(s.getsockname()[0])
-except Exception:
-    pass
-" 2>/dev/null)
-fi
-[ -n "${VLLM_HOST_IP:-}" ] || { echo "[ERROR] Cannot detect node IP on $(hostname)" >&2; exit 1; }
-echo "[INFO] Ray worker node IP: ${VLLM_HOST_IP}"
-ray start --address=%s:%s --node-ip-address="${VLLM_HOST_IP}" --num-gpus=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$ENV_FILE" "$master" "$MASTER_PORT" "$NPUS_PER_NODE" "$NPUS_PER_NODE"
-
-    remote_exec "$node" "$cmd"
-}
-
-# -----------------------------------------------------------------
-# 前置检查
-# -----------------------------------------------------------------
-check_env() {
-    [[ -f "$ENV_FILE" ]] || log_fatal "Environment file not found: $ENV_FILE"
-    source "$ENV_FILE"
-
-    # 验证 source 后必备变量已设置，避免后续报错不明
-    local required_vars=(
-        CONTAINER_NAME MASTER_PORT DASHBOARD_PORT NPUS_PER_NODE
-    )
-    local missing=()
-    for var in "${required_vars[@]}"; do
-        [[ -z "${!var:-}" ]] && missing+=("$var")
-    done
-    [[ ${#missing[@]} -eq 0 ]] || log_fatal "Required variables not set in ${ENV_FILE}: ${missing[*]}"
-}
-
-check_node() {
-    local node=$1
-    ssh_cmd -q "$node" "test -f '$ENV_FILE'" 2>/dev/null || {
-        log_err "SSH failed or missing env file on: $node"
-        return 1
-    }
-}
-
-# -----------------------------------------------------------------
-# 临时目录清理
-# -----------------------------------------------------------------
-cleanup() {
-    local rc=$?
-    [[ -n "${_TEMP_DIR:-}" && -d "$_TEMP_DIR" ]] && rm -rf "$_TEMP_DIR"
-    exit $rc
-}
-
-# -----------------------------------------------------------------
-# 主流程
-# -----------------------------------------------------------------
-main() {
-    trap cleanup EXIT INT TERM
-    _TEMP_DIR=$(mktemp -d)
-    check_env
-
-    # 解析节点列表
-    [[ -f "$NODE_LIST_FILE" ]] || log_fatal "Node list file not found: $NODE_LIST_FILE"
-    mapfile -t NODES < <(awk 'NF && !/^#/ {print $1}' "$NODE_LIST_FILE")
-    [[ ${#NODES[@]} -gt 0 ]] || log_fatal "No valid hosts in: $NODE_LIST_FILE"
-
-    local master="${MASTER_ADDR:-${NODES[0]}}"
-    local num_nodes=${#NODES[@]}
-
-    local workers=()
-    for node in "${NODES[@]}"; do
-        [[ "$node" != "$master" ]] && workers+=("$node")
-    done
-
-    log_info "============================================="
-    log_info "Ray Cluster Configuration"
-    log_info "============================================="
-    log_info "Total nodes: $num_nodes"
-    log_info "NPUs per node: $NPUS_PER_NODE"
-    log_info "Master: ${BLUE}${master}${NC}:${MASTER_PORT}"
-    log_info "Dashboard: http://${master}:${DASHBOARD_PORT}"
-    log_info "Workers (${#workers[@]}): ${workers[*]:-None}"
-    log_info "============================================="
-
-    log_info "Checking all nodes..."
-    local failed=0
-    for node in "${NODES[@]}"; do
-        check_node "$node" || ((failed++))
-    done
-    [[ $failed -eq 0 ]] || log_fatal "Pre-checks failed with $failed error(s)"
-    log_info "All checks passed"
-
-    # Step 1: 停止所有节点的 Ray 进程（执行两次确保干净清理）
-    log_info "============================================="
-    stop_all_ray "${NODES[@]}"
-    sleep 2
-    stop_all_ray "${NODES[@]}"
-    sleep 2
-
-    # Step 2: 启动 Head 节点
-    log_info "============================================="
-    start_head "$master" || log_fatal "Failed to start head node"
-    sleep "${WAIT_TIME:-2}"
-
-    # Step 3: 启动 Worker 节点（并行）
-    log_info "============================================="
-    local failed_nodes=() success_count=1  # head 已启动成功
-
-    if [[ ${#workers[@]} -gt 0 ]]; then
-        log_info "Starting ${#workers[@]} worker(s) in parallel..."
-
-        local workdir="${_TEMP_DIR}/workers"
-        mkdir -p "$workdir"
-
-        for i in "${!workers[@]}"; do
-            limit_jobs "$PARALLELISM"
-            (
-                start_worker "${workers[$i]}" "$master" && echo "OK" > "$workdir/$i" || echo "FAIL" > "$workdir/$i"
-            ) &
-        done
-
-        wait
-
-        for i in "${!workers[@]}"; do
-            if [[ "$(cat "$workdir/$i" 2>/dev/null)" == "OK" ]]; then
-                ((success_count++))
-            else
-                failed_nodes+=("${workers[$i]}")
-            fi
-        done
-    else
-        log_info "Single-node cluster mode"
+while true; do
+    # Try to get active node count. We use a simple grep on 'ray status' output.
+    # Usually 'ray status' shows a list of nodes.
+    current_nodes=$(remote_exec "$HEAD_NODE" "ray status 2>/dev/null | grep -c 'node_id:'" || echo "0")
+    
+    if [ "$current_nodes" -ge "$expected_nodes" ]; then
+        log_info "All $expected_nodes nodes have joined the cluster."
+        break
     fi
-
-    # 结果报告
-    echo ""
-    echo -e "${BLUE}=============================================${NC}"
-    if [[ ${#failed_nodes[@]} -eq 0 ]]; then
-        log_info "Ray cluster started successfully!"
-    else
-        log_warn "Cluster started with ${#failed_nodes[@]} failed worker(s)"
-        log_info "Failed nodes: ${failed_nodes[*]}"
+    
+    elapsed=$(( $(date +%s) - start_time ))
+    if [ "$elapsed" -gt "$VERIFY_TIMEOUT" ]; then
+        log_warn "Timeout waiting for all nodes to join. Current nodes: $current_nodes/$expected_nodes"
+        break
     fi
-    log_info "Dashboard: http://${master}:${DASHBOARD_PORT}"
-    log_info "Running: $success_count / $num_nodes nodes"
-    echo -e "${BLUE}=============================================${NC}"
+    
+    log_info "Waiting for nodes to join ($current_nodes/$expected_nodes)..."
+    sleep 5
+done
 
-    # 显示状态
-    log_info "Ray cluster status:"
-    ssh_cmd "$master" "source '${ENV_FILE}' 2>/dev/null && \
-        docker exec -i '${CONTAINER_NAME}' \
-        bash -c 'ray status'" 2>/dev/null || log_warn "Could not retrieve Ray status"
-}
+log_info "Final Cluster Status:"
+remote_exec "$HEAD_NODE" "ray status"
 
-main "$@"
+log_info "============================================="
+log_info "Ray Cluster setup process finished!"
+log_info "============================================="
