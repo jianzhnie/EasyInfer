@@ -132,8 +132,8 @@ vllm_args=(
     --enable-prefix-caching
     # --async-scheduling # Ray 后端暂不支持异步调度
 
-    # 投机解码 (根据 GLM-5 架构适配)
-    --speculative-config '{"num_speculative_tokens": 3, "method": "mtp"}'
+    # 投机解码 (如果出现权重未初始化错误，建议先禁用)
+    # --speculative-config '{"num_speculative_tokens": 3, "method": "mtp"}'
 
     # 编译优化
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [64]}'
