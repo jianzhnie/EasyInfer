@@ -5,8 +5,8 @@ export RESUME_MODE_ENABLE=1
 export ASCEND_GLOBAL_LOG_LEVEL=3
 export HCCL_ASYNC_ERROR_HANDLING=0
 export HCCL_WHITELIST_DISABLE=1
-export GLOO_SOCKET_IFNAME=enp66s0f0                # 物理机上可以通信的网口，根据主节点高速网卡实际情况进行配置，如任务yaml中配置hostNetwork为false，则设置为eth0
-export HCCL_SOCKET_IFNAME=enp66s0f0                # 如任务yaml中配置hostNetwork为false，则设置为eth0
+export GLOO_SOCKET_IFNAME=enp66s0f5                # 物理机上可以通信的网口，根据主节点高速网卡实际情况进行配置，如任务yaml中配置hostNetwork为false，则设置为eth0
+export HCCL_SOCKET_IFNAME=enp66s0f5                # 如任务yaml中配置hostNetwork为false，则设置为eth0
 
 export TTP_OT=360
 export CUDA_DEVICE_MAX_CONNECTIONS=1
