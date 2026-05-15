@@ -67,14 +67,14 @@ export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 # -----------------------------------------------------------------
 # 5. 集群操作配置（可通过 CLI 参数覆盖）
 # -----------------------------------------------------------------
-export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
 export RAY_PORT="${RAY_PORT:-6379}"
-export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
-export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
 export WAIT_TIME="${WAIT_TIME:-5}"
+export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
+export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
+export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
 export NODE_LIST="${NODE_LIST:-/home/jianzhnie/llmtuner/llm/EasyInfer/scripts/node_list.txt}"
 
 # 容器内 set_ray_env.sh 的路径
-export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/workspace/scripts/cluster/set_ray_env.sh}"
+export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/llm_workspace_1P/robin/EasyInfer/scripts/cluster/set_ray_env.sh}"
 
 
