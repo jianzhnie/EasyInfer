@@ -10,10 +10,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ENV_FILE="${SCRIPTS_DIR}/docker/set_env.sh"
+ENV_FILE="${SCRIPT_DIR}/set_ray_env.sh"
 
 # 加载共享工具函数
-source "${SCRIPT_DIR}/../common.sh"
+source "${SCRIPTS_DIR}/common.sh"
 
 # ------------------------------------------
 # 引入环境变量
@@ -26,8 +26,9 @@ fi
 # ------------------------------------------
 # 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
-NODE_LIST_FILE="${NODES_FILE:-${SCRIPTS_DIR}/node_list.txt}"
-MAX_JOBS="${MAX_JOBS:-16}"
+# 优先使用 NODES_FILE，其次是 set_ray_env.sh 中的 NODE_LIST，最后是默认路径
+NODE_LIST_FILE="${NODES_FILE:-${NODE_LIST:-${SCRIPTS_DIR}/node_list.txt}}"
+MAX_JOBS="${MAX_JOBS:-${MAX_SSH_PARALLELISM:-16}}"
 SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
 
@@ -196,9 +197,9 @@ kill_processes_on_node() {
         # 获取进程详细信息
         get_process_info() {
             local pids="$1"
-            for pid in $pids; do
-                ps -p "$pid" -o pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true
-            done
+            # 批量获取进程信息，比循环调用 ps 更高效
+            # shellcheck disable=SC2086
+            ps -p $pids -o pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true
         }
         
         # 主逻辑
