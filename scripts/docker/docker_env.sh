@@ -30,10 +30,6 @@ export PARALLELISM="${PARALLELISM:-8}"
 # ------------------------------------------
 # 2. 容器与镜像配置
 # ------------------------------------------
-# export IMAGE_NAME="quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-tranformers.5.5.1"
-# export IMAGE_TAR="${IMAGE_TAR:-/home/jianzhnie/llmtuner/hfhub/docker/vllm-ascend.v0.18.0rc1-a3.transformers.5.5.1.tar}"
-# export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/ascend_infer_docker_run.sh}"
-# export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
 
 export IMAGE_NAME="quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-tranformers.5.5.1"
 export IMAGE_TAR="${IMAGE_TAR:-/llm_workspace_1P/robin/hfhub/docker/image/vllm-ascend.v0.18.0rc1-a3.transformers.5.5.1.tar}"
