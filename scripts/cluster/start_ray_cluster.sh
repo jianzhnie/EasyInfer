@@ -76,7 +76,11 @@ remote_exec() {
     local b64cmd
     b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
     ssh_run "$node" "docker exec -i \"${CONTAINER_NAME}\" bash -c \"
-        [ -f \\\"${RAY_ENV_SCRIPT}\\\" ] && source \\\"${RAY_ENV_SCRIPT}\\\" 2>/dev/null
+        if [ ! -f \\\"${RAY_ENV_SCRIPT}\\\" ]; then
+            echo 'Error: RAY_ENV_SCRIPT not found at ${RAY_ENV_SCRIPT} in container' >&2
+            exit 1
+        fi
+        source \\\"${RAY_ENV_SCRIPT}\\\"
         echo '${b64cmd}' | base64 -d | bash\""
 }
 
