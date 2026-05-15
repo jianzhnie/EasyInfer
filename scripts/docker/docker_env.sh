@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ------------------------------------------
 # 1. 部署与节点配置
 # ------------------------------------------
-export NODES_FILE="${NODES_FILE:-/home/jianzhnie/llmtuner/llm/EasyInfer/scripts/node_list.txt}"
+export NODES_FILE="${NODES_FILE:-/llm_workspace_1P/robin/EasyInfer/scripts/node_list.txt}"
 export SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"
 export SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 export PARALLELISM="${PARALLELISM:-8}"
@@ -36,6 +36,6 @@ export PARALLELISM="${PARALLELISM:-8}"
 # export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
 
 export IMAGE_NAME="quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-tranformers.5.5.1"
-export IMAGE_TAR="${IMAGE_TAR:-/home/jianzhnie/llmtuner/hfhub/docker/vllm-ascend.v0.18.0rc1-a3.transformers.5.5.1.tar}"
+export IMAGE_TAR="${IMAGE_TAR:-/llm_workspace_1P/robin/hfhub/docker/image/vllm-ascend.v0.18.0rc1-a3.transformers.5.5.1.tar}"
 export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/ascend_infer_docker_run.sh}"
 export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
