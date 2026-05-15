@@ -7,6 +7,21 @@
 #
 # Section 1-4 为固定运行时变量，Section 5 的集群配置均支持外部覆盖
 
+# ------------------------------------------
+# Ascend NPU 与底层环境配置
+# ------------------------------------------
+# 注意: 下列 source 命令通常在容器内生效
+
+# 加载 Ascend Toolkit 环境
+if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh
+fi
+
+# 加载 ATB 环境（如果存在）
+if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+
 # -----------------------------------------------------------------
 # 1. Ray / vLLM 核心
 # -----------------------------------------------------------------
@@ -54,7 +69,6 @@ export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 # -----------------------------------------------------------------
 export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
 export RAY_PORT="${RAY_PORT:-6379}"
-export DASHBOARD_PORT="${DASHBOARD_PORT:-8265}"
 export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
 export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
 export WAIT_TIME="${WAIT_TIME:-5}"
@@ -62,3 +76,5 @@ export NODE_LIST="${NODE_LIST:-/home/jianzhnie/llmtuner/llm/EasyInfer/scripts/no
 
 # 容器内 set_ray_env.sh 的路径
 export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/workspace/scripts/cluster/set_ray_env.sh}"
+
+

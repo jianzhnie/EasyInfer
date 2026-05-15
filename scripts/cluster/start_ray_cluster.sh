@@ -5,6 +5,7 @@
 # 用法:
 #   start_ray_cluster.sh start  [options]
 #   start_ray_cluster.sh stop   [options]
+#   start_ray_cluster.sh status [options]
 #
 # 依赖:
 #   - 所有节点配置无密码 SSH
@@ -87,24 +88,26 @@ stop_ray_on_node() {
 
 # 启动 Ray Head
 start_head() {
-    local node=$1
-    log_info "正在启动 Ray head 节点: $node"
+    local head_node=$1
+    log_info "正在启动 Ray head 节点: $head_node"
     local cmd
     printf -v cmd \
-        'ray start --head --port=%s --dashboard-host=0.0.0.0 --dashboard-port=%s --resources='"'"'{"NPU":%s}'"'" \
-        "$RAY_PORT" "$DASHBOARD_PORT" "$NPUS_PER_NODE"
-    remote_exec "$node" "$cmd"
+        'ray start --head --port=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$RAY_PORT" "$NPUS_PER_NODE"
+    remote_exec "$head_node" "$cmd"
 }
+
+
 
 # 启动 Ray Worker
 start_worker() {
-    local node=$1 head_addr=$2
-    log_info "Worker 加入集群: $node"
+    local worker_node=$1 head_addr=$2
+    log_info "Worker 加入集群: $worker_node"
     local cmd
     printf -v cmd \
-        'ray start --address=%s:%s --resources='"'"'{"NPU":%s}'"'" \
-        "$head_addr" "$RAY_PORT" "$NPUS_PER_NODE"
-    remote_exec "$node" "$cmd"
+        'ray start --address=%s:%s --node-ip-address=%s --resources='"'"'{"NPU":%s}'"'" \
+        "$head_addr" "$RAY_PORT" "$worker_node" "$NPUS_PER_NODE"
+    remote_exec "$worker_node" "$cmd"
 }
 
 # -----------------------------------------------------------------
@@ -112,6 +115,7 @@ start_worker() {
 # -----------------------------------------------------------------
 
 # 读取节点列表
+log_info "正在读取节点列表..."
 [[ -n "${NODE_LIST:-}" && -f "$NODE_LIST" ]] || log_fatal "节点列表文件未找到: ${NODE_LIST:-未设置}"
 mapfile -t NODES < <(read_nodes "$NODE_LIST")
 [[ ${#NODES[@]} -gt 0 ]] || log_fatal "节点列表为空: $NODE_LIST"
@@ -125,7 +129,6 @@ log_info "Head:       $HEAD_NODE"
 log_info "Workers:    ${WORKERS[*]:-无}"
 log_info "Container:  $CONTAINER_NAME"
 log_info "Ray Port:   $RAY_PORT"
-log_info "Dashboard:  $DASHBOARD_PORT"
 log_info "NPUs/Node:  $NPUS_PER_NODE"
 log_info "============================================="
 
@@ -170,7 +173,7 @@ done
 log_info "清理完成."
 
 # Step 3: 启动 Head
-log_info "[3/5] 启动 Head 节点..."
+log_info "[3/5] 启动 Head 节点 $HEAD_NODE..."
 start_head "$HEAD_NODE" || log_fatal "Head 节点启动失败: $HEAD_NODE"
 log_info "等待 ${WAIT_TIME}s 完成初始化..."
 sleep "$WAIT_TIME"
@@ -178,11 +181,11 @@ sleep "$WAIT_TIME"
 # Step 4: 并行启动 Workers
 if [[ ${#WORKERS[@]} -gt 0 ]]; then
     log_info "[4/5] 并行启动 ${#WORKERS[@]} 个 Worker..."
-    for node in "${WORKERS[@]}"; do
+    for worker_node in "${WORKERS[@]}"; do
         limit_jobs "$MAX_SSH_PARALLELISM"
         (
-            if ! start_worker "$node" "$HEAD_NODE"; then
-                log_err "Worker 启动失败: $node"
+            if ! start_worker "$worker_node" "$HEAD_NODE"; then
+                log_err "Worker 启动失败: $worker_node"
                 touch "${_TEMP_DIR}/worker_fail"
             fi
         ) &
@@ -229,5 +232,4 @@ if [[ -f "${_TEMP_DIR}/worker_fail" ]]; then
 else
     log_info "Ray 集群启动完成!"
 fi
-log_info "Dashboard: http://${HEAD_NODE}:${DASHBOARD_PORT}"
 log_info "============================================="
