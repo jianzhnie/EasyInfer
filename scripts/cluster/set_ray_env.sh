@@ -7,21 +7,6 @@
 #
 # Section 1-4 为固定运行时变量，Section 5 的集群配置均支持外部覆盖
 
-# ------------------------------------------
-# Ascend NPU 与底层环境配置
-# ------------------------------------------
-# 注意: 下列 source 命令通常在容器内生效
-
-# 加载 Ascend Toolkit 环境
-if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
-    source /usr/local/Ascend/ascend-toolkit/set_env.sh
-fi
-
-# 加载 ATB 环境（如果存在）
-if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
-    source /usr/local/Ascend/nnal/atb/set_env.sh
-fi
-
 # -----------------------------------------------------------------
 # 1. Ray / vLLM 核心
 # -----------------------------------------------------------------
@@ -34,13 +19,16 @@ export HCCL_WHITELIST_DISABLE=1
 # -----------------------------------------------------------------
 # 2. 网络接口
 # -----------------------------------------------------------------
-export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f5}"
-export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
+export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
+export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 
 # 自动获取业务网 IP 并设置 VLLM_HOST_IP，确保与 Ray 资源标签一致
 if [[ -n "${HCCL_SOCKET_IFNAME:-}" ]]; then
-    _HOST_IP=$(ip -4 addr show "${HCCL_SOCKET_IFNAME}" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
-    export VLLM_HOST_IP="${VLLM_HOST_IP:-$_HOST_IP}"
+    # 使用 || true 避免在 set -eo pipefail 环境下因为网卡不存在而退出
+    _HOST_IP=$(ip -4 addr show "${HCCL_SOCKET_IFNAME}" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1 || true)
+    if [[ -n "$_HOST_IP" ]]; then
+        export VLLM_HOST_IP="${VLLM_HOST_IP:-$_HOST_IP}"
+    fi
 fi
 
 # -----------------------------------------------------------------
@@ -77,4 +65,22 @@ export NODE_LIST="${NODE_LIST:-/home/jianzhnie/llmtuner/llm/EasyInfer/scripts/no
 # 容器内 set_ray_env.sh 的路径
 export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/llm_workspace_1P/robin/EasyInfer/scripts/cluster/set_ray_env.sh}"
 
+# ------------------------------------------
+# Ascend NPU 与底层环境配置
+# ------------------------------------------
+# 注意: 下列 source 命令通常在容器内生效
+# 由于第三方脚本（如 Ascend 的 set_env.sh）可能存在未绑定变量，临时关闭 set -u 检查
+set +u
 
+# 加载 Ascend Toolkit 环境
+if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh
+fi
+
+# 加载 ATB 环境（如果存在）
+if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+
+# 恢复 set -u 检查
+set -u
