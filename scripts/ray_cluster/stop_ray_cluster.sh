@@ -18,8 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ENV_FILE="${SCRIPTS_DIR}/vllm/set_env.sh"
+ENV_FILE="${SCRIPT_DIR}/set_ray_env.sh"
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
 # 加载共享工具函数
@@ -119,18 +118,19 @@ stop_ray_node() {
     call="_remote_stop_ray '${FORCE}' '${KILL_TIMEOUT}' '${RAY_KEYWORDS}'"
 
     if $ON_HOST; then
-        echo "$func; $call" | ssh_run "$node" bash -s 2>/dev/null \
+        echo "$func; $call" | ssh_run "$node" bash -s \
             && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
     else
-        local cmd="source '${ENV_FILE}' && docker exec -i '\${CONTAINER_NAME:-vllm-ascend-env-a3}' bash -s"
-        echo "$func; $call" | ssh_run "$node" "$cmd" 2>/dev/null \
+        # 加载环境文件后再执行 docker exec
+        local cmd="[[ -f '${ENV_FILE}' ]] && source '${ENV_FILE}'; docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
+        echo "$func; $call" | ssh_run "$node" "$cmd" \
             && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
     fi
 }
 
 # 主流程
-: "${NODES_FILE:?NODES_FILE 未设置，请检查 set_env.sh 是否正确加载}"
-nodes=$(read_nodes "$NODES_FILE")
+: "${NODE_LIST:?NODE_LIST 未设置，请检查 set_ray_env.sh 是否正确加载}"
+nodes=$(read_nodes "$NODE_LIST")
 [[ -n "$nodes" ]] || { log_err "未找到节点信息"; exit 2; }
 
 # 确认
