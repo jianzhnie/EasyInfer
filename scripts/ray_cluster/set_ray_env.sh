@@ -19,6 +19,14 @@ export HCCL_WHITELIST_DISABLE=1
 # -----------------------------------------------------------------
 # 2. 网络接口
 # -----------------------------------------------------------------
+# NIC_NAME="${NIC_NAME:-$(ip route | grep default | awk '{print $5}' | head -1)}"
+# LOCAL_IP="${LOCAL_IP:-$(ip addr show "$NIC_NAME" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)}"
+
+# export HCCL_IF_IP="${HCCL_IF_IP:-LOCAL_IP}"
+# export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-NIC_NAME}"
+# export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-NIC_NAME}"
+# export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-NIC_NAME}"
+
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 
@@ -59,11 +67,11 @@ export RAY_PORT="${RAY_PORT:-6379}"
 export WAIT_TIME="${WAIT_TIME:-5}"
 export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
 export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
-export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-0.18-env}"
+export CONTAINER_NAME="${CONTAINER_NAME:-npuslim-env}"
 export NODE_LIST="${NODE_LIST:-/llm_workspace_1P/robin/EasyInfer/scripts/node_list.txt}"
 
 # 容器内 set_ray_env.sh 的路径
-export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/llm_workspace_1P/robin/EasyInfer/scripts/cluster/set_ray_env.sh}"
+export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/llm_workspace_1P/robin/EasyInfer/scripts/ray_cluster/set_ray_env.sh}"
 
 # ------------------------------------------
 # Ascend NPU 与底层环境配置
