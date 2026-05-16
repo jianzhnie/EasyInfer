@@ -1,3 +1,9 @@
+#!/usr/bin/env bash
+#
+# host_proxy.sh — 宿主机代理配置
+# 用法: source host_proxy.sh && pon
+#
+
 # Source global definitions
 if [ -f /etc/bashrc ]; then
         . /etc/bashrc

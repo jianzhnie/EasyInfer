@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # docker_proxy.sh — 容器内代理配置
 # 用法: source docker_proxy.sh && pon
 #
