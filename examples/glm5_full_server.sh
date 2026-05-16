@@ -158,6 +158,14 @@ echo ""
 # -----------------------------------------------------------------------------
 # 启动 vLLM
 # -----------------------------------------------------------------------------
+cleanup() {
+    if [[ -n "${VLLM_PID:-}" ]] && kill -0 "$VLLM_PID" 2>/dev/null; then
+        echo "[INFO] Cleaning up vLLM process (PID: $VLLM_PID)..."
+        kill "$VLLM_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 vllm "${vllm_args[@]}" &
 VLLM_PID=$!
 
