@@ -1,27 +1,27 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Ascend NPU 推理容器启动脚本
+# 用法: bash ascend_infer_docker_run.sh
+# 通过环境变量覆盖: IMAGE_NAME=... CONTAINER_NAME=... bash ascend_infer_docker_run.sh
+
+set -euo pipefail
 
 # Configuration
 IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-openeuler}"
 CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 
 # Check if container exists
-if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
+if [[ -n "$(docker ps -aq -f name="^/${CONTAINER_NAME}$")" ]]; then
     echo "Container '${CONTAINER_NAME}' already exists. Removing it..."
-    docker rm -f ${CONTAINER_NAME}
+    docker rm -f "${CONTAINER_NAME}"
 fi
 
 # Run Docker container
-# Run the container using the defined variables
-# Note if you are running bridge network with docker, please expose available ports for multiple nodes communication in advance.
-# Improvements:
-# 1. Added --ulimit memlock=-1 and stack=67108864 for Ascend NPU performance
-# 2. Added --shm-size just in case IPC isn't sufficient (though ipc=host usually covers it)
-# 3. Consolidated mounts where possible (kept originals for safety if symlinks exist)
-# 4. Added conflict check above
-
+# Note if you are running bridge network with docker, please expose available ports
+# for multiple nodes communication in advance.
 docker run -d \
     -u root \
-    --name ${CONTAINER_NAME} \
+    --name "${CONTAINER_NAME}" \
     --ipc=host \
     --net=host \
     --ulimit memlock=-1 \

@@ -8,7 +8,7 @@
 #   --npuslim=/path: mount npuslim source from custom directory
 #   --daemon: run in background (detached), survives exit
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -70,8 +70,8 @@ IFS=',' read -ra CARD_ARRAY <<< "$CARDS"
 for cid in "${CARD_ARRAY[@]}"; do
     c0=$((cid * 2))
     c1=$((c0 + 1))
-    CHIP_LIST+=($c0 $c1)
-    VISIBLE_DEVICES+=($c0 $c1)
+    CHIP_LIST+=("$c0" "$c1")
+    VISIBLE_DEVICES+=("$c0" "$c1")
 done
 
 echo "========================================"
@@ -95,7 +95,7 @@ fi
 # Check if container exists
 if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
     echo "Container '${CONTAINER_NAME}' already exists. Removing it..."
-    docker rm -f ${CONTAINER_NAME}
+    docker rm -f "${CONTAINER_NAME}"
 fi
 
 DOCKER_ARGS=(
@@ -112,7 +112,7 @@ if [ "$MULTI_NODE" = true ]; then
 
     # All NPU devices
     for i in {0..7}; do
-        DOCKER_ARGS+=(--device=/dev/davinci${i})
+        DOCKER_ARGS+=("--device=/dev/davinci${i}")
     done
     DOCKER_ARGS+=(
         --device=/dev/davinci_manager
@@ -153,7 +153,7 @@ if [ "$MULTI_NODE" = true ]; then
 else
     # ========== Single/multi-card mode ==========
     for chip in "${CHIP_LIST[@]}"; do
-        DOCKER_ARGS+=(--device=/dev/davinci${chip})
+        DOCKER_ARGS+=("--device=/dev/davinci${chip}")
     done
     DOCKER_ARGS+=(
         --device=/dev/davinci_manager
@@ -166,7 +166,7 @@ else
         -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi:ro
         -v /etc/ascend_install.info:/etc/ascend_install.info:ro
         -v /var/log/npu:/var/log/npu
-        -e ASCEND_RT_VISIBLE_DEVICES=$(IFS=,; echo "${VISIBLE_DEVICES[*]}")
+        -e "ASCEND_RT_VISIBLE_DEVICES=$(IFS=,; echo "${VISIBLE_DEVICES[*]}")"
     )
 fi
 
@@ -174,7 +174,7 @@ fi
 DOCKER_ARGS+=(
     # -v ~/.cache/huggingface:/root/.cache/huggingface
     # -v ~/.cache/modelscope:/root/.cache/modelscope
-    --name ${CONTAINER_NAME} \
+    --name "${CONTAINER_NAME}" \
     -v /llm_workspace_1P/robin:/llm_workspace_1P/robin
     -v /mnt/xufan_400T:/mnt/xufan_400T
     -e HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"

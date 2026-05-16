@@ -1,25 +1,25 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Ascend NPU 训练容器启动脚本 (MindSpeed-LLM)
+# 用法: bash ascend_train_docker_run.sh
+# 通过环境变量覆盖: IMAGE_NAME=... CONTAINER_NAME=... bash ascend_train_docker_run.sh
+
+set -euo pipefail
 
 # Configuration
 IMAGE_NAME="${IMAGE_NAME:-cis-pengcheng.cmecloud.cn/ascendhub/mindspeed-llm:openeuler22.03-mindspeed-llm-2.3.0-a3-arm}"
 CONTAINER_NAME="${CONTAINER_NAME:-mindspeed-llm-env}"
 
 # Check if container exists
-if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
+if [[ -n "$(docker ps -aq -f name="^/${CONTAINER_NAME}$")" ]]; then
     echo "Container '${CONTAINER_NAME}' already exists. Removing it..."
-    docker rm -f ${CONTAINER_NAME}
+    docker rm -f "${CONTAINER_NAME}"
 fi
 
 # Run Docker container
-# Improvements:
-# 1. Added --ulimit memlock=-1 and stack=67108864 for Ascend NPU performance
-# 2. Added --shm-size just in case IPC isn't sufficient (though ipc=host usually covers it)
-# 3. Consolidated mounts where possible (kept originals for safety if symlinks exist)
-# 4. Added conflict check above
-
 docker run -d \
     -u root \
-    --name ${CONTAINER_NAME} \
+    --name "${CONTAINER_NAME}" \
     --ipc=host \
     --net=host \
     --ulimit memlock=-1 \
