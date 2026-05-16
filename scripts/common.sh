@@ -16,10 +16,11 @@ readonly NC='\033[0m'
 # ------------------------------------------------------------------------------
 # 日志函数
 # ------------------------------------------------------------------------------
-log_info()  { echo -e "${GREEN}[INFO]${NC}  $(date '+%Y-%m-%d %H:%M:%S') - $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_err()   { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; }
-log_fatal() { echo -e "${RED}[FATAL]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2; exit 1; }
+_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+log_info()  { printf "${GREEN}[INFO]${NC}  %s - %s\n" "$(_timestamp)" "$*"; }
+log_warn()  { printf "${YELLOW}[WARN]${NC}  %s - %s\n" "$(_timestamp)" "$*" >&2; }
+log_err()   { printf "${RED}[ERROR]${NC} %s - %s\n" "$(_timestamp)" "$*" >&2; }
+log_fatal() { printf "${RED}[FATAL]${NC} %s - %s\n" "$(_timestamp)" "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------------------
 # 节点列表读取

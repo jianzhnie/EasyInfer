@@ -35,6 +35,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 自动检测节点 IP (用于 Claude Code 配置输出)
+VLLM_HOST_IP="${VLLM_HOST_IP:-$(ip route | grep default | awk '{print $5}' | head -1 | xargs -I{} ip -4 addr show {} 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}"
+VLLM_HOST_IP="${VLLM_HOST_IP:-localhost}"
 # -----------------------------------------------------------------------------
 # 服务配置（均可通过环境变量覆盖）
 # -----------------------------------------------------------------------------
@@ -172,6 +176,14 @@ echo ""
 # -----------------------------------------------------------------------------
 # 启动 vLLM
 # -----------------------------------------------------------------------------
+cleanup() {
+    if [[ -n "${VLLM_PID:-}" ]] && kill -0 "$VLLM_PID" 2>/dev/null; then
+        echo "[INFO] Cleaning up vLLM process (PID: $VLLM_PID)..."
+        kill "$VLLM_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 vllm "${vllm_args[@]}" &
 VLLM_PID=$!
 
