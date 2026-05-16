@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 环境变量配置 — Ray 集群部署、vLLM 推理及 Ascend NPU 相关配置
+# 环境变量配置 — Docker 容器管理模块
 #
 # 用法:
 #   source set_env.sh                # 在调用脚本中 source
