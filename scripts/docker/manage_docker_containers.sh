@@ -76,6 +76,7 @@ fi
 # 引入环境变量
 # ------------------------------------------
 if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck source=./docker_env.sh
   source "${ENV_FILE}"
 else
   log_err "环境配置文件未找到: ${ENV_FILE}"
@@ -151,10 +152,10 @@ _remote_prepare_node() {
   # 确保 Docker 服务已启动（如果不可用则尝试启动）
   if ! docker info >/dev/null 2>&1; then
     echo "[INFO] Docker service not running, attempting to start..."
-    systemctl daemon-reload && systemctl start docker || {
+    if ! systemctl daemon-reload || ! systemctl start docker; then
       echo "[ERROR] Failed to start Docker service" >&2
       exit 1
-    }
+    fi
   fi
 
   # 在 restart 或 stop 模式下执行 stop & kill 容器操作

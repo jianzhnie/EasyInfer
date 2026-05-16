@@ -23,12 +23,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 首先加载 set_env.sh
 SET_ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 if [[ -f "$SET_ENV_FILE" ]]; then
+    # shellcheck source=./set_env.sh
     source "$SET_ENV_FILE" 2>/dev/null || echo "[WARN] Failed to source ${SET_ENV_FILE}, continuing..." >&2
 fi
 
 # 然后加载 vllm_server_env.sh（用户自定义覆盖）
 VLLM_ENV_FILE="${VLLM_ENV_FILE:-${SCRIPT_DIR}/vllm_server_env.sh}"
 if [[ -f "$VLLM_ENV_FILE" ]]; then
+    # shellcheck source=./vllm_server_env.sh
     source "$VLLM_ENV_FILE" 2>/dev/null || echo "[WARN] Failed to source ${VLLM_ENV_FILE}, continuing..." >&2
 fi
 

@@ -163,6 +163,6 @@ case "$CMD" in
         echo ""
         echo "Default cluster:"
         echo "  Head:    ${IPS[0]}"
-        echo "  Workers: ${IPS[@]:1}"
+        echo "  Workers: ${IPS[*]:1}"
         ;;
 esac

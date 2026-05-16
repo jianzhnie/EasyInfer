@@ -126,7 +126,8 @@ copy_local_to_docker() {
     local container="${CONTAINER_NAME:-vllm-ascend-env-a3}"
     local target
     target=$(ssh_target "$node")
-    local temp_remote_file="/tmp/copy_to_docker_$(basename "$source").$$.$(date +%s%N)"
+    local temp_remote_file
+    temp_remote_file="/tmp/copy_to_docker_$(basename "$source").$$.$(date +%s%N)"
 
     # shellcheck disable=SC2086
     if ! scp ${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10} "$source" "${target}:${temp_remote_file}" 2>/dev/null; then
