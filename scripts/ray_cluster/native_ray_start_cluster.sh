@@ -98,7 +98,7 @@ done
 
 # 等待所有工作节点启动完成
 for pid in "${pids[@]}"; do
-    if ! wait $pid; then
+    if ! wait "$pid"; then
         echo "Warning: Some worker nodes failed to start" >&2
     fi
 done

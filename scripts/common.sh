@@ -9,8 +9,6 @@
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 
 # ------------------------------------------------------------------------------
@@ -43,6 +41,7 @@ ssh_target() {
 
 # SSH_OPTS 通过词分割传递多个选项（如 "-o BatchMode=yes -o ConnectTimeout=10"）。
 # 这是有意设计的简单约定，不改为数组以保持向后兼容。
+# shellcheck disable=SC2029
 ssh_run() {
     local node="$1"; shift
     # shellcheck disable=SC2086
@@ -77,4 +76,5 @@ get_node_ip() {
 # scripts 目录路径 (基于 common.sh 的位置)
 # ------------------------------------------------------------------------------
 SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC2034
 readonly SCRIPTS_ROOT

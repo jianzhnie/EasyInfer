@@ -143,6 +143,7 @@ if [ "$MULTI_NODE" = true ]; then
     echo ""
 
     # Multi-node communication env vars
+    # shellcheck disable=SC2054
     DOCKER_ARGS+=(
         -e HCCL_IF_IP="${LOCAL_IP}"
         -e GLOO_SOCKET_IFNAME="${NIC_NAME}"

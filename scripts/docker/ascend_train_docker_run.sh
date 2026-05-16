@@ -51,5 +51,5 @@ docker run -d \
     -v /llm_workspace_1P:/llm_workspace_1P:rw \
     -v /home/jianzhnie/llmtuner:/home/jianzhnie/llmtuner:rw \
     -v /root/.ssh:/root/.ssh \
-    -it ${IMAGE_NAME} \
+    -it "${IMAGE_NAME}" \
     /bin/bash -c "while true; do sleep 1000; done"

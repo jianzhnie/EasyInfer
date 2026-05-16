@@ -228,6 +228,7 @@ build_env_exports() {
 # ------------------------------------------------------------------------------
 build_vllm_args_declare() {
     local is_headless="$1"
+    # shellcheck disable=SC2034
     local node_idx="$2"
     local dp_start_rank="$3"
     local node0_ip="$4"

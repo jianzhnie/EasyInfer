@@ -84,7 +84,7 @@ cmd_start() {
 
         if is_local "$host"; then
             # Local: run directly
-            bash "${RUN_CONTAINER}" --multi-node --daemon $npuslim_arg
+            bash "${RUN_CONTAINER}" --multi-node --daemon "$npuslim_arg"
         else
             # Remote: SSH and run
             ssh "${SSH_USER}@${host}" "bash ${RUN_CONTAINER} --multi-node --daemon $npuslim_arg"
@@ -172,8 +172,6 @@ cmd_status() {
             local cid
             cid=$(get_container)
             if [ -n "$cid" ]; then
-                local status
-                status=$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || echo "unknown")
                 local runtime
                 runtime=$(docker inspect --format '{{.State.StartedAt}}' "$cid" 2>/dev/null || echo "?")
                 echo "running  ${cid:0:12}  since ${runtime}"

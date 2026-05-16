@@ -34,6 +34,7 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 自动检测节点 IP (用于 Claude Code 配置输出)

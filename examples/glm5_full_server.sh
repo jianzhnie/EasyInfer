@@ -18,6 +18,7 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # -----------------------------------------------------------------------------
 # 服务配置（针对 GLM-5 全量参数模型优化）

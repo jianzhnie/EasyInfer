@@ -19,6 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/set_ray_env.sh"
+# shellcheck source=./set_ray_env.sh
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
 # 加载共享工具函数
@@ -118,13 +119,19 @@ stop_ray_node() {
     call="_remote_stop_ray '${FORCE}' '${KILL_TIMEOUT}' '${RAY_KEYWORDS}'"
 
     if $ON_HOST; then
-        echo "$func; $call" | ssh_run "$node" bash -s \
-            && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
+        if echo "$func; $call" | ssh_run "$node" bash -s; then
+            log_info "[${node}] 已停止"
+        else
+            log_err "[${node}] 停止失败"
+        fi
     else
         # 加载环境文件后再执行 docker exec
         local cmd="[[ -f '${ENV_FILE}' ]] && source '${ENV_FILE}'; docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
-        echo "$func; $call" | ssh_run "$node" "$cmd" \
-            && log_info "[${node}] 已停止" || log_err "[${node}] 停止失败"
+        if echo "$func; $call" | ssh_run "$node" "$cmd"; then
+            log_info "[${node}] 已停止"
+        else
+            log_err "[${node}] 停止失败"
+        fi
     fi
 }
 

@@ -50,7 +50,8 @@ SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"
 # ------------------------------------------
 # 全局状态跟踪
 # ------------------------------------------
-declare -A NODE_STATUS  # 节点处理状态: pending|success|failed|timeout
+# NODE_STATUS reserved for future use (per-node status tracking)
+# declare -A NODE_STATUS
 declare -a FAILED_NODES=()
 declare -a TIMEOUT_NODES=()
 
@@ -103,6 +104,7 @@ EOF
 # ------------------------------------------
 # 信号处理：清理后台作业
 # ------------------------------------------
+# shellcheck disable=SC2329
 cleanup_jobs() {
     log_warn "接收到中断信号，正在清理后台作业..."
     local job
@@ -154,8 +156,22 @@ ssh_run_with_timeout() {
 
 # 转义正则表达式特殊字符
 escape_regex() {
-    # 转义 . * + ? ^ $ ( ) [ ] { } | \
-    sed 's/[.*+?^${}()|[\]/\\&/g' <<< "$1"
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//./\\.}"
+    s="${s//\*/\\*}"
+    s="${s//+/\\+}"
+    s="${s//\?/\\?}"
+    s="${s//^/\\^}"
+    s="${s//\$/\\$}"
+    s="${s//\(/\\(}"
+    s="${s//\)/\\)}"
+    s="${s//\[/\\[}"
+    s="${s//\]/\\]}"
+    s="${s//\{/\\{}"
+    s="${s//\}/\\}}"
+    s="${s//|/\\|}"
+    printf '%s' "$s"
 }
 
 # ------------------------------------------
