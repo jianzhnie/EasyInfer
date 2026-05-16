@@ -1,10 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # ModelScope 模型与数据集下载脚本
 #
 # 用法:
-#   bash ms_downlaod.sh                          # 使用默认配置下载
-#   MS_CACHE_DIR=/data/ms_cache bash ms_downlaod.sh  # 自定义缓存目录
+#   bash ms_download.sh                          # 使用默认配置下载
+#   MS_CACHE_DIR=/data/ms_cache bash ms_download.sh  # 自定义缓存目录
 #
 
 set -euo pipefail

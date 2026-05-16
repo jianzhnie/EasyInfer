@@ -1,12 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # HuggingFace 模型与数据集下载脚本
 # 默认使用国内镜像 hf-mirror.com
 #
 # 用法:
-#   bash hf_downlaod.sh                          # 使用默认配置下载
-#   HF_HUB_DIR=/data/hfhub bash hf_downlaod.sh   # 自定义缓存根目录
-#   HF_ENDPOINT=https://hf.co bash hf_downlaod.sh # 自定义镜像源
+#   bash hf_download.sh                          # 使用默认配置下载
+#   HF_HUB_DIR=/data/hfhub bash hf_download.sh   # 自定义缓存根目录
+#   HF_ENDPOINT=https://hf.co bash hf_download.sh # 自定义镜像源
 #
 
 set -euo pipefail

@@ -96,13 +96,7 @@ fi
 # 前置依赖检查
 # ------------------------------------------
 check_dependencies() {
-  local deps=("ssh" "scp" "awk" "xargs")
-  for cmd in "${deps[@]}"; do
-    if ! command -v "$cmd" &>/dev/null; then
-      log_err "缺少必要依赖: $cmd"
-      exit 1
-    fi
-  done
+  require_cmds ssh scp awk xargs
 
   if [[ ! -f "$NODES_FILE" ]]; then
     log_err "节点列表文件未找到: $NODES_FILE"

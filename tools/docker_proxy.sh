@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # docker_proxy.sh — 容器内代理配置
 # 用法: source docker_proxy.sh && pon
 #
@@ -9,7 +9,7 @@
 export PROXY_PORT=7897
 
 # --- 探测宿主机代理地址 ---
-function _detect_proxy_host() {
+_detect_proxy_host() {
     local port=${1:-$PROXY_PORT}
 
     # 1) network=host: 代理直接在本地
@@ -27,7 +27,7 @@ function _detect_proxy_host() {
     # 3) 默认网关 (通常是 docker bridge)
     local gw
     gw=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
-    if [ -n "$gw" ] && timeout 1 bash -c "echo >/dev/tcp/$gw/$port" 2>/dev/null; then
+    if [[ -n "$gw" ]] && timeout 1 bash -c "echo >/dev/tcp/$gw/$port" 2>/dev/null; then
         echo "$gw"
         return
     fi
@@ -42,12 +42,12 @@ function _detect_proxy_host() {
     echo ""
 }
 
-function pon() {
+pon() {
     # 探测
     local host
     host=$(_detect_proxy_host "$PROXY_PORT")
 
-    if [ -z "$host" ]; then
+    if [[ -z "$host" ]]; then
         echo "❌ 无法连接到代理 (试了 127.0.0.1, host.docker.internal, 网关, 172.17.0.1 都不通)"
         echo ""
         echo "   请用 docker run --network host 启动容器，或参考下方 socat 方案:"
@@ -89,7 +89,7 @@ function pon() {
     echo "🚀 Proxy ON: $FULL_PROXY  (host=$PROXY_HOST)"
 }
 
-function poff() {
+poff() {
     unset http_proxy https_proxy ftp_proxy all_proxy no_proxy
     unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY NO_PROXY RSYNC_PROXY
     command -v pip &>/dev/null && pip config unset global.proxy 2>/dev/null
@@ -105,7 +105,7 @@ function poff() {
     echo "🛑 Proxy OFF"
 }
 
-function pstatus() {
+pstatus() {
     echo "=== Proxy Status ==="
     echo "Host     : ${PROXY_HOST:-auto-detect}"
     echo "Port     : ${PROXY_PORT:-7897}"
@@ -120,7 +120,7 @@ function pstatus() {
         echo "Connect  : ❌ $host:${PROXY_PORT:-7897} not reachable"
     fi
     # 外网测试
-    if [ -n "$http_proxy" ]; then
+    if [[ -n "$http_proxy" ]]; then
         echo -n "Internet : "
         curl -s --max-time 5 --proxy "$http_proxy" -o /dev/null -w "%{http_code}" https://huggingface.co 2>/dev/null | grep -q "2[0-9][0-9]\|3[0-9][0-9]" && echo "✅ huggingface.co OK" || echo "❌ 外网不通"
     fi

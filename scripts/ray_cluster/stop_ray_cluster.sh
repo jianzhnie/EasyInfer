@@ -60,6 +60,7 @@ _remote_stop_ray() {
     set -euo pipefail
 
     get_ray_pids() {
+        # shellcheck disable=SC2009
         ps aux | grep -E "$pattern" | grep -v grep | awk '{print $2}' | sort -u | tr '\n' ' ' || true
     }
 
