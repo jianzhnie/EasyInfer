@@ -1,12 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # host_proxy.sh — 宿主机代理配置
 # 用法: source host_proxy.sh && pon
 #
 
 # Source global definitions
-if [ -f /etc/bashrc ]; then
-        . /etc/bashrc
+if [[ -f /etc/bashrc ]]; then
+    . /etc/bashrc
 fi
 
 # User specific aliases and functions
@@ -18,8 +18,8 @@ alias mv='mv -i'
 export INSTALL_DIR=/usr/local/Ascend/ascend-toolkit/latest
 export PATH=/usr/local/mpi/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/mpi/lib:/usr/local/Ascend:$LD_LIBRARY_PATH
-[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ] && source /usr/local/Ascend/ascend-toolkit/set_env.sh
-[ -f /usr/local/Ascend/toolbox/set_env.sh ] && source /usr/local/Ascend/toolbox/set_env.sh
+[[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]] && source /usr/local/Ascend/ascend-toolkit/set_env.sh
+[[ -f /usr/local/Ascend/toolbox/set_env.sh ]] && source /usr/local/Ascend/toolbox/set_env.sh
 
 
 # HF
@@ -33,7 +33,7 @@ export FULL_PROXY="http://$PROXY_HOST:$PROXY_PORT"
 export SOCKS_PROXY="socks5://$PROXY_HOST:$PROXY_PORT"
 export NO_PROXY_HOSTS="localhost,127.0.0.1,.local"
 
-function pon() {
+pon() {
     # 1. 环境变量 (小写 + 大写兼容 curl/wget/rsync 等)
     export http_proxy="$FULL_PROXY"  HTTP_PROXY="$FULL_PROXY"
     export https_proxy="$FULL_PROXY" HTTPS_PROXY="$FULL_PROXY"
@@ -72,7 +72,7 @@ EOF
     echo "🚀 Proxy ON: $FULL_PROXY"
 }
 
-function poff() {
+poff() {
     # 1. 清除系统变量
     unset http_proxy https_proxy ftp_proxy all_proxy no_proxy
     unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY NO_PROXY RSYNC_PROXY WGETRC
@@ -99,7 +99,7 @@ function poff() {
     echo "🛑 Proxy OFF"
 }
 
-function pstatus() {
+pstatus() {
     echo "=== Proxy Status ==="
     echo "http_proxy : ${http_proxy:-unset}"
     echo "https_proxy: ${https_proxy:-unset}"

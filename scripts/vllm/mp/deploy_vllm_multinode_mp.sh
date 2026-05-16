@@ -149,7 +149,7 @@ get_node_ip() {
     if [[ "${node}" == "$(hostname -s)" ]] || [[ "${node}" == "$(hostname)" ]]; then
         result=$(eval "${cmd}")
     else
-        # shellcheck disable=SC2086
+        # shellcheck disable=SC2086,SC2029
         result=$(ssh ${SSH_OPTS} "${node}" "${cmd}" 2>/dev/null)
     fi
     if [[ -z "${result}" && ( "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ) ]]; then
@@ -389,7 +389,7 @@ launch_on_node() {
         echo "-----------------------------------"
     else
         local pid
-        # shellcheck disable=SC2086
+        # shellcheck disable=SC2086,SC2029
         pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
         log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}_${vllm_port}.log"
     fi

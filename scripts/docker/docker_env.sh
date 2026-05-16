@@ -15,7 +15,8 @@
 #   - 本脚本由 scripts/docker/ 和 scripts/cluster/ 下脚本 source
 #   - 不依赖任何外部文件
 
-set -euo pipefail
+# 注意: 本文件被 source 而非直接执行，刻意不加 set -euo pipefail，
+#       以免影响调用脚本的 shell 选项。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

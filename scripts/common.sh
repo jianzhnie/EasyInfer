@@ -9,16 +9,24 @@
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 
 # ------------------------------------------------------------------------------
 # 日志函数
 # ------------------------------------------------------------------------------
 _timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
-log_info()  { printf "${GREEN}[INFO]${NC}  %s - %s\n" "$(_timestamp)" "$*"; }
-log_warn()  { printf "${YELLOW}[WARN]${NC}  %s - %s\n" "$(_timestamp)" "$*" >&2; }
-log_err()   { printf "${RED}[ERROR]${NC} %s - %s\n" "$(_timestamp)" "$*" >&2; }
-log_fatal() { printf "${RED}[FATAL]${NC} %s - %s\n" "$(_timestamp)" "$*" >&2; exit 1; }
+
+_log() {
+    local color="$1" level="$2"; shift 2
+    printf "${color}[%-5s]${NC} %s - %s\n" "$level" "$(_timestamp)" "$*"
+}
+
+log_info()  { _log "$GREEN"  "INFO"  "$@"; }
+log_warn()  { _log "$YELLOW" "WARN"  "$*" >&2; }
+log_err()   { _log "$RED"    "ERROR" "$*" >&2; }
+log_fatal() { _log "$RED"    "FATAL" "$*" >&2; exit 1; }
+log_debug() { [[ "${DEBUG:-0}" == "1" ]] && _log "$CYAN" "DEBUG" "$*" >&2; }
 
 # ------------------------------------------------------------------------------
 # 节点列表读取
@@ -48,6 +56,20 @@ ssh_run() {
     ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@"
 }
 
+# 带超时的 SSH 命令，超时返回 124
+ssh_run_timeout() {
+    local timeout_sec="${1:?用法: ssh_run_timeout <timeout> <node> <cmd...>}"; shift
+    local node="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        timeout "$timeout_sec" ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@" 2>&1
+    else
+        # 无 timeout 命令时直接执行
+        # shellcheck disable=SC2086,SC2029
+        ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@" 2>&1
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # 并发控制
 # ------------------------------------------------------------------------------
@@ -56,6 +78,90 @@ limit_jobs() {
     while [[ "$(jobs -rp 2>/dev/null | wc -l)" -ge "$max" ]]; do
         wait -n 2>/dev/null || sleep 0.1
     done
+}
+
+# 等待所有后台任务完成，收集失败数
+# 用法: wait_jobs → 返回失败任务数
+wait_jobs() {
+    local failed=0
+    while wait -n 2>/dev/null; do
+        :
+    done
+    for pid in $(jobs -p 2>/dev/null); do
+        if ! wait "$pid" 2>/dev/null; then
+            ((failed++)) || true
+        fi
+    done
+    echo "$failed"
+}
+
+# ------------------------------------------------------------------------------
+# 前置检查
+# ------------------------------------------------------------------------------
+# 检查命令是否存在，不存在则 log_fatal
+require_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        log_fatal "缺少必要命令: $cmd"
+    fi
+}
+
+# 批量检查命令
+require_cmds() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+# ------------------------------------------------------------------------------
+# 等待服务就绪
+# ------------------------------------------------------------------------------
+# 等待 TCP 端口可达
+# 用法: wait_for_port <host> <port> [timeout_sec] [interval_sec]
+wait_for_port() {
+    local host="${1:?用法: wait_for_port <host> <port> [timeout] [interval]}"
+    local port="${2:?用法: wait_for_port <host> <port> [timeout] [interval]}"
+    local timeout="${3:-120}"
+    local interval="${4:-5}"
+    local start elapsed=0
+    start=$(date +%s)
+
+    while true; do
+        if command -v nc >/dev/null 2>&1; then
+            nc -z -w 2 "$host" "$port" 2>/dev/null && return 0
+        elif command -v timeout >/dev/null 2>&1; then
+            timeout 2 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null && return 0
+        elif [[ -e /dev/tcp ]]; then
+            (echo >/dev/tcp/"$host"/"$port") 2>/dev/null && return 0
+        fi
+        elapsed=$(( $(date +%s) - start ))
+        [[ "$elapsed" -ge "$timeout" ]] && return 1
+        sleep "$interval"
+    done
+}
+
+# ------------------------------------------------------------------------------
+# 用户确认
+# ------------------------------------------------------------------------------
+# 用法: confirm "确认操作?" [default_yes|default_no]
+# 返回 0 表示用户确认, 1 表示取消
+confirm() {
+    local msg="${1:?用法: confirm <message> [default]}"
+    local default="${2:-default_no}"
+    local prompt
+    if [[ "$default" == "default_yes" ]]; then
+        prompt="$msg [Y/n] "
+    else
+        prompt="$msg [y/N] "
+    fi
+    read -r -p "$prompt" answer 2>/dev/null || answer=""
+    case "$answer" in
+        y|Y|yes|YES) return 0 ;;
+        n|N|no|NO)   return 1 ;;
+        "")          [[ "$default" == "default_yes" ]] && return 0 || return 1 ;;
+        *)           return 1 ;;
+    esac
 }
 
 # ------------------------------------------------------------------------------
@@ -70,6 +176,32 @@ get_node_ip() {
         ip=$(ifconfig "${interface}" 2>/dev/null | awk '/inet / {print $2}' | head -n 1)
     fi
     printf "%s" "$ip"
+}
+
+# 自动探测默认网卡
+get_default_nic() {
+    local nic=""
+    if command -v ip >/dev/null 2>&1; then
+        nic=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
+    fi
+    printf "%s" "${nic:-}"
+}
+
+# ------------------------------------------------------------------------------
+# 临时文件管理
+# ------------------------------------------------------------------------------
+# 创建临时目录并注册清理 trap
+# 用法: mktemp_dir → 输出路径; 全局变量 _TEMP_DIR 可用于 cleanup
+mktemp_dir() {
+    _TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/easyinfer.XXXXXX")
+    # shellcheck disable=SC2329
+    _tempdir_cleanup() { # invoked via trap below
+        local rc=$?
+        [[ -n "${_TEMP_DIR:-}" && -d "$_TEMP_DIR" ]] && rm -rf "$_TEMP_DIR"
+        exit "$rc"
+    }
+    trap _tempdir_cleanup EXIT INT TERM
+    echo "$_TEMP_DIR"
 }
 
 # ------------------------------------------------------------------------------

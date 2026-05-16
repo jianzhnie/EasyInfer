@@ -45,6 +45,7 @@ echo ""
 # 检查项目目录是否存在
 check_project_dir() {
     local node=$1
+    # shellcheck disable=SC2029
     if ! ssh "$node" "[ -d \"$PROJECT_DIR\" ]"; then
         echo "Error: Project directory $PROJECT_DIR not found on node $node" >&2
         return 1
@@ -66,6 +67,7 @@ start_ray_node() {
         cmd="ray start --address $MASTER_ADDR:$MASTER_PORT --resources='{\"NPU\": $NPUS_PER_NODE}'"
     fi
     
+    # shellcheck disable=SC2029
     if ! ssh "$node" "cd $PROJECT_DIR && source set_env.sh && ray stop >/dev/null 2>&1 || true && $cmd"; then
         echo "Error: Failed to start Ray on node $node" >&2
         return 1

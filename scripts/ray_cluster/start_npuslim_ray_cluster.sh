@@ -48,11 +48,13 @@ node_exec() {
         fi
         docker exec "$container" bash -lc "$*"
     else
+        # shellcheck disable=SC2029
         container=$(ssh "${SSH_USER}@${host}" "docker ps -q --filter ancestor=${IMAGE_NAME} | head -1" 2>/dev/null)
         if [ -z "$container" ]; then
             echo "ERROR: No running container found on ${host}"
             return 1
         fi
+        # shellcheck disable=SC2029
         ssh "${SSH_USER}@${host}" "docker exec ${container} bash -lc '$*'" 2>/dev/null
     fi
 }

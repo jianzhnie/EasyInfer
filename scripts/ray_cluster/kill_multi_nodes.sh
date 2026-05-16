@@ -131,6 +131,7 @@ ssh_run_with_timeout() {
         # shellcheck disable=SC2086
         timeout "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     else
+        # shellcheck disable=SC2086
         perl -e '
             use strict;
             use warnings;
@@ -147,7 +148,6 @@ ssh_run_with_timeout() {
                 exit 124;
             }
             exit $? >> 8;
-        # shellcheck disable=SC2086
         ' "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     fi
     

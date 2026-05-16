@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/set_env.sh"
+ENV_FILE="${SCRIPT_DIR}/docker_env.sh"
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../common.sh"
