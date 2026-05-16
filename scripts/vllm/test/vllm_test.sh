@@ -1,21 +1,30 @@
-#!/bin/bash
-source set_env.sh
+#!/usr/bin/env bash
+#
+# vLLM 单节点简单测试脚本
+#
 
-hfhub="/llm_workspace_1P/robin/hfhub/models"
-model_path="${hfhub}/Qwen/Qwen3-32B"
-model_name="Qwen/Qwen3-32B"
+set -euo pipefail
 
-num_gpus=8
-max_model_len=32768
-gpu_memory_utilization=0.9
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../set_env.sh"
 
-vllm serve "$model_path" \
-  --trust-remote-code \
-  --served-model-name "$model_name" \
-  --tensor-parallel-size "$num_gpus" \
-  --gpu-memory-utilization "$gpu_memory_utilization" \
-  --max-model-len "$max_model_len" \
-  --max-num-seqs 256 \
-  --enable-prefix-caching \
-  --enforce-eager \
-  --port 8000
+HFHUB="/llm_workspace_1P/robin/hfhub/models"
+MODEL_PATH="${MODEL_PATH:-${HFHUB}/Qwen/Qwen3-32B}"
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-32B}"
+
+NUM_GPUS="${NUM_GPUS:-8}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
+PORT="${PORT:-8000}"
+
+vllm serve "$MODEL_PATH" \
+    --trust-remote-code \
+    --served-model-name "$MODEL_NAME" \
+    --tensor-parallel-size "$NUM_GPUS" \
+    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-seqs 256 \
+    --enable-prefix-caching \
+    --enforce-eager \
+    --port "$PORT"
