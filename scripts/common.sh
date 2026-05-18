@@ -84,12 +84,16 @@ limit_jobs() {
 # 用法: wait_jobs → 返回失败任务数
 wait_jobs() {
     local failed=0
-    while wait -n 2>/dev/null; do
-        :
-    done
-    for pid in $(jobs -p 2>/dev/null); do
-        if ! wait "$pid" 2>/dev/null; then
+    while true; do
+        if wait -n 2>/dev/null; then
+            :
+        else
+            # wait -n 返回非零：该任务失败，已从 job table 中收割
             ((failed++)) || true
+            # 继续等待剩余任务，直到没有更多后台任务
+            if ! jobs -p 2>/dev/null | grep -q .; then
+                break
+            fi
         fi
     done
     echo "$failed"

@@ -56,7 +56,7 @@ remote_docker_cmd() {
     if is_local "$host"; then
         docker "$@"
     else
-        # shellcheck disable=SC2029
+        # shellcheck disable=SC2029,SC2145
         ssh "${SSH_USER}@${host}" "docker $*" 2>/dev/null
     fi
 }
@@ -65,6 +65,7 @@ remote_docker_cmd() {
 remote_bash() {
     local host="$1"; shift
     if is_local "$host"; then
+        # shellcheck disable=SC2145
         bash -c "$*"
     else
         # shellcheck disable=SC2029
