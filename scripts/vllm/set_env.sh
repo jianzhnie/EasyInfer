@@ -50,12 +50,12 @@ export WAIT_TIME="${WAIT_TIME:-1}"
 set +u
 
 # 加载 Ascend Toolkit 环境
-if [ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]; then
+if [[ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
 
 # 加载 ATB 环境（如果存在）
-if [ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]; then
+if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
     source /usr/local/Ascend/nnal/atb/set_env.sh
 fi
 
