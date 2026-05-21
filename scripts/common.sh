@@ -23,10 +23,10 @@ _log() {
 }
 
 log_info()  { _log "$GREEN"  "INFO"  "$@"; }
-log_warn()  { _log "$YELLOW" "WARN"  "$*" >&2; }
-log_err()   { _log "$RED"    "ERROR" "$*" >&2; }
-log_fatal() { _log "$RED"    "FATAL" "$*" >&2; exit 1; }
-log_debug() { [[ "${DEBUG:-0}" == "1" ]] && _log "$CYAN" "DEBUG" "$*" >&2; }
+log_warn()  { _log "$YELLOW" "WARN"  "$@" >&2; }
+log_err()   { _log "$RED"    "ERROR" "$@" >&2; }
+log_fatal() { _log "$RED"    "FATAL" "$@" >&2; exit 1; }
+log_debug() { [[ "${DEBUG:-0}" == "1" ]] && _log "$CYAN" "DEBUG" "$@" >&2; }
 
 # ------------------------------------------------------------------------------
 # 节点列表读取
@@ -76,25 +76,17 @@ ssh_run_timeout() {
 limit_jobs() {
     local max="${1:?用法: limit_jobs <max>}"
     while [[ "$(jobs -rp 2>/dev/null | wc -l)" -ge "$max" ]]; do
-        wait -n 2>/dev/null || sleep 0.1
+        sleep 0.5
     done
 }
 
 # 等待所有后台任务完成，收集失败数
 # 用法: wait_jobs → 返回失败任务数
 wait_jobs() {
-    local failed=0
-    while true; do
-        if wait -n 2>/dev/null; then
-            :
-        else
-            # wait -n 返回非零：该任务失败，已从 job table 中收割
-            ((failed++)) || true
-            # 继续等待剩余任务，直到没有更多后台任务
-            if ! jobs -p 2>/dev/null | grep -q .; then
-                break
-            fi
-        fi
+    local failed=0 pid
+    # 兼容 bash 4.2+: 逐个 wait PID 而非 wait -n
+    for pid in $(jobs -rp 2>/dev/null); do
+        wait "$pid" 2>/dev/null || ((failed++)) || true
     done
     echo "$failed"
 }
