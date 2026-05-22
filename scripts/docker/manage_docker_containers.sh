@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # ==========================================
 # Docker 容器准备脚本 (prepare_docker_nodes.sh)
 # 用于在集群节点上准备 Docker 容器环境

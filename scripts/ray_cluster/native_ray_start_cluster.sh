@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e  # 遇到错误立即退出
+set -euo pipefail
 
 # 项目目录
 PROJECT_DIR="/root/llmtuner/llm/MindSpeed-RL-master"

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # 共享工具函数库 — 供 scripts/ 下各子目录的脚本 source 使用
 #

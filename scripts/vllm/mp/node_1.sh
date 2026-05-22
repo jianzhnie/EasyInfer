@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Node 0 (master) — Kimi-K2 多节点部署参考配置
 # 用法: 根据实际环境修改 NIC_NAME, LOCAL_IP, NODE0_IP 后执行
 #       或通过环境变量覆盖: NIC_NAME=eth0 LOCAL_IP=10.x.x.x bash node_1.sh

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Node 1 (worker) — Kimi-K2 多节点部署参考配置 (headless 模式)
 # 用法: 根据实际环境修改 NIC_NAME, LOCAL_IP, NODE0_IP 后执行
 #       或通过环境变量覆盖: NIC_NAME=eth0 LOCAL_IP=10.x.x.x bash node_2.sh

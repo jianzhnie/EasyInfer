@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # =============================================================================
 # vLLM Model Server Startup Script (MoE Models on NPU Cluster)
