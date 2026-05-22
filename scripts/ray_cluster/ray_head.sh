@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # ray_head.sh — 启动 Ray Head 节点
 #

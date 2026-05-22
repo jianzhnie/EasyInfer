@@ -1,6 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-set -euo pipefail
+# 注意: 本文件被 source 而非直接执行，不设 set -euo pipefail，
+#       以免影响调用脚本的 shell 选项。
 
 # shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,9 +46,6 @@ export WAIT_TIME="${WAIT_TIME:-1}"
 # ------------------------------------------
 # Ascend NPU 与底层环境配置
 # ------------------------------------------
-# 注意: 下列 source 命令通常在容器内生效
-# 由于第三方脚本（如 Ascend 的 set_env.sh）可能存在未绑定变量，临时关闭 set -u 检查
-set +u
 
 # 加载 Ascend Toolkit 环境
 if [[ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]]; then
@@ -58,6 +56,3 @@ fi
 if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
     source /usr/local/Ascend/nnal/atb/set_env.sh
 fi
-
-# 恢复 set -u 检查
-set -u

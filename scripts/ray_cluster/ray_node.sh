@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # ray_node.sh — 启动 Ray Worker 节点
 #

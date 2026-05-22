@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Ray 集群停止脚本 — 停止并清理所有节点上的 Ray 进程
 #
@@ -146,8 +146,8 @@ if ! $SKIP_CONFIRM; then
     echo "================================"
     echo "将停止以下节点的 Ray 集群:"
     echo "  $nodes"
-    echo "  模式: $( $ON_HOST && echo '宿主机' || echo '容器内' )"
-    echo "  强制: $( $FORCE && echo '是' || echo '否' )"
+    echo "  模式: $( [[ "$ON_HOST" == "true" ]] && echo '宿主机' || echo '容器内' )"
+    echo "  强制: $( [[ "$FORCE" == "true" ]] && echo '是' || echo '否' )"
     echo "================================"
     read -r -p "输入 'yes' 继续: " confirm
     [[ "$confirm" == "yes" ]] || { log_info "已取消"; exit 0; }
