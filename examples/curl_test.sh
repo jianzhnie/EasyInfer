@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # =============================================================================
 # vLLM 服务 API 测试脚本
 # =============================================================================
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
-MODEL_NAME="${MODEL_NAME:-qwen3-32b}"
+MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 
 # 颜色输出
 GREEN='\033[0;32m'
