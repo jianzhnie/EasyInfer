@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Ray Cluster Launcher — 启动 / 停止多节点 Ray 集群
 #

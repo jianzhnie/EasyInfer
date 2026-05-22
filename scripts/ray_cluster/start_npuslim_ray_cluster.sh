@@ -6,7 +6,7 @@
 #   status  [--hosts <ip1> <ip2> ...]                   Check Ray status
 # Default IPs: first is head, rest are workers (see IPS below)
 
-set -e
+set -euo pipefail
 
 IMAGE_NAME="ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0"
 SSH_USER="root"
@@ -25,8 +25,8 @@ IPS=(10.42.1.66 10.42.1.67 10.42.1.68 10.42.1.69 10.42.1.70 10.42.1.71 10.42.1.7
 LOCAL_IPS=$(hostname -I 2>/dev/null)
 
 is_local() {
-    local ip=$1
-    for lip in $LOCAL_IPS; do
+    local ip=$1 lip
+    for lip in "${LOCAL_IPS[@]}"; do
         [[ "$ip" == "$lip" ]] && return 0
     done
     return 1
@@ -44,7 +44,7 @@ node_exec() {
     local container
     if is_local "$host"; then
         container=$(get_container)
-        if [ -z "$container" ]; then
+        if [[ -z "$container" ]]; then
             echo "ERROR: No running container found locally"
             return 1
         fi
@@ -52,12 +52,12 @@ node_exec() {
     else
         # shellcheck disable=SC2029
         container=$(ssh "${SSH_USER}@${host}" "docker ps -q --filter ancestor=${IMAGE_NAME} | head -1" 2>/dev/null)
-        if [ -z "$container" ]; then
+        if [[ -z "$container" ]]; then
             echo "ERROR: No running container found on ${host}"
             return 1
         fi
         # shellcheck disable=SC2029
-        ssh "${SSH_USER}@${host}" "docker exec ${container} bash -lc '$*'" 2>/dev/null
+        ssh "${SSH_USER}@${host}" "docker exec ${container} bash -lc $(printf '%q' "$*")" 2>/dev/null
     fi
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # ==============================================================================
 # 多节点进程清理脚本 (kill_multi_nodes.sh)
 #
@@ -521,9 +521,9 @@ if [[ -d "$TMP_LOG_DIR" ]]; then
         [[ -f "$log_file" ]] || continue
         while IFS=: read -r _ node status; do
             case $status in
-                success) ((SUCCESS_COUNT++)) ;;
-                timeout) ((TIMEOUT_COUNT++)); TIMEOUT_NODES+=("$node") ;;
-                failed) ((FAILED_COUNT++)); FAILED_NODES+=("$node") ;;
+                success) SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) ;;
+                timeout) TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1)); TIMEOUT_NODES+=("$node") ;;
+                failed) FAILED_COUNT=$((FAILED_COUNT + 1)); FAILED_NODES+=("$node") ;;
             esac
         done < "$log_file"
     done

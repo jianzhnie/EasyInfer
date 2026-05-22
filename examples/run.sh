@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # 容器内快速启动 Qwen3-32B 示例
 # 用法: bash run.sh

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # ==========================================
 # Docker 容器文件复制脚本 (copy_file_to_containers.sh)
 # 将文件复制到集群各节点的 Docker 容器内
