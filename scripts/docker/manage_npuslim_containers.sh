@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # Manage Docker containers across cluster nodes
 # Usage: bash manage_containers.sh <start|stop|status|restart> [options]
-#   start    [--npuslim] [--no-npuslim] [--hosts <ip1> ...]
-#   stop     [--hosts <ip1> ...]
-#   status   [--hosts <ip1> ...]
+#   start    [--npuslim] [--no-npuslim] [--hosts <ip1> ...] [-f <node_list>]
+#   stop     [--hosts <ip1> ...] [-f <node_list>]
+#   status   [--hosts <ip1> ...] [-f <node_list>]
 #   restart  (stop + start, same options as start)
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_ROOT="${SCRIPT_DIR}/.."
+
+# 加载共享库
+# shellcheck disable=SC1091
+source "${SCRIPTS_ROOT}/common.sh"
+
+# ------------------------------------------
+# 默认配置（可被环境变量或命令行参数覆盖）
+# ------------------------------------------
 SSH_USER="${SSH_USER:-root}"
 IMAGE_NAME="${IMAGE_NAME:-ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODES_FILE="${NODES_FILE:-${SCRIPTS_ROOT}/node_list.txt}"
 RUN_CONTAINER="${SCRIPT_DIR}/run_npuslim_container.sh"
-
-# Default cluster IPs
-# shellcheck disable=SC2034
-DEFAULT_HOSTS=(10.42.0.74 10.42.0.75 10.42.0.76 10.42.0.77 10.42.0.78 10.42.0.79 10.42.0.80 10.42.0.81)
-MASTER_IP="${DEFAULT_HOSTS[0]}"
 
 # NPUSlim paths differ: master uses local project dir, workers use synced dir
 MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
@@ -25,6 +30,53 @@ WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-mast
 # Detect local IPs
 LOCAL_IPS=$(hostname -I 2>/dev/null || true)
 
+# ------------------------------------------
+# 节点列表解析
+# ------------------------------------------
+# 优先级: --hosts (CLI) > --file/-f (CLI) > NODES_FILE (env) > 默认 node_list.txt
+# 用法: resolve_hosts [--hosts ip1 ip2 ...] [--file path]
+# 输出: 将解析后的节点列表存入 HOSTS 数组
+resolve_hosts() {
+    HOSTS=()
+    local nodes_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --hosts) shift
+                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                    HOSTS+=("$1"); shift
+                done ;;
+            --file|-f)
+                shift || true
+                [[ $# -gt 0 ]] || log_fatal "-f/--file 需要指定文件路径"
+                nodes_file="$1"; shift
+                ;;
+            --npuslim|--no-npuslim) shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # 如果已通过 --hosts 指定，直接返回
+    [[ ${#HOSTS[@]} -gt 0 ]] && return 0
+
+    # 否则从节点列表文件读取
+    local file="${nodes_file:-$NODES_FILE}"
+    if [[ ! -f "$file" ]]; then
+        log_fatal "节点列表文件未找到: $file"
+    fi
+
+    while IFS= read -r ip; do
+        [[ -n "$ip" ]] && HOSTS+=("$ip")
+    done < <(read_nodes "$file")
+
+    if [[ ${#HOSTS[@]} -eq 0 ]]; then
+        log_fatal "节点列表文件为空: $file"
+    fi
+}
+
+# ------------------------------------------
+# 辅助函数
+# ------------------------------------------
 is_local() {
     local ip="$1" lip
     for lip in $LOCAL_IPS; do
@@ -33,15 +85,11 @@ is_local() {
     return 1
 }
 
-# Get running container ID for the image
-get_container() {
-    docker ps -q --filter "ancestor=${IMAGE_NAME}" | head -1
-}
-
 # Get npuslim path for a given host
 npuslim_path_for() {
     local host="$1"
-    if [[ "$host" == "$MASTER_IP" ]]; then
+    local master="${HOSTS[0]:-}"
+    if [[ "$host" == "$master" ]]; then
         echo "$MASTER_NPUSLIM_PATH"
     else
         echo "$WORKER_NPUSLIM_PATH"
@@ -76,30 +124,29 @@ remote_bash() {
 # ─── Commands ────────────────────────────────────────────────────────────────
 
 cmd_start() {
-    local hosts=()
+    resolve_hosts "$@"
     local with_npuslim=true
 
+    # 解析非 hosts 选项
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --hosts) shift
-                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                    hosts+=("$1"); shift
-                done ;;
             --no-npuslim) with_npuslim=false; shift ;;
             --npuslim) with_npuslim=true; shift ;;
+            --hosts) shift
+                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do shift; done ;;
+            --file|-f) shift || true; shift || true ;;
             *) shift ;;
         esac
     done
-    [[ ${#hosts[@]} -eq 0 ]] && hosts=("${DEFAULT_HOSTS[@]}")
 
     echo "========================================"
     echo "Starting Containers"
     echo "========================================"
-    echo "Hosts:   ${hosts[*]}"
+    echo "Hosts:   ${HOSTS[*]}"
     echo "NPUSlim: ${with_npuslim}"
     echo ""
 
-    for host in "${hosts[@]}"; do
+    for host in "${HOSTS[@]}"; do
         echo "--- Starting on ${host} ---"
 
         local npuslim_arg=""
@@ -119,26 +166,15 @@ cmd_start() {
 }
 
 cmd_stop() {
-    local hosts=()
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --hosts) shift
-                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                    hosts+=("$1"); shift
-                done ;;
-            *) shift ;;
-        esac
-    done
-    [[ ${#hosts[@]} -eq 0 ]] && hosts=("${DEFAULT_HOSTS[@]}")
+    resolve_hosts "$@"
 
     echo "========================================"
     echo "Stopping Containers"
     echo "========================================"
-    echo "Hosts: ${hosts[*]}"
+    echo "Hosts: ${HOSTS[*]}"
     echo ""
 
-    for host in "${hosts[@]}"; do
+    for host in "${HOSTS[@]}"; do
         echo "--- Stopping on ${host} ---"
         local cid
         # shellcheck disable=SC2086
@@ -157,24 +193,13 @@ cmd_stop() {
 }
 
 cmd_status() {
-    local hosts=()
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --hosts) shift
-                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                    hosts+=("$1"); shift
-                done ;;
-            *) shift ;;
-        esac
-    done
-    [[ ${#hosts[@]} -eq 0 ]] && hosts=("${DEFAULT_HOSTS[@]}")
+    resolve_hosts "$@"
 
     echo "========================================"
     echo "Container Status"
     echo "========================================"
 
-    for host in "${hosts[@]}"; do
+    for host in "${HOSTS[@]}"; do
         local marker=""
         is_local "$host" && marker=" (local)"
         printf "  %-16s" "${host}${marker}"
@@ -214,22 +239,28 @@ case "$CMD" in
         echo "  restart  Stop then start all containers"
         echo ""
         echo "Options:"
-        echo "  --hosts <ip1> [ip2] ...   Target specific hosts"
+        echo "  --hosts <ip1> [ip2] ...   Target specific hosts (highest priority)"
+        echo "  -f, --file <path>         Node list file (default: NODES_FILE or scripts/node_list.txt)"
         echo "  --npuslim                 Mount npuslim source (default)"
         echo "  --no-npuslim              Skip npuslim mount"
+        echo ""
+        echo "Node list resolution (priority: high → low):"
+        echo "  1. --hosts <ip1> <ip2>    Direct CLI host list"
+        echo "  2. -f / --file <path>     CLI-specified node file"
+        echo "  3. NODES_FILE             Environment variable"
+        echo "  4. scripts/node_list.txt  Default file"
         echo ""
         echo "Environment variables:"
         echo "  SSH_USER                  SSH user (default: root)"
         echo "  IMAGE_NAME                Docker image name"
+        echo "  NODES_FILE                Node list file path"
         echo "  MASTER_NPUSLIM_PATH       NPUSlim path on master node"
         echo "  WORKER_NPUSLIM_PATH       NPUSlim path on worker nodes"
-        echo ""
-        echo "Default hosts:"
-        echo "  ${DEFAULT_HOSTS[*]}"
         echo ""
         echo "Examples:"
         echo "  bash manage_containers.sh start"
         echo "  bash manage_containers.sh stop --hosts 10.42.15.195 10.42.15.196"
-        echo "  bash manage_containers.sh status"
+        echo "  bash manage_containers.sh status -f /path/to/node_list.txt"
+        echo "  NODES_FILE=/tmp/nodes.txt bash manage_containers.sh start"
         ;;
 esac
