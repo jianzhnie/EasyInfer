@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Manage Docker containers across cluster nodes
 # Usage: bash manage_containers.sh <start|stop|status|restart> [options]
 #   start    [--npuslim] [--no-npuslim] [--hosts <ip1> ...] [-f <node_list>]
@@ -79,7 +79,7 @@ resolve_hosts() {
 # ------------------------------------------
 is_local() {
     local ip="$1" lip
-    for lip in $LOCAL_IPS; do
+    for lip in "${LOCAL_IPS[@]}"; do
         [[ "$ip" == "$lip" ]] && return 0
     done
     return 1
@@ -104,8 +104,8 @@ remote_docker_cmd() {
     if is_local "$host"; then
         docker "$@"
     else
-        # shellcheck disable=SC2029,SC2145
-        ssh "${SSH_USER}@${host}" "docker $*" 2>/dev/null
+        # shellcheck disable=SC2029
+        ssh "${SSH_USER}@${host}" docker "$@"
     fi
 }
 
@@ -113,11 +113,10 @@ remote_docker_cmd() {
 remote_bash() {
     local host="$1"; shift
     if is_local "$host"; then
-        # shellcheck disable=SC2145
         bash -c "$*"
     else
         # shellcheck disable=SC2029
-        ssh "${SSH_USER}@${host}" "$@" 2>/dev/null
+        ssh "${SSH_USER}@${host}" bash -c "$*"
     fi
 }
 

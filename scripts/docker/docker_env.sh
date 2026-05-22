@@ -1,19 +1,15 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # 环境变量配置 — Docker 容器管理模块
 #
 # 用法:
-#   source set_env.sh                # 在调用脚本中 source
-#   VAR=value source set_env.sh      # 通过环境变量覆盖默认值
+#   source docker_env.sh             # 在调用脚本中 source
+#   VAR=value source docker_env.sh   # 通过环境变量覆盖默认值
 #
 # 环境变量 (均可外部覆盖):
 #   NODES_FILE, SSH_USER_HOST_PREFIX, SSH_OPTS, PARALLELISM
 #   IMAGE_NAME, IMAGE_TAR, RUN_CONTAINER_SCRIPT, CONTAINER_NAME
 #   NPUS_PER_NODE, MASTER_PORT, DASHBOARD_PORT, WAIT_TIME
-#
-# 依赖:
-#   - 本脚本由 scripts/docker/ 和 scripts/cluster/ 下脚本 source
-#   - 不依赖任何外部文件
 
 # 注意: 本文件被 source 而非直接执行，刻意不加 set -euo pipefail，
 #       以免影响调用脚本的 shell 选项。

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Ascend NPU 训练容器启动脚本 (MindSpeed-LLM)
 # 用法: bash ascend_train_docker_run.sh

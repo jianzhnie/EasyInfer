@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Ascend NPU 推理容器启动脚本
 # 用法: bash ascend_infer_docker_run.sh
