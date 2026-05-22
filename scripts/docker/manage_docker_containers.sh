@@ -230,6 +230,6 @@ for node in $nodes; do
   limit_jobs "$PARALLELISM"
   (prepare_node "$node") &
 done
-wait
+wait_jobs >/dev/null || log_err "部分节点环境准备失败"
 
 log_info "=== 节点准备完成 ==="

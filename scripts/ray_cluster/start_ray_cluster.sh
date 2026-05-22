@@ -204,10 +204,9 @@ log_info "[5/5] 验证集群状态..."
 start_time=$(date +%s)
 
 while true; do
-    # 使用 grep | wc -l 避免 grep -c 在未匹配时返回非零状态导致的 || echo "0" 重复输出问题
     status_output=$(remote_exec "$HEAD_NODE" "ray status" 2>/dev/null || echo "")
-    # 使用 wc -l 统计并用 xargs 去除空白字符
-    current_nodes=$(echo "$status_output" | grep -c "node_id" || echo "0")
+    # 使用 grep | wc -l 避免 grep -c 在未匹配时返回非零状态导致的 || echo "0" 重复输出问题
+    current_nodes=$(echo "$status_output" | grep "node_id" | wc -l | xargs)
 
     if [[ -n "$current_nodes" && "$current_nodes" -ge "${#NODES[@]}" ]]; then
         log_info "所有 ${#NODES[@]} 个节点已成功加入集群."
