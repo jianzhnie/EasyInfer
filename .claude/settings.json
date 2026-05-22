@@ -86,6 +86,6 @@
     "ruflo-autopilot@ruflo": true,
     "ruflo-browser@ruflo": true,
     "ruflo-knowledge-graph@ruflo": true,
-    "github@claude-plugins-official": true,
+    "github@claude-plugins-official": true
   }
 }
