@@ -15,12 +15,18 @@ RUN_CONTAINER="${SCRIPT_DIR}/run_npuslim_container.sh"
 
 # Default cluster IPs
 # shellcheck disable=SC2034
-DEFAULT_HOSTS=(10.42.0.74 10.42.0.75 10.42.0.76 10.42.0.77 10.42.0.78 10.42.0.79 10.42.0.80 10.42.0.81)
+# DEFAULT_HOSTS=(10.42.0.66 10.42.0.67 10.42.0.68 10.42.0.69 10.42.0.70 10.42.0.71 10.42.0.72 10.42.0.73)
+# DEFAULT_HOSTS=(10.42.0.74 10.42.0.75 10.42.0.76 10.42.0.77 10.42.0.78 10.42.0.79 10.42.0.80 10.42.0.81)
+DEFAULT_HOSTS=(10.42.1.66 10.42.1.67 10.42.1.68 10.42.1.69 10.42.1.70 10.42.1.71 10.42.1.72 10.42.1.73 10.42.1.74 10.42.1.75 10.42.1.76 10.42.1.77 10.42.1.78 10.42.1.79 10.42.1.80 10.42.1.81)
 MASTER_IP="${DEFAULT_HOSTS[0]}"
 
+# for longcat 模型
+MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim}"
+WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim}"
+
 # NPUSlim paths differ: master uses local project dir, workers use synced dir
-MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
-WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
+# MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
+# WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
 
 # Detect local IPs
 LOCAL_IPS=$(hostname -I 2>/dev/null || true)

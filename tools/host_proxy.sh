@@ -21,11 +21,6 @@ export LD_LIBRARY_PATH=/usr/local/mpi/lib:/usr/local/Ascend:$LD_LIBRARY_PATH
 [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]] && source /usr/local/Ascend/ascend-toolkit/set_env.sh
 [[ -f /usr/local/Ascend/toolbox/set_env.sh ]] && source /usr/local/Ascend/toolbox/set_env.sh
 
-
-# HF
-export HF_HUB_CACHE=/llm_workspace_1P/robin/hfhub/HF_CACHE/hub
-export HF_DATASETS_CACHE=/llm_workspace_1P/robin/hfhub/HF_CACHE/datasets
-
 # --- Proxy Base Configuration ---
 export PROXY_HOST="127.0.0.1"
 export PROXY_PORT=7897

@@ -7,8 +7,8 @@
 set -euo pipefail
 
 # Configuration
-IMAGE_NAME="${IMAGE_NAME:-cis-pengcheng.cmecloud.cn/ascendhub/mindspeed-llm:openeuler22.03-mindspeed-llm-2.3.0-a3-arm}"
-CONTAINER_NAME="${CONTAINER_NAME:-mindspeed-llm-env}"
+IMAGE_NAME="${IMAGE_NAME:-swr.cn-south-1.myhuaweicloud.com/ascendhub/mindspeed-llm:26.0.0-a3-openeuler24.03-py3.11-aarch64}"
+CONTAINER_NAME="${CONTAINER_NAME:-mindspeed-llm-26-env}"
 
 # Check if container exists
 if [[ -n "$(docker ps -aq -f name="^/${CONTAINER_NAME}$")" ]]; then
