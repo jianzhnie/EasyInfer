@@ -63,6 +63,16 @@ ssh_run_timeout() {
     if command -v timeout >/dev/null 2>&1; then
         # shellcheck disable=SC2086
         timeout "$timeout_sec" ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@" 2>&1
+    elif command -v perl >/dev/null 2>&1; then
+        # Fallback: perl alarm-based timeout
+        # shellcheck disable=SC2086
+        perl -e '
+            use strict; use warnings;
+            my $timeout = shift @ARGV; my @cmd = @ARGV;
+            eval { local $SIG{ALRM} = sub { die "TIMEOUT\n" }; alarm $timeout; system(@cmd); alarm 0; };
+            if ($@ eq "TIMEOUT\n") { print STDERR "[ERROR] Command timed out after ${timeout}s\n"; exit 124; }
+            exit $? >> 8;
+        ' "$timeout_sec" ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$@" 2>&1
     else
         # 无 timeout 命令时直接执行
         # shellcheck disable=SC2086,SC2029
@@ -135,6 +145,114 @@ wait_for_port() {
         [[ "$elapsed" -ge "$timeout" ]] && return 1
         sleep "$interval"
     done
+}
+
+# ------------------------------------------------------------------------------
+# 参数解析：统一处理 --file/-f 节点列表参数
+# ------------------------------------------------------------------------------
+# 用法: NODE_LIST=$(parse_nodes_file_arg "$@")
+# 从脚本参数中提取 --file/-f 值，未提供则返回 ${NODES_FILE:-scripts/node_list.txt}
+parse_nodes_file_arg() {
+    local nodes_file="${NODES_FILE:-scripts/node_list.txt}"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --file|-f)
+                if [[ -n "${2:-}" && "$2" != -* ]]; then
+                    nodes_file="$2"
+                    shift 2
+                else
+                    log_fatal "选项 $1 需要一个参数: 节点列表文件路径"
+                fi
+                ;;
+            *) shift ;;
+        esac
+    done
+    printf '%s\n' "$nodes_file"
+}
+
+# ------------------------------------------------------------------------------
+# 等待 vLLM HTTP 服务就绪
+# ------------------------------------------------------------------------------
+wait_for_server() {
+    local host="${1:?用法: wait_for_server <host> <port> [timeout_sec]}"
+    local port="${2:?用法: wait_for_server <host> <port> [timeout_sec]}"
+    local max_wait="${3:-600}"
+    local url="http://${host}:${port}/health"
+    local elapsed=0 interval=5
+
+    log_info "Waiting for server to become ready..."
+    while (( elapsed < max_wait )); do
+        if curl -sf "$url" >/dev/null 2>&1; then
+            log_info "================================================================================="
+            log_info "  vLLM server is READY"
+            log_info "================================================================================="
+            log_info "  Health check:  http://${host}:${port}/health"
+            log_info "  API endpoint:  http://${host}:${port}/v1"
+            log_info "  Models list:   http://${host}:${port}/v1/models"
+            log_info "================================================================================="
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        printf "."
+    done
+    printf "\n"
+    log_err "Server did not become ready within ${max_wait}s"
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# 打印服务就绪后的 Claude Code 配置输出
+# ------------------------------------------------------------------------------
+print_server_ready() {
+    local host_ip="${1:?用法: print_server_ready <host> <port> [model_name]}"
+    local port="${2:?用法: print_server_ready <host> <port> [model_name]}"
+    local model_name="${3:-}"
+
+    log_info "================================================================================="
+    log_info "  vLLM server is READY"
+    log_info "================================================================================="
+    log_info "  Health check:  http://${host_ip}:${port}/health"
+    log_info "  API endpoint:  http://${host_ip}:${port}/v1"
+    log_info "  Models list:   http://${host_ip}:${port}/v1/models"
+    if [[ -n "$model_name" ]]; then
+        log_info ""
+        log_info "  --- Claude Code 配置 ---"
+        log_info ""
+        log_info "  方式一: 写入 ~/.claude/settings.json"
+        log_info "  {"
+        log_info "    \"env\": {"
+        log_info "      \"ANTHROPIC_BASE_URL\": \"http://${host_ip}:${port}/v1\","
+        log_info "      \"ANTHROPIC_API_KEY\": \"dummy\","
+        log_info "      \"ANTHROPIC_AUTH_TOKEN\": \"dummy\","
+        log_info "      \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"${model_name}\","
+        log_info "      \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"${model_name}\","
+        log_info "      \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"${model_name}\""
+        log_info "    }"
+        log_info "  }"
+        log_info ""
+        log_info "  方式二: 命令行直接使用"
+        log_info "  ANTHROPIC_BASE_URL=http://${host_ip}:${port}/v1 \\"
+        log_info "  ANTHROPIC_API_KEY=dummy \\"
+        log_info "  ANTHROPIC_AUTH_TOKEN=dummy \\"
+        log_info "  ANTHROPIC_DEFAULT_SONNET_MODEL=${model_name} \\"
+        log_info "  ANTHROPIC_DEFAULT_HAIKU_MODEL=${model_name} \\"
+        log_info "  ANTHROPIC_DEFAULT_OPUS_MODEL=${model_name} \\"
+        log_info "  claude"
+    fi
+    log_info ""
+    log_info "================================================================================="
+}
+
+# ------------------------------------------------------------------------------
+# 要求环境变量已设置
+# ------------------------------------------------------------------------------
+require_env() {
+    local var="$1"
+    local desc="${2:-$var}"
+    if [[ -z "${!var:-}" ]]; then
+        log_fatal "环境变量 ${var} (${desc}) 未设置"
+    fi
 }
 
 # ------------------------------------------------------------------------------
