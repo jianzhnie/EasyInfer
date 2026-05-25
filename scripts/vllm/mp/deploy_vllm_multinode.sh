@@ -157,30 +157,13 @@ build_vllm_args_declare() {
 # ------------------------------------------------------------------------------
 launch_on_node() {
     local node="$1" local_ip="$2" is_headless="$3" idx="$4"
-
     local dp_start_rank=$((idx * NPUS_PER_NODE / CARDS_PER_INSTANCE))
-    local array_decl env_exports
-    array_decl=$(build_vllm_args_declare "${is_headless}" "${idx}" "${dp_start_rank}" "${NODE0_IP}")
+    local env_exports prefix
     env_exports=$(build_env_exports "${local_ip}")
-
-    local inner_cmd ssh_cmd
-    inner_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"$'\n'"${array_decl}"$'\n'"nohup vllm \"\${args[@]}\" > ${SCRIPT_DIR}/vllm_${node}.log 2>&1 &"$'\n'"echo PID:\$!"
-    ssh_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh && docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
-
-    log_info "Launching on ${node} (IP: ${local_ip})..."
-    if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ]]; then
-        echo "---------- Node: ${node} (host command) ----------"
-        echo "${ssh_cmd}"
-        echo "---------- Node: ${node} (container inner command) ----------"
-        echo "${inner_cmd}"
-        echo "-----------------------------------"
-        return
-    fi
-
-    local pid
-    # shellcheck disable=SC2086,SC2029
-    pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
-    log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}.log"
+    prefix="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"
+    _launch_vllm_on_node "$node" "$local_ip" "$prefix" \
+        "build_vllm_args_declare '${is_headless}' '${idx}' '${dp_start_rank}' '${NODE0_IP}'" \
+        "_${node}"
 }
 
 # ------------------------------------------------------------------------------

@@ -189,3 +189,36 @@ check_ssh_connectivity() {
     [[ ${failed} -eq 0 ]] || log_fatal "SSH connectivity check failed"
     log_info "All nodes are reachable via SSH"
 }
+
+# ------------------------------------------------------------------------------
+# 共享的远程节点 vLLM 启动逻辑
+# 用法: _launch_vllm_on_node <node> <local_ip> <inner_cmd_prefix> <array_decl_cmd> <log_suffix>
+#   inner_cmd_prefix: source env + env_exports 的前置命令
+#   array_decl_cmd:   生成 declare -p args 的命令字符串
+#   log_suffix:       日志文件标识 (如 "_node1" 或 "_node1_8077")
+# ------------------------------------------------------------------------------
+_launch_vllm_on_node() {
+    local node="$1" local_ip="$2" inner_cmd_prefix="$3" array_decl_cmd="$4" log_suffix="${5:-}"
+
+    local array_decl
+    array_decl=$(eval "$array_decl_cmd")
+
+    local inner_cmd ssh_cmd
+    inner_cmd="${inner_cmd_prefix}"$'\n'"${array_decl}"$'\n'"nohup vllm \"\${args[@]}\" > ${SCRIPT_DIR}/vllm_${node}${log_suffix}.log 2>&1 &"$'\n'"echo PID:\$!"
+
+    ssh_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh && docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
+
+    log_info "Launching on ${node} (IP: ${local_ip})..."
+    if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ]]; then
+        echo "---------- Node: ${node} (host command) ----------"
+        echo "${ssh_cmd}"
+        echo "---------- Node: ${node} (container inner command) ----------"
+        echo "${inner_cmd}"
+        echo "-----------------------------------"
+    else
+        local pid
+        # shellcheck disable=SC2086,SC2029
+        pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
+        log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}${log_suffix}.log"
+    fi
+}

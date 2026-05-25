@@ -195,44 +195,15 @@ build_vllm_args_declare() {
 # 7. 在远程节点启动 vLLM 的辅助函数
 # ------------------------------------------------------------------------------
 launch_on_node() {
-    local node="$1"
-    local local_ip="$2"
-    local is_headless="$3"
-    local node_rank="$4"
-    local dp_start_rank="$5"
-    local dp_size_local="$6"
-    local master_addr="$7"
-    local nnodes="$8"
-    local vllm_port="$9"
-    local use_internal_dp="${10}"
-
-    local array_decl
-    array_decl=$(build_vllm_args_declare "${is_headless}" "${node_rank}" "${dp_start_rank}" "${dp_size_local}" "${master_addr}" "${nnodes}" "${vllm_port}" "${use_internal_dp}")
-
-    local env_exports
+    local node="$1" local_ip="$2" is_headless="$3" node_rank="$4"
+    local dp_start_rank="$5" dp_size_local="$6" master_addr="$7" nnodes="$8"
+    local vllm_port="$9" use_internal_dp="${10}"
+    local env_exports prefix
     env_exports=$(build_env_exports "${local_ip}")
-
-    # 容器内执行的命令
-    local inner_cmd
-    inner_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"$'\n'"${array_decl}"$'\n'"nohup vllm \"\${args[@]}\" > ${SCRIPT_DIR}/vllm_${node}_${vllm_port}.log 2>&1 &"$'\n'"echo PID:\$!"
-
-    # 远端宿主机命令：进入目录、source 环境变量、然后通过 docker exec 执行容器内命令
-    local ssh_cmd
-    ssh_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh && docker exec -i \${CONTAINER_NAME:-vllm-ascend-env-a3} bash -s"
-
-    log_info "Launching on ${node} (IP: ${local_ip}, port: ${vllm_port}, node_rank: ${node_rank}, headless: ${is_headless})..."
-    if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ]]; then
-        echo "---------- Node: ${node} (host command) ----------"
-        echo "${ssh_cmd}"
-        echo "---------- Node: ${node} (container inner command) ----------"
-        echo "${inner_cmd}"
-        echo "-----------------------------------"
-    else
-        local pid
-        # shellcheck disable=SC2086,SC2029
-        pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
-        log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}_${vllm_port}.log"
-    fi
+    prefix="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"
+    _launch_vllm_on_node "$node" "$local_ip" "$prefix" \
+        "build_vllm_args_declare '${is_headless}' '${node_rank}' '${dp_start_rank}' '${dp_size_local}' '${master_addr}' '${nnodes}' '${vllm_port}' '${use_internal_dp}'" \
+        "_${node}_${vllm_port}"
 }
 
 # ------------------------------------------------------------------------------
