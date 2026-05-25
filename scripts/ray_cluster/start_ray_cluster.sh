@@ -50,15 +50,10 @@ done
 [[ -n "${ACTION:-}" ]] || { log_err "缺少操作 (start 或 stop)"; usage; }
 
 # -----------------------------------------------------------------
-# 临时目录 & 清理
+# 临时目录 & 清理 (使用 common.sh 提供的 mktemp_dir)
 # -----------------------------------------------------------------
-_TEMP_DIR=$(mktemp -d)
-cleanup() {
-    local rc=$?
-    [[ -n "${_TEMP_DIR:-}" && -d "$_TEMP_DIR" ]] && rm -rf "$_TEMP_DIR"
-    exit $rc
-}
-trap cleanup EXIT INT TERM
+_TEMP_DIR=$(mktemp_dir)
+# mktemp_dir 已注册 EXIT INT TERM trap 自动清理
 
 # -----------------------------------------------------------------
 # 辅助函数
