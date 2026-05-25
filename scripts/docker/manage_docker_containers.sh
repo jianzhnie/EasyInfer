@@ -164,7 +164,7 @@ _remote_prepare_node() {
     if docker image inspect "${image_name}" >/dev/null 2>&1; then
       : # 镜像已存在
     else
-      if [ ! -f "${image_tar}" ]; then
+      if [[ ! -f "${image_tar}" ]]; then
         echo "[ERROR] image tar not found: ${image_tar}" >&2
         exit 2
       fi
@@ -172,7 +172,7 @@ _remote_prepare_node() {
       docker load -i "${image_tar}"
     fi
 
-    if [ ! -f "${run_container_script}" ]; then
+    if [[ ! -f "${run_container_script}" ]]; then
       echo "[ERROR] run script not found: ${run_container_script}" >&2
       exit 2
     fi
@@ -230,6 +230,7 @@ for node in $nodes; do
   limit_jobs "$PARALLELISM"
   (prepare_node "$node") &
 done
-wait_jobs >/dev/null || log_err "部分节点环境准备失败"
+failed=$(wait_jobs)
+[[ "$failed" -gt 0 ]] && log_err "部分节点环境准备失败 ($failed 个节点)"
 
 log_info "=== 节点准备完成 ==="

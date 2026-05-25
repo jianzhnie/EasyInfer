@@ -177,73 +177,63 @@ escape_regex() {
 # ------------------------------------------
 # 核心函数：终止指定节点上的进程
 # ------------------------------------------
-kill_processes_on_node() {
-    local node=$1
-    local dry_run=${2:-false}
-    local quiet=${3:-false}
-    
-    [[ "$quiet" == false ]] && log_info "🔎 [Node: $node] 开始检查进程..."
 
-    # 构建转义后的正则表达式
+# 构建转义后的正则表达式（使用全局 KEYWORDS 数组）
+_build_kill_pattern() {
     local escaped_keywords=()
     local kw
     for kw in "${KEYWORDS[@]}"; do
         escaped_keywords+=("$(escape_regex "$kw")")
     done
-    local pattern
-    pattern=$(IFS='|'; echo "${escaped_keywords[*]}")
+    IFS='|'; echo "${escaped_keywords[*]}"
+}
 
-    # 构建远程执行命令
-    local remote_cmd
-    read -r -d '' remote_cmd << 'REMOTE_SCRIPT'
+# 生成远程 kill 脚本（通过 SSH 发送到目标节点执行）
+# 参数: pattern kill_timeout dry_run
+_gen_kill_remote_script() {
+    local pattern="$1" kill_timeout="$2" dry_run="$3"
+    local script
+    read -r -d '' script << 'REMOTE_SCRIPT'
         set -euo pipefail
-        
+
         PATTERN="__PATTERN__"
         KILL_TIMEOUT="__KILL_TIMEOUT__"
         DRY_RUN="__DRY_RUN__"
-        
-        # 获取匹配关键词的进程 PID（排除 grep 和常见编辑器/IDE 进程）
+
         get_matching_pids() {
             ps aux | grep -E "$PATTERN" | \
                 grep -v grep | \
                 grep -v -E '(vscode-server|code-server|sshd:|/bin/sh -c|extension|/agent/|ssh.*:)' | \
                 awk '{print $2}' | sort -u | tr '\n' ' ' || true
         }
-        
-        # 获取进程详细信息
+
         get_process_info() {
             local pids="$1"
-            # 批量获取进程信息，比循环调用 ps 更高效
             # shellcheck disable=SC2086
             ps -p $pids -o pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true
         }
-        
-        # 主逻辑
+
         all_pids=$(get_matching_pids)
-        
+
         if [ -z "$all_pids" ] || [ "$all_pids" = " " ]; then
             echo "STATUS:NO_PROCESSES"
             exit 0
         fi
-        
+
         echo "STATUS:FOUND"
         echo "PIDS:$all_pids"
         echo "PROCESS_INFO:"
         get_process_info "$all_pids"
-        
+
         if [ "$DRY_RUN" = "true" ]; then
             echo "ACTION:SKIP_DRY_RUN"
             exit 0
         fi
-        
-        # 温和终止 (SIGTERM)
+
         echo "ACTION:SIGTERM"
         kill -15 $all_pids 2>/dev/null || true
-        
-        # 等待进程退出
         sleep "$KILL_TIMEOUT"
-        
-        # 检查剩余进程
+
         remaining=""
         for pid in $all_pids; do
             if kill -0 "$pid" 2>/dev/null; then
@@ -251,13 +241,12 @@ kill_processes_on_node() {
             fi
         done
         remaining="${remaining# }"
-        
+
         if [ -n "$remaining" ]; then
             echo "ACTION:SIGKILL:$remaining"
             kill -9 $remaining 2>/dev/null || true
             sleep 1
-            
-            # 最终检查
+
             still_alive=""
             for pid in $remaining; do
                 if kill -0 "$pid" 2>/dev/null; then
@@ -265,7 +254,7 @@ kill_processes_on_node() {
                 fi
             done
             still_alive="${still_alive# }"
-            
+
             if [ -n "$still_alive" ]; then
                 echo "STATUS:FAILED:$still_alive"
                 exit 1
@@ -276,18 +265,18 @@ kill_processes_on_node() {
             echo "STATUS:TERMINATED"
         fi
 REMOTE_SCRIPT
+    script="${script//__PATTERN__/$pattern}"
+    script="${script//__KILL_TIMEOUT__/$kill_timeout}"
+    script="${script//__DRY_RUN__/$dry_run}"
+    printf '%s' "$script"
+}
 
-    # 替换变量
-    remote_cmd="${remote_cmd//__PATTERN__/$pattern}"
-    remote_cmd="${remote_cmd//__KILL_TIMEOUT__/$KILL_TIMEOUT}"
-    remote_cmd="${remote_cmd//__DRY_RUN__/$dry_run}"
+# 解析远程 kill 脚本输出并打印结果
+# 参数: node output exit_code quiet → 设置 status/pids 并输出日志
+_parse_and_log_kill_result() {
+    local node="$1" output="$2" exit_code="$3" quiet="$4"
+    local status="failed" pids=""
 
-    # 执行远程命令并捕获输出
-    local output exit_code=0
-    output=$(ssh_run_with_timeout "$node" "$remote_cmd" 2>&1) || exit_code=$?
-
-    # 解析输出
-    local status="failed"
     if [[ "$output" == *"STATUS:NO_PROCESSES"* ]]; then
         status="no_processes"
     elif [[ "$output" == *"STATUS:TERMINATED"* ]]; then
@@ -300,31 +289,28 @@ REMOTE_SCRIPT
         status="timeout"
     fi
 
-    # 提取进程信息用于显示
-    local pids=""
     if [[ "$output" =~ PIDS:([^[:space:]]+) ]]; then
         pids="${BASH_REMATCH[1]}"
     fi
 
-    # 输出结果
     case $status in
         no_processes)
-            [[ "$quiet" == false ]] && log_info "ℹ️  [Node: $node] 未找到匹配的进程"
+            [[ "$quiet" == false ]] && log_info "[Node: $node] 未找到匹配的进程"
             ;;
         success)
-            [[ "$quiet" == false ]] && log_info "✅ [Node: $node] 进程已正常终止 (PIDs: $pids)"
+            [[ "$quiet" == false ]] && log_info "[Node: $node] 进程已正常终止 (PIDs: $pids)"
             ;;
         killed)
-            log_warn "⚠️  [Node: $node] 进程已强制终止 (PIDs: $pids)"
+            log_warn "[Node: $node] 进程已强制终止 (PIDs: $pids)"
             ;;
         failed)
-            log_err "❌ [Node: $node] 无法终止所有进程 (PIDs: $pids)"
+            log_err "[Node: $node] 无法终止所有进程 (PIDs: $pids)"
             ;;
         timeout)
-            log_err "❌ [Node: $node] SSH 连接超时 (${SSH_TIMEOUT}s)"
+            log_err "[Node: $node] SSH 连接超时 (${SSH_TIMEOUT}s)"
             ;;
         *)
-            log_err "❌ [Node: $node] 处理失败 (退出码: $exit_code)"
+            log_err "[Node: $node] 处理失败 (退出码: $exit_code)"
             if [[ -n "$output" ]]; then
                 echo "$output" | while read -r line; do
                     log_err "    $line"
@@ -333,13 +319,29 @@ REMOTE_SCRIPT
             ;;
     esac
 
-    # 返回状态码
     case $status in
         no_processes|success) return 0 ;;
-        killed) return 0 ;;  # 虽然用了 SIGKILL，但目标达成了
+        killed) return 0 ;;
         timeout) return 124 ;;
         *) return 1 ;;
     esac
+}
+
+kill_processes_on_node() {
+    local node="$1" dry_run="${2:-false}" quiet="${3:-false}"
+
+    [[ "$quiet" == false ]] && log_info "[Node: $node] 开始检查进程..."
+
+    local pattern
+    pattern=$(_build_kill_pattern)
+
+    local remote_cmd
+    remote_cmd=$(_gen_kill_remote_script "$pattern" "$KILL_TIMEOUT" "$dry_run")
+
+    local output exit_code=0
+    output=$(ssh_run_with_timeout "$node" "$remote_cmd" 2>&1) || exit_code=$?
+
+    _parse_and_log_kill_result "$node" "$output" "$exit_code" "$quiet"
 }
 
 # ------------------------------------------
@@ -444,8 +446,8 @@ if [[ ${#NODES[@]} -eq 0 ]]; then
 fi
 
 # 输出配置信息
-log_info "🚀 开始多节点进程清理..."
-$DRY_RUN && log_info "📝 [DRY RUN 模式] 不会实际终止进程"
+log_info "开始多节点进程清理..."
+$DRY_RUN && log_info "[DRY RUN 模式] 不会实际终止进程"
 log_info "目标关键词: ${KEYWORDS[*]}"
 log_info "节点列表文件: $NODE_LIST_FILE"
 log_info "节点数量: ${#NODES[@]}"
@@ -456,7 +458,7 @@ log_info "SSH 超时: ${SSH_TIMEOUT}s"
 # 用户确认（除非使用 -y 跳过或 dry-run 模式）
 if ! $SKIP_CONFIRM && ! $DRY_RUN; then
     echo "================================================================"
-    echo "⚠️  警告: 此脚本将终止以下节点上的指定进程"
+    echo "警告: 此脚本将终止以下节点上的指定进程"
     echo "   目标关键词: ${KEYWORDS[*]}"
     echo "   此操作不可恢复，可能会中断正在运行的任务"
     echo "----------------------------------------------------------------"
@@ -531,7 +533,7 @@ fi
 
 # 输出汇总
 echo "================================================================"
-log_info "🎉 所有节点处理完成"
+log_info "所有节点处理完成"
 echo "----------------------------------------------------------------"
 echo "  成功:     $SUCCESS_COUNT"
 echo "  失败:     $FAILED_COUNT"

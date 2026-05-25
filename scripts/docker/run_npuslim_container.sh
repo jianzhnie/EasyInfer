@@ -81,7 +81,7 @@ echo "Image:      ${IMAGE_NAME}"
 echo "NPUSlim:    ${WITH_NPUSLIM}"
 echo "Multi-node: ${MULTI_NODE}"
 echo "Daemon:     ${DAEMON}"
-if [ "$MULTI_NODE" = false ]; then
+if [[ "$MULTI_NODE" == false ]]; then
     echo "Cards:      ${CARDS} -> chips ${VISIBLE_DEVICES[*]}"
 fi
 echo ""
@@ -93,7 +93,7 @@ if ! docker image inspect "${IMAGE_NAME}" &>/dev/null; then
 fi
 
 # Check if container exists
-if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
+if [[ -n "$(docker ps -aq -f name="^/${CONTAINER_NAME}$")" ]]; then
     echo "Container '${CONTAINER_NAME}' already exists. Removing it..."
     docker rm -f "${CONTAINER_NAME}"
 fi
@@ -103,7 +103,7 @@ DOCKER_ARGS=(
     --shm-size=10g
 )
 
-if [ "$MULTI_NODE" = true ]; then
+if [[ "$MULTI_NODE" == true ]]; then
     # ========== Multi-node mode ==========
     echo "Multi-node mode: using host network, all NPUs"
     echo ""
@@ -184,7 +184,7 @@ DOCKER_ARGS+=(
 INSIDE_CMD=""
 
 # NPUSlim source mount + editable install
-if [ "$WITH_NPUSLIM" = true ]; then
+if [[ "$WITH_NPUSLIM" == true ]]; then
     SRC_DIR="${NPUSLIM_SRC_PATH:-${SCRIPT_DIR}/npuslim}"
 
     if [ ! -d "$SRC_DIR" ] || [ ! -f "$SRC_DIR/pyproject.toml" ]; then
@@ -199,7 +199,7 @@ if [ "$WITH_NPUSLIM" = true ]; then
     echo "  (mounted to /workspace/npuslim, editable install on start)"
 fi
 
-if [ "$DAEMON" = true ]; then
+if [[ "$DAEMON" == true ]]; then
     # Daemon mode: rebuild args (-d instead of -it --rm)
     DAEMON_ARGS=(-d)
     for arg in "${DOCKER_ARGS[@]}"; do
@@ -213,7 +213,7 @@ if [ "$DAEMON" = true ]; then
     echo "To stop:   docker stop ${CONTAINER_ID:0:12}"
 else
     # Interactive mode
-    if [ -n "$INSIDE_CMD" ]; then
+    if [[ -n "$INSIDE_CMD" ]]; then
         exec docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" \
             /bin/bash -lc "${INSIDE_CMD}exec /bin/bash"
     else

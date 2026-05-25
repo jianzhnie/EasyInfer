@@ -28,7 +28,7 @@ RUN_CONTAINER="${SCRIPT_DIR}/run_npuslim_container.sh"
 # WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
 
 # Detect local IPs
-LOCAL_IPS=$(hostname -I 2>/dev/null || true)
+read -ra LOCAL_IPS < <(hostname -I 2>/dev/null || true)
 
 # ------------------------------------------
 # 节点列表解析

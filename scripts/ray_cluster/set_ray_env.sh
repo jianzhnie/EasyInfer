@@ -19,13 +19,6 @@ export HCCL_WHITELIST_DISABLE=1
 # -----------------------------------------------------------------
 # 2. 网络接口
 # -----------------------------------------------------------------
-# NIC_NAME="${NIC_NAME:-$(ip route | grep default | awk '{print $5}' | head -1)}"
-# LOCAL_IP="${LOCAL_IP:-$(ip addr show "$NIC_NAME" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)}"
-
-# export HCCL_IF_IP="${HCCL_IF_IP:-LOCAL_IP}"
-# export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-NIC_NAME}"
-# export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-NIC_NAME}"
-# export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-NIC_NAME}"
 
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"

@@ -40,6 +40,7 @@ AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../../common.sh"
+source "${SCRIPT_DIR}/_common.sh"
 
 # 部署配置 (可通过环境变量覆盖)
 NIC_NAME="${NIC_NAME:-enp66s0f0}"
@@ -120,33 +121,6 @@ log_info "Config check passed: TOTAL_CARDS=${TOTAL_CARDS}, TP=${TENSOR_PARALLEL_
 # ------------------------------------------------------------------------------
 # 4. 获取节点 IP
 # ------------------------------------------------------------------------------
-get_node_ip() {
-    local node=$1
-    local nic=$2
-    local cmd=""
-    if command -v ip >/dev/null 2>&1; then
-        cmd="ip -4 addr show ${nic} 2>/dev/null | awk '/inet / {print \$2}' | cut -d/ -f1 | head -n 1"
-    elif command -v ifconfig >/dev/null 2>&1; then
-        cmd="ifconfig ${nic} 2>/dev/null | awk '/inet / {print \$2}' | head -n 1"
-    else
-        echo ""
-        return
-    fi
-
-    local result=""
-    if [[ "${node}" == "$(hostname -s)" ]] || [[ "${node}" == "$(hostname)" ]]; then
-        result=$(eval "${cmd}")
-    else
-        # shellcheck disable=SC2086,SC2029
-        result=$(ssh ${SSH_OPTS} "${node}" "${cmd}" 2>/dev/null)
-    fi
-    if [[ -z "${result}" && ( "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ) ]]; then
-        echo "192.168.1.$((RANDOM % 254 + 1))"
-    else
-        echo "${result}"
-    fi
-}
-
 NODE0_IP=$(get_node_ip "${NODE0}" "${NIC_NAME}")
 if [[ -z "${NODE0_IP}" ]]; then
     log_fatal "Failed to get IP address for node ${NODE0} on interface ${NIC_NAME}"
@@ -157,74 +131,11 @@ log_info "Node0 IP (DP master): ${NODE0_IP}"
 # 5. SSH 连通性检查
 # ------------------------------------------------------------------------------
 if [[ "${SKIP_ENV_CHECK}" != "true" && "${DRY_RUN}" != "true" && "${DRY_RUN}" != "1" ]]; then
-    log_info "Checking SSH connectivity..."
-    failed=0
-    for node in "${ALL_NODES[@]}"; do
-        # shellcheck disable=SC2086
-        if ! ssh ${SSH_OPTS} -o ConnectTimeout=5 "${node}" "echo OK" >/dev/null 2>&1; then
-            log_err "SSH failed: ${node}"
-            failed=1
-        fi
-    done
-    [[ ${failed} -eq 0 ]] || log_fatal "SSH connectivity check failed"
-    log_info "All nodes are reachable via SSH"
+    check_ssh_connectivity
 fi
 
 # ------------------------------------------------------------------------------
-# 6. vLLM 参数探测函数 (参考 vllm_model_server.sh)
-# ------------------------------------------------------------------------------
-vllm_help() {
-    vllm serve --help 2>/dev/null || true
-}
-
-choose_flag() {
-    local help_text="$1"
-    local preferred="$2"
-    local fallback="$3"
-    if [[ -n "$preferred" && "$help_text" == *"$preferred"* ]]; then
-        echo "$preferred"
-        return 0
-    fi
-    if [[ -n "$fallback" && "$help_text" == *"$fallback"* ]]; then
-        echo "$fallback"
-        return 0
-    fi
-    echo "$preferred"
-}
-
-has_flag() {
-    local help_text="$1"
-    local flag="$2"
-    [[ "$help_text" == *"$flag"* ]]
-}
-
-# ------------------------------------------------------------------------------
-# 7. 环境变量导出字符串构建
-# ------------------------------------------------------------------------------
-build_env_exports() {
-    local local_ip=$1
-    echo "export HCCL_OP_EXPANSION_MODE=AIV"
-    echo "export HCCL_IF_IP=${local_ip}"
-    echo "export GLOO_SOCKET_IFNAME=${NIC_NAME}"
-    echo "export TP_SOCKET_IFNAME=${NIC_NAME}"
-    echo "export HCCL_SOCKET_IFNAME=${NIC_NAME}"
-    echo "export OMP_PROC_BIND=false"
-    echo "export VLLM_USE_V1=1"
-    echo "export HCCL_BUFFSIZE=200"
-    echo "export VLLM_ASCEND_ENABLE_MLAPO=1"
-    echo "export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True"
-    echo "export VLLM_ASCEND_ENABLE_FLASHCOMM1=1"
-    echo "export OMP_NUM_THREADS=100"
-    echo "export HCCL_CONNECT_TIMEOUT=120"
-    echo "export HCCL_INTRA_PCIE_ENABLE=1"
-    echo "export HCCL_INTRA_ROCE_ENABLE=0"
-    # vLLM V1 握手与 RPC 超时放大（大模型加载可能超过 5 分钟默认值）
-    echo "export VLLM_V1_FRONTEND_ENGINE_CORE_TIMEOUT=1200"
-    echo "export VLLM_RPC_TIMEOUT=600"
-}
-
-# ------------------------------------------------------------------------------
-# 8. 构建 vLLM 启动参数 (参考 vllm_model_server.sh 的分块构建方式)
+# 6. 构建 vLLM 启动参数 (参考 vllm_model_server.sh 的分块构建方式)
 # ------------------------------------------------------------------------------
 build_vllm_args_declare() {
     local is_headless="$1"
@@ -320,7 +231,7 @@ build_vllm_args_declare() {
 }
 
 # ------------------------------------------------------------------------------
-# 9. 标准多节点部署
+# 7. 标准多节点部署
 # ------------------------------------------------------------------------------
 deploy_standard() {
     local tp_size="${TENSOR_PARALLEL_SIZE}"
@@ -377,7 +288,7 @@ deploy_standard() {
 }
 
 # ------------------------------------------------------------------------------
-# 10. 主流程
+# 8. 主流程
 # ------------------------------------------------------------------------------
 deploy_standard
 
