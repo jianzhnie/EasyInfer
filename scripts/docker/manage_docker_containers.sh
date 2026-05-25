@@ -54,6 +54,15 @@ while [[ $# -gt 0 ]]; do
         exit "$E_INVALID_ARG"
       fi
       ;;
+    --file|-f)
+      if [[ -n "${2:-}" && "${2:-}" != -* ]]; then
+        NODES_FILE="$2"
+        shift 2
+      else
+        log_err "选项 $1 需要一个参数: 节点列表文件路径"
+        exit "$E_INVALID_ARG"
+      fi
+      ;;
     start|stop|restart)
       ACTION="$1"
       shift
@@ -66,8 +75,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 解析节点列表参数
-NODES_FILE=$(parse_nodes_file_arg "$@")
+# 使用默认节点文件（如未通过 -f 指定且环境变量也未设置）
+NODES_FILE="${NODES_FILE:-scripts/node_list.txt}"
 
 if [[ "$ACTION" != "start" && "$ACTION" != "stop" && "$ACTION" != "restart" ]]; then
   log_err "动作参数必须是 start, stop 或 restart，当前值: $ACTION"
