@@ -17,16 +17,13 @@ NPUS_PER_NODE=8
 WAIT_TIME=2
 
 # ------------------------------------------------------------------------------
-# 节点列表解析
+# 节点列表解析 (使用 common.sh 统一函数)
 # ------------------------------------------------------------------------------
+NODE_LIST=$(parse_nodes_file_arg "$@")
 NODES=()
-
-# 优先从命令行参数或环境变量获取节点列表
-if [[ ${#NODES[@]} -eq 0 && -n "${NODE_LIST:-}" && -f "$NODE_LIST" ]]; then
-    while IFS= read -r line; do
-        NODES+=("$line")
-    done < <(read_nodes "$NODE_LIST")
-fi
+while IFS= read -r line; do
+    NODES+=("$line")
+done < <(read_nodes "$NODE_LIST")
 
 # 回退到硬编码节点（向后兼容）
 if [[ ${#NODES[@]} -eq 0 ]]; then

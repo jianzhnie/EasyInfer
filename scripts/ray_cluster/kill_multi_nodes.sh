@@ -28,7 +28,7 @@ fi
 # 默认配置（可被环境变量或命令行参数覆盖）
 # ------------------------------------------
 # 优先使用 NODES_FILE，其次是 set_ray_env.sh 中的 NODE_LIST，最后是默认路径
-NODE_LIST_FILE="${NODES_FILE:-${NODE_LIST:-${SCRIPTS_DIR}/node_list.txt}}"
+NODES_FILE="${NODES_FILE:-${NODE_LIST:-${SCRIPTS_DIR}/node_list.txt}}"
 MAX_JOBS="${MAX_JOBS:-${MAX_SSH_PARALLELISM:-16}}"
 SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
@@ -126,24 +126,10 @@ confirm_operation() {
         return 0
     fi
 
-    echo "================================================================"
-    echo "警告: 此脚本将终止以下节点上的指定进程"
-    echo "   目标关键词: ${KEYWORDS[*]}"
-    echo "   此操作不可恢复，可能会中断正在运行的任务"
-    echo "----------------------------------------------------------------"
-    echo "待处理节点:"
-    for node in "${NODES[@]}"; do
-        echo "  - $node"
-    done
-    echo "----------------------------------------------------------------"
-    read -r -p "输入 'yes' 继续，或其他内容取消: " user_confirm
+    log_info "目标关键词: ${KEYWORDS[*]}"
+    log_info "待处理节点: ${#RESOLVED_NODES[@]} 个"
 
-    if [[ "$user_confirm" != "yes" ]]; then
-        log_info "已取消操作，未做任何更改"
-        exit 0
-    fi
-    echo "================================================================"
-    log_info "确认继续，开始清理..."
+    confirm "此操作将终止以上节点上的指定进程，不可恢复，是否继续?"
 }
 
 # ------------------------------------------
@@ -181,7 +167,7 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            -y|--yes)      SKIP_CONFIRM=true; shift ;;
+            -y|--yes)      SKIP_CONFIRM=true; export SKIP_CONFIRM; shift ;;
             -n|--dry-run)  DRY_RUN=true; shift ;;
             -q|--quiet)    QUIET=true; shift ;;
             -k|--keywords)
@@ -206,11 +192,11 @@ parse_args() {
                 ;;
             --file|-f)
                 [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
-                NODE_LIST_FILE="$2"; shift 2
+                NODES_FILE="$2"; shift 2
                 ;;
             -h|--help)     usage; exit 0 ;;
             -*)            log_err "未知选项: $1"; usage >&2; exit "$E_INVALID_ARG" ;;
-            *)            NODE_LIST_FILE="$1"; shift ;;
+            *)            NODES_FILE="$1"; shift ;;
         esac
     done
 }
@@ -220,28 +206,17 @@ parse_args() {
 # ------------------------------------------
 parse_args "$@"
 
-# 检查节点列表文件
-if [[ ! -f "$NODE_LIST_FILE" ]]; then
-    log_err "节点列表文件未找到: $NODE_LIST_FILE"
-    exit 1
-fi
+# 统一节点解析 (通过 NODES_FILE 环境变量，支持 --file/-f CLI 参数和位置参数)
+resolve_nodes
 
-# 读取节点列表
-NODES=()
-while IFS= read -r line; do
-    NODES+=("$line")
-done < <(read_nodes "$NODE_LIST_FILE")
-
-if [[ ${#NODES[@]} -eq 0 ]]; then
-    log_err "节点列表为空: $NODE_LIST_FILE"
-    exit 1
-fi
+# 向后兼容：复制到 NODES 数组
+NODES=("${RESOLVED_NODES[@]}")
 
 # 输出配置信息
 log_info "开始多节点进程清理..."
 $DRY_RUN && log_info "[DRY RUN 模式] 不会实际终止进程"
 log_info "目标关键词: ${KEYWORDS[*]}"
-log_info "节点列表文件: $NODE_LIST_FILE"
+log_info "节点列表文件: ${NODES_FILE:-scripts/node_list.txt}"
 log_info "节点数量: ${#NODES[@]}"
 log_info "最大并发数: $MAX_JOBS"
 log_info "终止超时: ${KILL_TIMEOUT}s"
