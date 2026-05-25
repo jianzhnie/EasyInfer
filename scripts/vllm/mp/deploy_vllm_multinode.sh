@@ -42,6 +42,9 @@ AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 source "${SCRIPT_DIR}/../../common.sh"
 source "${SCRIPT_DIR}/_common.sh"
 
+# 使用带 DRY_RUN 回退的 IP 获取函数
+get_node_ip() { _get_node_ip_with_fallback "$@"; }
+
 # 部署配置 (可通过环境变量覆盖)
 NIC_NAME="${NIC_NAME:-enp66s0f0}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -135,8 +138,12 @@ if [[ "${SKIP_ENV_CHECK}" != "true" && "${DRY_RUN}" != "true" && "${DRY_RUN}" !=
 fi
 
 # ------------------------------------------------------------------------------
-# 6. 构建 vLLM 启动参数 (参考 vllm_model_server.sh 的分块构建方式)
+# 6. 构建 vLLM 启动参数
 # ------------------------------------------------------------------------------
+# 辅助函数 _add_ep_args / _add_chunked_prefill_args / _add_prefix_caching_args
+# 定义在 _common.sh 中（被 source 的共享库）
+
+# 构建完整的 vLLM 参数数组并输出 declare -p
 build_vllm_args_declare() {
     local is_headless="$1"
     # shellcheck disable=SC2034
@@ -172,66 +179,54 @@ build_vllm_args_declare() {
         args+=(--data-parallel-start-rank "${dp_start_rank}")
     fi
 
-    # A2  compilation-config
-    args+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes":[8, 16, 24, 32, 40, 48]}')
+    # A2 编译配置
+    args+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture sizes":[8, 16, 24, 32, 40, 48]}')
     args+=(--additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}')
     args+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}')
 
-    # 动态探测 Help 信息
     local help_text=""
-    if [[ "${AUTO_DETECT_FLAGS}" == "1" ]]; then
-        help_text="$(vllm_help)"
-    fi
+    [[ "${AUTO_DETECT_FLAGS}" == "1" ]] && help_text="$(vllm_help)"
 
-    # Expert Parallel
-    if [[ "${ENABLE_EXPERT_PARALLEL}" == "1" ]]; then
-        local ep_flag="--enable-expert-parallel"
-        if [[ -n "$help_text" ]]; then
-            ep_flag="$(choose_flag "$help_text" "--enable-expert-parallel" "--enable_expert_parallel")"
-        fi
-        args+=("${ep_flag}")
-        # 如果 vLLM 版本支持 --expert-parallel-size, 显式设置
-        if [[ -n "$help_text" ]]; then
-            if has_flag "$help_text" "--expert-parallel-size"; then
-                args+=(--expert-parallel-size "${ep_size}")
-            fi
-        fi
-    fi
+    _add_ep_args args "$help_text" "$ep_size"
+    _add_chunked_prefill_args args "$help_text"
+    _add_prefix_caching_args args "$help_text"
 
-    # Chunked Prefill
-    if [[ "${ENABLE_CHUNKED_PREFILL}" == "1" ]]; then
-        if [[ -n "$help_text" ]]; then
-            if has_flag "$help_text" "--enable-chunked-prefill"; then
-                args+=(--enable-chunked-prefill)
-            fi
-        else
-            args+=(--enable-chunked-prefill)
-        fi
-    fi
-
-    # Prefix Caching (命令行已经默认加了 --no-enable-prefix-caching, 这里处理启用情况)
-    if [[ "${PREFIX_CACHING}" == "1" ]]; then
-        # 移除默认的 --no-enable-prefix-caching
-        local -a new_args=()
-        for a in "${args[@]}"; do
-            if [[ "$a" != "--no-enable-prefix-caching" ]]; then
-                new_args+=("$a")
-            fi
-        done
-        args=("${new_args[@]}")
-        local pc_flag="--enable-prefix-caching"
-        if [[ -n "$help_text" ]]; then
-            pc_flag="$(choose_flag "$help_text" "--enable-prefix-caching" "--enable_prefix_caching")"
-        fi
-        args+=("${pc_flag}")
-    fi
-
-    # 输出数组定义, 可被远程 bash eval 安全执行
     declare -p args
 }
 
 # ------------------------------------------------------------------------------
-# 7. 标准多节点部署
+# 7. 在远程节点启动 vLLM 的辅助函数
+# ------------------------------------------------------------------------------
+launch_on_node() {
+    local node="$1" local_ip="$2" is_headless="$3" idx="$4"
+
+    local dp_start_rank=$((idx * NPUS_PER_NODE / CARDS_PER_INSTANCE))
+    local array_decl env_exports
+    array_decl=$(build_vllm_args_declare "${is_headless}" "${idx}" "${dp_start_rank}" "${NODE0_IP}")
+    env_exports=$(build_env_exports "${local_ip}")
+
+    local inner_cmd ssh_cmd
+    inner_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"$'\n'"${array_decl}"$'\n'"nohup vllm \"\${args[@]}\" > ${SCRIPT_DIR}/vllm_${node}.log 2>&1 &"$'\n'"echo PID:\$!"
+    ssh_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh && docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
+
+    log_info "Launching on ${node} (IP: ${local_ip})..."
+    if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ]]; then
+        echo "---------- Node: ${node} (host command) ----------"
+        echo "${ssh_cmd}"
+        echo "---------- Node: ${node} (container inner command) ----------"
+        echo "${inner_cmd}"
+        echo "-----------------------------------"
+        return
+    fi
+
+    local pid
+    # shellcheck disable=SC2086,SC2029
+    pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
+    log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}.log"
+}
+
+# ------------------------------------------------------------------------------
+# 8. 标准多节点部署
 # ------------------------------------------------------------------------------
 deploy_standard() {
     local tp_size="${TENSOR_PARALLEL_SIZE}"
@@ -244,45 +239,15 @@ deploy_standard() {
     log_info "============================================================"
 
     local idx=0
+    local node local_ip is_headless
     for node in "${ALL_NODES[@]}"; do
-        local local_ip
         local_ip=$(get_node_ip "${node}" "${NIC_NAME}")
         [[ -n "${local_ip}" ]] || { log_warn "Skip ${node}: cannot detect IP on ${NIC_NAME}"; continue; }
 
-        local is_headless="false"
-        if [[ ${idx} -gt 0 ]]; then
-            is_headless="true"
-        fi
+        is_headless="false"
+        [[ ${idx} -gt 0 ]] && is_headless="true"
 
-        local dp_start_rank=$((idx * NPUS_PER_NODE / CARDS_PER_INSTANCE))
-
-        local array_decl
-        array_decl=$(build_vllm_args_declare "${is_headless}" "${idx}" "${dp_start_rank}" "${NODE0_IP}")
-
-        local env_exports
-        env_exports=$(build_env_exports "${local_ip}")
-
-        # 容器内执行的命令
-        local inner_cmd
-        inner_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"$'\n'"${array_decl}"$'\n'"nohup vllm \"\${args[@]}\" > ${SCRIPT_DIR}/vllm_${node}.log 2>&1 &"$'\n'"echo PID:\$!"
-
-        # 远端宿主机命令：进入目录、source 环境变量、然后通过 docker exec 执行容器内命令
-        local ssh_cmd
-        ssh_cmd="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh && docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
-
-        log_info "Launching on ${node} (IP: ${local_ip})..."
-        if [[ "${DRY_RUN}" == "true" || "${DRY_RUN}" == "1" ]]; then
-            echo "---------- Node: ${node} (host command) ----------"
-            echo "${ssh_cmd}"
-            echo "---------- Node: ${node} (container inner command) ----------"
-            echo "${inner_cmd}"
-            echo "-----------------------------------"
-        else
-            local pid
-            # shellcheck disable=SC2086,SC2029
-            pid=$(echo "${inner_cmd}" | ssh ${SSH_OPTS} "${node}" "${ssh_cmd}")
-            log_info "Started vLLM on ${node}, PID=${pid}, log=${SCRIPT_DIR}/vllm_${node}.log"
-        fi
+        launch_on_node "${node}" "${local_ip}" "${is_headless}" "${idx}"
         idx=$((idx + 1))
     done
 }

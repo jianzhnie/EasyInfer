@@ -18,6 +18,14 @@ SSH_USER="${SSH_USER:-root}"
 RAY_PORT="${RAY_PORT:-6379}"
 NODES_FILE="${NODES_FILE:-${SCRIPT_DIR}/../node_list.txt}"
 
+# 支持通过 -f 参数传入节点列表文件
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f|--file) NODES_FILE="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
 # 读取节点列表到全局 _CLUSTER_NODES 数组
 read_cluster_nodes() {
     local file="$1"
@@ -104,31 +112,26 @@ case "$CMD" in
             done
         fi
 
-        echo "========================================"
-        echo "Starting Ray Cluster"
-        echo "========================================"
-        echo "Head:    ${HEAD_IP}:${RAY_PORT}"
-        echo "Workers: ${WORKERS[*]:-none}"
-        echo ""
+        log_info "========================================"
+        log_info "Starting Ray Cluster"
+        log_info "Head:    ${HEAD_IP}:${RAY_PORT}"
+        log_info "Workers: ${WORKERS[*]:-none}"
 
-        echo "--- Starting head on ${HEAD_IP} ---"
+        log_info "--- Starting head on ${HEAD_IP} ---"
         node_exec "$HEAD_IP" "ray start --head --port=${RAY_PORT}"
-        echo ""
 
         sleep 2
 
         for worker in "${WORKERS[@]}"; do
-            echo "--- Starting worker on ${worker} ---"
+            log_info "--- Starting worker on ${worker} ---"
             node_exec "$worker" "ray start --address=${HEAD_IP}:${RAY_PORT} --node-ip-address=${worker}"
-            echo ""
         done
 
-        echo "--- Cluster status ---"
+        log_info "--- Cluster status ---"
         node_exec "$HEAD_IP" "ray status"
-        echo ""
-        echo "========================================"
-        echo "Ray cluster started."
-        echo "========================================"
+        log_info "========================================"
+        log_info "Ray cluster started."
+        log_info "========================================"
         ;;
 
     stop)

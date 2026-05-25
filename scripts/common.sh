@@ -161,17 +161,58 @@ confirm() {
 }
 
 # ------------------------------------------------------------------------------
-# 网络工具：获取业务网卡 IP
+# 错误码常量 (供外部脚本使用)
 # ------------------------------------------------------------------------------
+# shellcheck disable=SC2034
+readonly E_OK=0
+# shellcheck disable=SC2034
+readonly E_GENERAL=1
+# shellcheck disable=SC2034
+readonly E_INVALID_ARG=2
+# shellcheck disable=SC2034
+readonly E_NOT_FOUND=3
+# shellcheck disable=SC2034
+readonly E_TIMEOUT=124
+# shellcheck disable=SC2034
+readonly E_CMD_NOT_FOUND=127
+
+# ------------------------------------------------------------------------------
+# 网络工具：获取节点网卡 IP
+# ------------------------------------------------------------------------------
+# 获取指定节点上指定网卡的 IP 地址
+# 用法: get_node_ip [node] <interface>
+#   node      - 目标节点（空字符串表示本地）
+#   interface - 网卡名称
 get_node_ip() {
-    local interface="${1:?用法: get_node_ip <interface>}"
+    local node="${1:-}"
+    local interface="${2:-}"
     local ip=""
-    if command -v ip >/dev/null 2>&1; then
-        ip=$(ip -4 addr show "${interface}" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n 1)
-    elif command -v ifconfig >/dev/null 2>&1; then
-        ip=$(ifconfig "${interface}" 2>/dev/null | awk '/inet / {print $2}' | head -n 1)
+
+    # 兼容旧版单参数调用: get_node_ip <interface>
+    if [[ -z "$interface" && -n "$node" ]]; then
+        interface="$node"
+        node=""
     fi
-    printf "%s" "$ip"
+
+    [[ -n "$interface" ]] || { printf '\n'; return; }
+
+    local cmd=""
+    if command -v ip >/dev/null 2>&1; then
+        cmd="ip -4 addr show ${interface} 2>/dev/null | awk '/inet / {print \$2}' | cut -d/ -f1 | head -n 1"
+    elif command -v ifconfig >/dev/null 2>&1; then
+        cmd="ifconfig ${interface} 2>/dev/null | awk '/inet / {print \$2}' | head -n 1"
+    else
+        printf '\n'
+        return
+    fi
+
+    if [[ -z "$node" || "$node" == "$(hostname -s 2>/dev/null)" || "$node" == "$(hostname 2>/dev/null)" ]]; then
+        ip=$(eval "$cmd")
+    else
+        # shellcheck disable=SC2086,SC2029
+        ip=$(ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$cmd" 2>/dev/null)
+    fi
+    printf '%s\n' "${ip:-}"
 }
 
 # 自动探测默认网卡
@@ -181,6 +222,13 @@ get_default_nic() {
         nic=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
     fi
     printf "%s" "${nic:-}"
+}
+
+# 获取本机指定网卡的 IP
+# 用法: get_local_ip <interface>
+get_local_ip() {
+    local interface="${1:?用法: get_local_ip <interface>}"
+    get_node_ip "" "$interface"
 }
 
 # ------------------------------------------------------------------------------
@@ -198,6 +246,37 @@ mktemp_dir() {
     }
     trap _tempdir_cleanup EXIT INT TERM
     echo "$_TEMP_DIR"
+}
+
+# ------------------------------------------------------------------------------
+# vLLM 参数探测工具
+# ------------------------------------------------------------------------------
+
+# 获取 vllm serve --help 输出
+vllm_help() {
+    vllm serve --help 2>/dev/null || true
+}
+
+# 检查 help_text 中是否包含指定 flag
+# 用法: has_flag <help_text> <flag>
+has_flag() {
+    local help_text="$1" flag="$2"
+    [[ "$help_text" == *"$flag"* ]]
+}
+
+# 从 help_text 中选择支持的 flag（优先使用 preferred，不存在则回退到 fallback）
+# 用法: choose_flag <help_text> <preferred> <fallback>
+choose_flag() {
+    local help_text="$1" preferred="$2" fallback="$3"
+    if [[ -n "$preferred" && "$help_text" == *"$preferred"* ]]; then
+        printf '%s' "$preferred"
+        return 0
+    fi
+    if [[ -n "$fallback" && "$help_text" == *"$fallback"* ]]; then
+        printf '%s' "$fallback"
+        return 0
+    fi
+    printf '%s' "$preferred"
 }
 
 # ------------------------------------------------------------------------------

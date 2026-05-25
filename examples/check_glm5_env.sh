@@ -11,13 +11,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/common.sh
+source "${SCRIPT_DIR}/../scripts/common.sh"
+
 # 默认配置
 HARDWARE="${HARDWARE:-a2}"  # a2, a3
 QUANT_TYPE="${QUANT_TYPE:-w4a8}"  # w4a8, w8a8, bf16
 
-echo "========================================"
-echo "GLM-5/GLM-5.1 环境检查"
-echo "========================================"
+log_info "========================================"
+log_info "GLM-5/GLM-5.1 环境检查"
+log_info "========================================"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do

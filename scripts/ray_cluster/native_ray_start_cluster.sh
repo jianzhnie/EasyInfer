@@ -1,75 +1,94 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=../common.sh
+source "${SCRIPTS_ROOT}/common.sh"
+
 # 项目目录
 PROJECT_DIR="/root/llmtuner/llm/MindSpeed-RL-master"
 
-# 定义节点IP数组
-NODES=(
-    "10.16.201.201"
-    "10.16.201.42"
-)
-
-# Ray配置
-MASTER_ADDR=${NODES[0]}
+# Ray 配置
 MASTER_PORT="29500"
 DASHBOARD_PORT="8266"
 NPUS_PER_NODE=8
+WAIT_TIME=2
+
+# ------------------------------------------------------------------------------
+# 节点列表解析
+# ------------------------------------------------------------------------------
+NODES=()
+
+# 优先从命令行参数或环境变量获取节点列表
+if [[ ${#NODES[@]} -eq 0 && -n "${NODE_LIST:-}" && -f "$NODE_LIST" ]]; then
+    while IFS= read -r line; do
+        NODES+=("$line")
+    done < <(read_nodes "$NODE_LIST")
+fi
+
+# 回退到硬编码节点（向后兼容）
+if [[ ${#NODES[@]} -eq 0 ]]; then
+    NODES=(
+        "10.16.201.201"
+        "10.16.201.42"
+    )
+fi
+
 NUM_NODES=${#NODES[@]}
-WORKERS=("${NODES[@]:1}")  # 除第一个节点外的所有节点作为worker
+MASTER_ADDR=${NODES[0]}
+WORKERS=("${NODES[@]:1}")
 
 # 验证参数
 if [[ -z "$MASTER_ADDR" ]]; then
-    echo "Error: MASTER_ADDR is empty!" >&2
-    exit 1
+    log_fatal "MASTER_ADDR is empty"
 fi
 
 if [[ $NUM_NODES -eq 0 ]]; then
-    echo "Error: No nodes defined!" >&2
-    exit 1
+    log_fatal "No nodes defined"
 fi
+
 # 打印集群信息
-echo "============================================="
-echo "Ray Cluster Setup Configuration"
-echo "============================================="
-echo "Project directory: $PROJECT_DIR"
-echo "Number of nodes: $NUM_NODES"
-echo "NPUs per node: $NPUS_PER_NODE"
-echo "Master IP: $MASTER_ADDR"
-echo "Master port: $MASTER_PORT"
-echo "Dashboard port: $DASHBOARD_PORT"
-echo "Worker nodes: ${WORKERS[*]}"
-echo "============================================="
-echo ""
+log_info "============================================="
+log_info "Ray Cluster Setup Configuration"
+log_info "============================================="
+log_info "Project directory: $PROJECT_DIR"
+log_info "Number of nodes: $NUM_NODES"
+log_info "NPUs per node: $NPUS_PER_NODE"
+log_info "Master IP: $MASTER_ADDR"
+log_info "Master port: $MASTER_PORT"
+log_info "Worker nodes: ${WORKERS[*]:-none}"
+log_info "============================================="
 
 # 检查项目目录是否存在
 check_project_dir() {
     local node=$1
     # shellcheck disable=SC2029
-    if ! ssh "$node" "[ -d \"$PROJECT_DIR\" ]"; then
-        echo "Error: Project directory $PROJECT_DIR not found on node $node" >&2
+    if ! ssh "${SSH_USER:-root}@${node}" "[ -d \"$PROJECT_DIR\" ]"; then
+        log_err "Project directory $PROJECT_DIR not found on node $node"
         return 1
     fi
     return 0
 }
 
-# 启动Ray节点函数
+# 启动 Ray 节点函数
 start_ray_node() {
     local node=$1
     local is_head=$2
     local cmd
-    
+
     if $is_head; then
-        echo "[HEAD] Starting Ray head node on $node..."
+        log_info "[HEAD] Starting Ray head node on $node..."
         cmd="ray start --head --port $MASTER_PORT --node-ip-address $MASTER_ADDR --dashboard-host=0.0.0.0 --dashboard-port=$DASHBOARD_PORT --resources='{\"NPU\": $NPUS_PER_NODE}'"
     else
-        echo "[WORKER] Starting Ray worker node on $node..."
+        log_info "[WORKER] Starting Ray worker node on $node..."
         cmd="ray start --address $MASTER_ADDR:$MASTER_PORT --resources='{\"NPU\": $NPUS_PER_NODE}'"
     fi
-    
+
     # shellcheck disable=SC2029
-    if ! ssh "$node" "cd $PROJECT_DIR && source set_env.sh && ray stop >/dev/null 2>&1 || true && $cmd"; then
-        echo "Error: Failed to start Ray on node $node" >&2
+    if ! ssh "${SSH_USER:-root}@${node}" "cd $PROJECT_DIR && source set_env.sh && ray stop >/dev/null 2>&1 || true && $cmd"; then
+        log_err "Failed to start Ray on node $node"
         return 1
     fi
     return 0
@@ -88,8 +107,8 @@ if ! start_ray_node "$MASTER_ADDR" true; then
 fi
 
 # 等待头节点完全启动
-echo "Waiting 10 seconds for head node to initialize..."
-sleep 2
+log_info "Waiting ${WAIT_TIME}s for head node to initialize..."
+sleep "$WAIT_TIME"
 
 # 并行启动工作节点
 pids=()
@@ -99,14 +118,19 @@ for worker in "${WORKERS[@]}"; do
 done
 
 # 等待所有工作节点启动完成
+failed=0
 for pid in "${pids[@]}"; do
     if ! wait "$pid"; then
-        echo "Warning: Some worker nodes failed to start" >&2
+        failed=$((failed + 1))
     fi
 done
 
+if [[ $failed -gt 0 ]]; then
+    log_warn "$failed worker node(s) failed to start"
+fi
+
 echo ""
-echo "============================================="
-echo "Ray cluster setup complete!"
-echo "Dashboard URL: http://$MASTER_ADDR:$DASHBOARD_PORT"
-echo "============================================="
+log_info "============================================="
+log_info "Ray cluster setup complete!"
+log_info "Dashboard URL: http://$MASTER_ADDR:$DASHBOARD_PORT"
+log_info "============================================="

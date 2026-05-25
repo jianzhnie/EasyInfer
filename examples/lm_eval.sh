@@ -19,6 +19,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/common.sh
+source "${SCRIPT_DIR}/../scripts/common.sh"
+
 # ---------------------------------------------------------------------------
 # HF 缓存配置 — 指向本地数据目录，避免重复下载
 # ---------------------------------------------------------------------------
@@ -39,13 +43,15 @@ TASKS="${TASKS:-mmlu}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
 
-# math 500 
-# hendrycks_math500,minerva_math500   
+# math 500
+# hendrycks_math500,minerva_math500
 # ceval
-# ceval-valid   
+# ceval-valid
 # ---------------------------------------------------------------------------
 # 执行评测
 # ---------------------------------------------------------------------------
+log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
+
 bash tools/eval/run_lmeval.sh \
     --model-path "$MODEL_PATH" \
     --output-dir "$OUTPUT_DIR" \

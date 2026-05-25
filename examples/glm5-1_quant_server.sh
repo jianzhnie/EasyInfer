@@ -36,6 +36,8 @@ set -euo pipefail
 
 # shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_common.sh
+source "${SCRIPT_DIR}/_common.sh"
 
 # 自动检测节点 IP (用于 Claude Code 配置输出)
 VLLM_HOST_IP="${VLLM_HOST_IP:-$(ip route | grep default | awk '{print $5}' | head -1 | xargs -I{} ip -4 addr show {} 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}"
@@ -72,24 +74,7 @@ export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:Tru
 # -----------------------------------------------------------------------------
 # 前置检查
 # -----------------------------------------------------------------------------
-check_prereqs() {
-    if ! command -v vllm &>/dev/null; then
-        echo "[ERROR] vllm command not found. Are you inside the Docker container?" >&2
-        exit 1
-    fi
-
-    if [[ ! -d "$MODEL_PATH" ]]; then
-        echo "[ERROR] Model path not found: $MODEL_PATH" >&2
-        exit 1
-    fi
-
-    if [[ ! -f "$MODEL_PATH/config.json" ]]; then
-        echo "[ERROR] config.json not found in: $MODEL_PATH" >&2
-        exit 1
-    fi
-}
-
-check_prereqs
+check_prereqs "$MODEL_PATH"
 
 # -----------------------------------------------------------------------------
 # 打印配置
@@ -191,70 +176,8 @@ VLLM_PID=$!
 # -----------------------------------------------------------------------------
 # 等待服务就绪，然后输出 Claude Code 配置
 # -----------------------------------------------------------------------------
-wait_for_server() {
-    local url="http://${HOST}:${PORT}/health"
-    local max_wait=600  # 最多等 10 分钟
-    local elapsed=0
-    local interval=5
-
-    echo ""
-    echo "[INFO] Waiting for server to become ready..."
-
-    while (( elapsed < max_wait )); do
-        if kill -0 "$VLLM_PID" 2>/dev/null; then
-            if curl -sf "$url" >/dev/null 2>&1; then
-                echo ""
-                echo "================================================================================="
-                echo "  vLLM server is READY"
-                echo "================================================================================="
-                echo ""
-                echo "  Health check:  http://${HOST}:${PORT}/health"
-                echo "  API endpoint:  http://${HOST}:${PORT}/v1"
-                echo "  Models list:   http://${HOST}:${PORT}/v1/models"
-                echo ""
-                echo "  --- Claude Code 配置 ---"
-                echo ""
-                echo "  方式一: 写入 ~/.claude/settings.json"
-                echo '  {'
-                echo '    "env": {'
-                echo "      \"ANTHROPIC_BASE_URL\": \"http://${VLLM_HOST_IP}:${PORT}/v1\","
-                echo '      "ANTHROPIC_API_KEY": "dummy",'
-                echo '      "ANTHROPIC_AUTH_TOKEN": "dummy",'
-                echo "      \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"${SERVED_MODEL_NAME}\","
-                echo "      \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"${SERVED_MODEL_NAME}\","
-                echo "      \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"${SERVED_MODEL_NAME}\""
-                echo '    }'
-                echo '  }'
-                echo ""
-                echo "  方式二: 命令行直接使用"
-                echo "  ANTHROPIC_BASE_URL=http://${VLLM_HOST_IP}:${PORT}/v1 \\"
-                echo "  ANTHROPIC_API_KEY=dummy \\"
-                echo "  ANTHROPIC_AUTH_TOKEN=dummy \\"
-                echo "  ANTHROPIC_DEFAULT_SONNET_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  ANTHROPIC_DEFAULT_HAIKU_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  ANTHROPIC_DEFAULT_OPUS_MODEL=${SERVED_MODEL_NAME} \\"
-                echo "  claude"
-                echo ""
-                echo "================================================================================="
-                return 0
-            fi
-        else
-            echo ""
-            echo "[ERROR] vLLM process died unexpectedly (PID $VLLM_PID)" >&2
-            return 1
-        fi
-
-        sleep "$interval"
-        elapsed=$((elapsed + interval))
-        echo -n "."
-    done
-
-    echo ""
-    echo "[ERROR] Server did not become ready within ${max_wait}s" >&2
-    return 1
-}
-
-wait_for_server
+wait_for_server "$HOST" "$PORT" "$VLLM_PID"
+print_claude_config "$VLLM_HOST_IP" "$PORT" "$SERVED_MODEL_NAME"
 
 # 把控制权交还给 vLLM 进程，使脚本可以用 Ctrl-C 优雅退出
 wait "$VLLM_PID"

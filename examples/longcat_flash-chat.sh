@@ -42,20 +42,23 @@ MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-"8192"}
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
 [[ -e "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/common.sh
+source "${SCRIPT_DIR}/../scripts/common.sh"
+
 #=============================================================================
 # 启动命令
 #=============================================================================
 
-echo "============================================"
-echo " LongCat-Flash-Chat vLLM Deployment"
-echo "============================================"
-echo " Model:          ${MODEL_PATH}"
-echo " TP:             ${TENSOR_PARALLEL_SIZE}"
-echo " Total GPUs:     128"
-echo " Host:           ${HOST}:${PORT}"
-echo " Max Model Len:  ${MAX_MODEL_LEN}"
-echo " Max Num Seqs:   ${MAX_NUM_SEQS}"
-echo "============================================"
+log_info "============================================"
+log_info " LongCat-Flash-Chat vLLM Deployment"
+log_info " Model:          ${MODEL_PATH}"
+log_info " TP:             ${TENSOR_PARALLEL_SIZE}"
+log_info " Total GPUs:     128"
+log_info " Host:           ${HOST}:${PORT}"
+log_info " Max Model Len:  ${MAX_MODEL_LEN}"
+log_info " Max Num Seqs:   ${MAX_NUM_SEQS}"
+log_info "============================================"
 
 
 vllm serve "${MODEL_PATH}" \
