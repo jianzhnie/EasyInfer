@@ -403,3 +403,16 @@ choose_flag() {
 SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC2034
 readonly SCRIPTS_ROOT
+
+# ------------------------------------------------------------------------------
+# 判断 IP 是否为本机
+# ------------------------------------------------------------------------------
+is_local_ip() {
+    local ip="$1"
+    local lip
+    for lip in $(hostname -I 2>/dev/null || true); do
+        [[ "$ip" == "$lip" ]] && return 0
+    done
+    [[ "$ip" == "$(hostname -s 2>/dev/null)" || "$ip" == "$(hostname 2>/dev/null)" ]] && return 0
+    return 1
+}
