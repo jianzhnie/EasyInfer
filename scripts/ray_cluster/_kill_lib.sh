@@ -55,6 +55,28 @@ _gen_kill_remote_script() {
             ps -p $pids -o pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true
         }
 
+        try_terminate() {
+            local pids="$1" timeout="$2"
+            kill -15 $pids 2>/dev/null || true
+            sleep "$timeout"
+            local remaining=""
+            for pid in $pids; do
+                kill -0 "$pid" 2>/dev/null && remaining="$remaining $pid"
+            done
+            printf '%s' "${remaining# }"
+        }
+
+        try_kill() {
+            local pids="$1"
+            kill -9 $pids 2>/dev/null || true
+            sleep 1
+            local still_alive=""
+            for pid in $pids; do
+                kill -0 "$pid" 2>/dev/null && still_alive="$still_alive $pid"
+            done
+            printf '%s' "${still_alive# }"
+        }
+
         all_pids=$(get_matching_pids)
         if [ -z "$all_pids" ] || [ "$all_pids" = " " ]; then
             echo "STATUS:NO_PROCESSES"
@@ -72,16 +94,7 @@ _gen_kill_remote_script() {
         fi
 
         echo "ACTION:SIGTERM"
-        kill -15 $all_pids 2>/dev/null || true
-        sleep "$KILL_TIMEOUT"
-
-        remaining=""
-        for pid in $all_pids; do
-            if kill -0 "$pid" 2>/dev/null; then
-                remaining="$remaining $pid"
-            fi
-        done
-        remaining="${remaining# }"
+        remaining=$(try_terminate "$all_pids" "$KILL_TIMEOUT")
 
         if [ -z "$remaining" ]; then
             echo "STATUS:TERMINATED"
@@ -89,16 +102,7 @@ _gen_kill_remote_script() {
         fi
 
         echo "ACTION:SIGKILL:$remaining"
-        kill -9 $remaining 2>/dev/null || true
-        sleep 1
-
-        still_alive=""
-        for pid in $remaining; do
-            if kill -0 "$pid" 2>/dev/null; then
-                still_alive="$still_alive $pid"
-            fi
-        done
-        still_alive="${still_alive# }"
+        still_alive=$(try_kill "$remaining")
 
         if [ -n "$still_alive" ]; then
             echo "STATUS:FAILED:$still_alive"
