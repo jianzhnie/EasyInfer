@@ -171,6 +171,41 @@ parse_nodes_file_arg() {
 }
 
 # ------------------------------------------------------------------------------
+# 统一节点解析: CLI --hosts > --file/-f > NODES_FILE 环境变量 > 默认文件
+# 用法: resolve_nodes "$@" → 将结果存入全局数组 RESOLVED_NODES
+# ------------------------------------------------------------------------------
+resolve_nodes() {
+    RESOLVED_NODES=()
+    local nodes_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --hosts) shift
+                while [[ $# -gt 0 && "$1" != -* ]]; do
+                    RESOLVED_NODES+=("$1"); shift
+                done ;;
+            --file|-f)
+                [[ -n "${2:-}" && "$2" != -* ]] || log_fatal "选项 $1 需要一个参数: 节点列表文件路径"
+                nodes_file="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    # 如果已通过 --hosts 指定，直接返回
+    [[ ${#RESOLVED_NODES[@]} -gt 0 ]] && return 0
+
+    # 从文件读取
+    local file="${nodes_file:-${NODES_FILE:-scripts/node_list.txt}}"
+    [[ -f "$file" ]] || log_fatal "节点列表文件未找到: $file"
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && RESOLVED_NODES+=("$line")
+    done < <(read_nodes "$file")
+
+    [[ ${#RESOLVED_NODES[@]} -gt 0 ]] || log_fatal "节点列表为空: $file"
+}
+
+# ------------------------------------------------------------------------------
 # 等待 vLLM HTTP 服务就绪
 # ------------------------------------------------------------------------------
 wait_for_server() {
@@ -260,9 +295,11 @@ require_env() {
 # ------------------------------------------------------------------------------
 # 用法: confirm "确认操作?" [default_yes|default_no]
 # 返回 0 表示用户确认, 1 表示取消
+# 若 SKIP_CONFIRM=true，自动跳过交互返回 0
 confirm() {
     local msg="${1:?用法: confirm <message> [default]}"
     local default="${2:-default_no}"
+    [[ "${SKIP_CONFIRM:-false}" == "true" ]] && return 0
     local prompt
     if [[ "$default" == "default_yes" ]]; then
         prompt="$msg [Y/n] "
