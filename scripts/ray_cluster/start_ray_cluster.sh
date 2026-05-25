@@ -206,7 +206,7 @@ start_time=$(date +%s)
 while true; do
     status_output=$(remote_exec "$HEAD_NODE" "ray status" 2>/dev/null || echo "")
     # 使用 grep | wc -l 避免 grep -c 在未匹配时返回非零状态导致的 || echo "0" 重复输出问题
-    current_nodes=$(echo "$status_output" | grep "node_id" | wc -l | xargs)
+    current_nodes=$(echo "$status_output" | grep -c "node_id" || echo "0")
 
     if [[ -n "$current_nodes" && "$current_nodes" -ge "${#NODES[@]}" ]]; then
         log_info "所有 ${#NODES[@]} 个节点已成功加入集群."

@@ -75,10 +75,18 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     -n|--node)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+          log_err "选项 $1 需要一个参数: <node>"
+          exit 1
+      fi
       SPECIFIC_NODES+=("$2")
       shift 2
       ;;
     -p|--parallel)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+          log_err "选项 $1 需要一个参数: <num>"
+          exit 1
+      fi
       PARALLELISM_ARG="$2"
       shift 2
       ;;
@@ -87,6 +95,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -c|--config)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+          log_err "选项 $1 需要一个参数: <config_file>"
+          exit 1
+      fi
       CONFIG_FILE="$2"
       shift 2
       ;;
