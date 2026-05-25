@@ -45,15 +45,20 @@ EOF
 
 # 参数解析
 ON_HOST=false FORCE=false SKIP_CONFIRM=false
+NODE_LIST_FILE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --on-host) ON_HOST=true; shift ;;
         -f|--force) FORCE=true; shift ;;
-        -y|--yes) SKIP_CONFIRM=true; shift ;;
+        -y|--yes) SKIP_CONFIRM=true; export SKIP_CONFIRM; shift ;;
+        --file) NODE_LIST_FILE="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) log_err "未知选项: $1"; usage >&2; exit 2 ;;
     esac
 done
+
+# 确定节点列表文件: CLI --file > NODE_LIST (from set_ray_env.sh) > 默认
+NODE_FILE="${NODE_LIST_FILE:-${NODE_LIST:-scripts/node_list.txt}}"
 
 _remote_stop_ray() {
     local force="$1" kill_timeout="$2" pattern="$3"
@@ -137,20 +142,13 @@ stop_ray_node() {
 }
 
 # 主流程
-: "${NODE_LIST:?NODE_LIST 未设置，请检查 set_ray_env.sh 是否正确加载}"
-nodes=$(read_nodes "$NODE_LIST")
-[[ -n "$nodes" ]] || { log_err "未找到节点信息"; exit 2; }
+nodes=$(read_nodes "$NODE_FILE")
+[[ -n "$nodes" ]] || { log_err "未找到节点信息: $NODE_FILE"; exit 2; }
 
 # 确认
-if ! $SKIP_CONFIRM; then
-    echo "================================"
-    echo "将停止以下节点的 Ray 集群:"
-    echo "  $nodes"
-    echo "  模式: $( [[ "$ON_HOST" == "true" ]] && echo '宿主机' || echo '容器内' )"
-    echo "  强制: $( [[ "$FORCE" == "true" ]] && echo '是' || echo '否' )"
-    echo "================================"
-    read -r -p "输入 'yes' 继续: " confirm
-    [[ "$confirm" == "yes" ]] || { log_info "已取消"; exit 0; }
+if ! confirm "将停止以下节点的 Ray 集群: $nodes"; then
+    log_info "已取消"
+    exit 0
 fi
 
 log_info "开始停止 Ray 集群..."
