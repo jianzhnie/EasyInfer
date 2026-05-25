@@ -18,40 +18,6 @@ SSH_USER="${SSH_USER:-root}"
 RAY_PORT="${RAY_PORT:-6379}"
 NODES_FILE="${NODES_FILE:-${SCRIPT_DIR}/../node_list.txt}"
 
-# 支持通过 -f 参数传入节点列表文件
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -f|--file) NODES_FILE="$2"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-
-# 读取节点列表到全局 _CLUSTER_NODES 数组
-read_cluster_nodes() {
-    local file="$1"
-    _CLUSTER_NODES=()
-    if [[ ! -f "$file" ]]; then
-        log_fatal "节点列表文件未找到: $file"
-    fi
-    while IFS= read -r line; do
-        _CLUSTER_NODES+=("$line")
-    done < <(read_nodes "$file")
-    if [[ ${#_CLUSTER_NODES[@]} -eq 0 ]]; then
-        log_fatal "节点列表为空: $file"
-    fi
-}
-
-# Detect local IPs (as array to fix word-split bug)
-read -ra LOCAL_IPS < <(hostname -I 2>/dev/null || true)
-
-is_local() {
-    local ip="$1" lip
-    for lip in "${LOCAL_IPS[@]}"; do
-        [[ "$ip" == "$lip" ]] && return 0
-    done
-    return 1
-}
-
 # Find the running container
 get_container() {
     docker ps -q --filter ancestor="${IMAGE_NAME}" | head -1
@@ -62,7 +28,7 @@ node_exec() {
     local host="$1"
     shift
     local container
-    if is_local "$host"; then
+    if is_local_ip "$host"; then
         container=$(get_container)
         if [[ -z "$container" ]]; then
             log_err "本地未找到运行中的容器"
@@ -93,7 +59,7 @@ case "$CMD" in
             case $1 in
                 --head) HEAD_IP="$2"; shift 2 ;;
                 --workers) shift
-                    while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                    while [[ $# -gt 0 && "$1" != -* ]]; do
                         WORKERS+=("$1"); shift
                     done ;;
                 --file|-f) local_nodes_file="$2"; shift 2 ;;
@@ -102,13 +68,14 @@ case "$CMD" in
         done
 
         # 解析节点列表
-        read_cluster_nodes "${local_nodes_file:-$NODES_FILE}"
+        [[ -n "${local_nodes_file:-}" ]] && NODES_FILE="$local_nodes_file"
+        resolve_nodes
 
         # 默认：第一个 IP = head，其余 = workers
         if [[ -z "$HEAD_IP" ]]; then
-            HEAD_IP="${_CLUSTER_NODES[0]}"
-            for ((i = 1; i < ${#_CLUSTER_NODES[@]}; i++)); do
-                WORKERS+=("${_CLUSTER_NODES[$i]}")
+            HEAD_IP="${RESOLVED_NODES[0]}"
+            for ((i = 1; i < ${#RESOLVED_NODES[@]}; i++)); do
+                WORKERS+=("${RESOLVED_NODES[$i]}")
             done
         fi
 
@@ -135,51 +102,18 @@ case "$CMD" in
         ;;
 
     stop)
-        HOSTS=()
-        local_nodes_file=""
-        while [[ $# -gt 0 ]]; do
-            case $1 in
-                --hosts) shift
-                    while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                        HOSTS+=("$1"); shift
-                    done ;;
-                --file|-f) local_nodes_file="$2"; shift 2 ;;
-                *) shift ;;
-            esac
-        done
+        resolve_nodes "$@"
 
-        # 解析节点列表（未指定 --hosts 时使用全部节点）
-        if [[ ${#HOSTS[@]} -eq 0 ]]; then
-            read_cluster_nodes "${local_nodes_file:-$NODES_FILE}"
-            HOSTS=("${_CLUSTER_NODES[@]}")
-        fi
-
-        for host in "${HOSTS[@]}"; do
+        for host in "${RESOLVED_NODES[@]}"; do
             echo "--- Stopping Ray on ${host} ---"
             node_exec "$host" "ray stop" || true
         done
         ;;
 
     status)
-        HOSTS=()
-        local_nodes_file=""
-        while [[ $# -gt 0 ]]; do
-            case $1 in
-                --hosts) shift
-                    while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                        HOSTS+=("$1"); shift
-                    done ;;
-                --file|-f) local_nodes_file="$2"; shift 2 ;;
-                *) shift ;;
-            esac
-        done
+        resolve_nodes "$@"
 
-        if [[ ${#HOSTS[@]} -eq 0 ]]; then
-            read_cluster_nodes "${local_nodes_file:-$NODES_FILE}"
-            HOSTS=("${_CLUSTER_NODES[@]}")
-        fi
-
-        for host in "${HOSTS[@]}"; do
+        for host in "${RESOLVED_NODES[@]}"; do
             echo "--- Ray status on ${host} ---"
             node_exec "$host" "ray status" || echo "Ray not running"
             echo ""
