@@ -108,4 +108,3 @@ pstatus() {
         echo "Tunnel: ⚠️  no ss/netstat to check"
     fi
 }
-

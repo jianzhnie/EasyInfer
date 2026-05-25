@@ -12,7 +12,7 @@ docker exec -it mindspeed-llm-26-env /bin/bash
 docker exec -it npuslim-env /bin/bash
 
 # Start Docker Container
-bash /llm_workspace_1P/robin/EasyInfer/scripts/docker/prepare_docker_nodes.sh start 
+bash /llm_workspace_1P/robin/EasyInfer/scripts/docker/prepare_docker_nodes.sh start
 bash /llm_workspace_1P/robin/EasyInfer/scripts/cluster/start_ray_cluster.sh start \
     --file /llm_workspace_1P/robin/EasyInfer/scripts/node_list.txt
 
