@@ -99,32 +99,6 @@ cleanup_jobs() {
 }
 trap cleanup_jobs INT TERM
 
-# ------------------------------------------
-# SSH 辅助
-# ------------------------------------------
-ssh_run_with_timeout() {
-    local node="$1"
-    shift
-    local exit_code=0
-
-    if command -v timeout >/dev/null 2>&1; then
-        # shellcheck disable=SC2086
-        timeout "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
-    else
-        # shellcheck disable=SC2086
-        perl -e '
-            use strict; use warnings;
-            my $timeout = shift @ARGV; my @cmd = @ARGV;
-            eval { local $SIG{ALRM} = sub { die "TIMEOUT\n" }; alarm $timeout; system(@cmd); alarm 0; };
-            if ($@ eq "TIMEOUT\n") { print STDERR "[ERROR] Command timed out after ${timeout}s\n"; exit 124; }
-            exit $? >> 8;
-        ' "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
-    fi
-
-    return $exit_code
-}
-
-
 kill_processes_on_node() {
     local node="$1" dry_run="${2:-false}" quiet="${3:-false}"
 
@@ -137,7 +111,7 @@ kill_processes_on_node() {
     remote_cmd=$(_gen_kill_remote_script "$pattern" "$KILL_TIMEOUT" "$dry_run")
 
     local output exit_code=0
-    output=$(ssh_run_with_timeout "$node" "$remote_cmd" 2>&1) || exit_code=$?
+    output=$(ssh_run_timeout "$SSH_TIMEOUT" "$node" "$remote_cmd" 2>&1) || exit_code=$?
 
     _parse_and_log_kill_result "$node" "$output" "$exit_code" "$quiet"
 }
