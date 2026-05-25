@@ -3,7 +3,7 @@
 # GLM-5 (Full Parameter) vLLM 推理服务部署脚本
 # =============================================================================
 # 参考自: examples/glm5-1_server.sh
-# 
+#
 # 用法:
 #   bash examples/glm5_full_server.sh
 #
@@ -38,7 +38,7 @@ DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 DTYPE="${DTYPE:-bfloat16}"
 # 全量模型不使用量化参数
-QUANTIZATION="${QUANTIZATION:-}" 
+QUANTIZATION="${QUANTIZATION:-}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 SEED="${SEED:-1024}"

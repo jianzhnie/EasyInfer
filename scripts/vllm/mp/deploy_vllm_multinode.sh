@@ -34,9 +34,9 @@ set -euo pipefail
 # 1. 默认值与常量
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE_LIST_FILE="${SCRIPT_DIR}/../../node_list.txt"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
+NODE_LIST_FILE=$(parse_nodes_file_arg "$@")
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../../common.sh"
@@ -75,59 +75,17 @@ export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-0}"
 # ------------------------------------------------------------------------------
 # 2. 读取节点列表
 # ------------------------------------------------------------------------------
-if [[ ! -f "${NODE_LIST_FILE}" ]]; then
-    log_fatal "Node list file not found: ${NODE_LIST_FILE}"
-fi
-
-ALL_NODES=()
-while IFS= read -r line; do
-    ALL_NODES+=("$line")
-done < <(read_nodes "${NODE_LIST_FILE}")
-TOTAL_NODES=${#ALL_NODES[@]}
-
-if [[ ${TOTAL_NODES} -lt 2 ]]; then
-    log_fatal "Need at least 2 nodes for multi-node deployment, got ${TOTAL_NODES}"
-fi
-
-NODE0="${ALL_NODES[0]}"
-log_info "Loaded ${TOTAL_NODES} nodes from ${NODE_LIST_FILE}"
-log_info "Master node: ${NODE0}"
+load_and_validate_nodes "${NODE_LIST_FILE}" 2
 
 # ------------------------------------------------------------------------------
 # 3. 配置合法性检查
 # ------------------------------------------------------------------------------
-TOTAL_CARDS=$((TOTAL_NODES * NPUS_PER_NODE))
-CARDS_PER_INSTANCE=$((TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE))
-
-if [[ ${CARDS_PER_INSTANCE} -eq 0 ]]; then
-    log_fatal "Invalid config: TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE = 0"
-fi
-
-if [[ $((TOTAL_CARDS % CARDS_PER_INSTANCE)) -ne 0 ]]; then
-    log_fatal "Card mismatch: TOTAL_CARDS (${TOTAL_CARDS}) is not divisible by CARDS_PER_INSTANCE (${CARDS_PER_INSTANCE}). Please adjust TP/PP."
-fi
-
-DP_SIZE=$((TOTAL_CARDS / CARDS_PER_INSTANCE))
-
-if [[ ${DP_SIZE} -lt 1 ]]; then
-    log_fatal "Invalid config: DP_SIZE (${DP_SIZE}) must be >= 1. Please reduce TP or PP."
-fi
-
-if [[ ${CARDS_PER_INSTANCE} -le ${NPUS_PER_NODE} ]]; then
-    DP_SIZE_LOCAL=$((NPUS_PER_NODE / CARDS_PER_INSTANCE))
-else
-    DP_SIZE_LOCAL=1
-fi
-
-log_info "Config check passed: TOTAL_CARDS=${TOTAL_CARDS}, TP=${TENSOR_PARALLEL_SIZE}, PP=${PIPELINE_PARALLEL_SIZE}, DP=${DP_SIZE}, DP_LOCAL=${DP_SIZE_LOCAL}"
+validate_parallelism_config "${TOTAL_NODES}" "${NPUS_PER_NODE}"
 
 # ------------------------------------------------------------------------------
 # 4. 获取节点 IP
 # ------------------------------------------------------------------------------
-NODE0_IP=$(get_node_ip "${NODE0}" "${NIC_NAME}")
-if [[ -z "${NODE0_IP}" ]]; then
-    log_fatal "Failed to get IP address for node ${NODE0} on interface ${NIC_NAME}"
-fi
+resolve_node0_ip "${NODE0}" "${NIC_NAME}"
 log_info "Node0 IP (DP master): ${NODE0_IP}"
 
 # ------------------------------------------------------------------------------

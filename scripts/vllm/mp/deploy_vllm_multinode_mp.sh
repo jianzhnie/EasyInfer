@@ -35,9 +35,9 @@ set -euo pipefail
 # 1. 默认值与常量
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE_LIST_FILE="${SCRIPT_DIR}/../../node_list.txt"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
+NODE_LIST_FILE=$(parse_nodes_file_arg "$@")
 
 # 加载共享工具函数
 source "${SCRIPT_DIR}/../../common.sh"
@@ -75,71 +75,17 @@ export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-0}"
 # ------------------------------------------------------------------------------
 # 2. 读取节点列表
 # ------------------------------------------------------------------------------
-if [[ ! -f "${NODE_LIST_FILE}" ]]; then
-    log_fatal "Node list file not found: ${NODE_LIST_FILE}"
-fi
-
-ALL_NODES=()
-while IFS= read -r line; do
-    ALL_NODES+=("$line")
-done < <(read_nodes "${NODE_LIST_FILE}")
-TOTAL_NODES=${#ALL_NODES[@]}
-
-if [[ ${TOTAL_NODES} -lt 1 ]]; then
-    log_fatal "Need at least 1 node in ${NODE_LIST_FILE}"
-fi
-
-NODE0="${ALL_NODES[0]}"
-log_info "Loaded ${TOTAL_NODES} nodes from ${NODE_LIST_FILE}"
-log_info "Master node: ${NODE0}"
+load_and_validate_nodes "${NODE_LIST_FILE}" 1
 
 # ------------------------------------------------------------------------------
 # 3. 配置合法性检查
 # ------------------------------------------------------------------------------
-TOTAL_CARDS=$((TOTAL_NODES * NPUS_PER_NODE))
-CARDS_PER_INSTANCE=$((TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE))
-
-if [[ ${CARDS_PER_INSTANCE} -eq 0 ]]; then
-    log_fatal "Invalid config: TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE = 0"
-fi
-
-if [[ $((TOTAL_CARDS % CARDS_PER_INSTANCE)) -ne 0 ]]; then
-    log_fatal "Card mismatch: TOTAL_CARDS (${TOTAL_CARDS}) is not divisible by CARDS_PER_INSTANCE (${CARDS_PER_INSTANCE}). Please adjust TP/PP."
-fi
-
-DP_SIZE=$((TOTAL_CARDS / CARDS_PER_INSTANCE))
-
-if [[ ${DP_SIZE} -lt 1 ]]; then
-    log_fatal "Invalid config: DP_SIZE (${DP_SIZE}) must be >= 1. Please reduce TP or PP."
-fi
-
-if [[ ${CARDS_PER_INSTANCE} -le ${NPUS_PER_NODE} ]]; then
-    DP_SIZE_LOCAL=$((NPUS_PER_NODE / CARDS_PER_INSTANCE))
-else
-    DP_SIZE_LOCAL=1
-fi
-
-if [[ ${CARDS_PER_INSTANCE} -gt ${NPUS_PER_NODE} ]]; then
-    NODES_PER_INSTANCE=$((CARDS_PER_INSTANCE / NPUS_PER_NODE))
-    if [[ $((TOTAL_NODES % NODES_PER_INSTANCE)) -ne 0 ]]; then
-        log_fatal "Node mismatch: each instance needs ${NODES_PER_INSTANCE} nodes, but total nodes ${TOTAL_NODES} is not divisible."
-    fi
-    if [[ $((DP_SIZE * NODES_PER_INSTANCE)) -ne ${TOTAL_NODES} ]]; then
-        log_fatal "Config mismatch: DP_SIZE (${DP_SIZE}) * NODES_PER_INSTANCE (${NODES_PER_INSTANCE}) != TOTAL_NODES (${TOTAL_NODES})."
-    fi
-else
-    NODES_PER_INSTANCE=1
-fi
-
-log_info "Config check passed: TOTAL_CARDS=${TOTAL_CARDS}, TP=${TENSOR_PARALLEL_SIZE}, PP=${PIPELINE_PARALLEL_SIZE}, DP=${DP_SIZE}, DP_LOCAL=${DP_SIZE_LOCAL}, NODES_PER_INSTANCE=${NODES_PER_INSTANCE}"
+validate_parallelism_config "${TOTAL_NODES}" "${NPUS_PER_NODE}"
 
 # ------------------------------------------------------------------------------
 # 4. 获取节点 IP
 # ------------------------------------------------------------------------------
-NODE0_IP=$(get_node_ip "${NODE0}" "${NIC_NAME}")
-if [[ -z "${NODE0_IP}" ]]; then
-    log_fatal "Failed to get IP address for node ${NODE0} on interface ${NIC_NAME}"
-fi
+resolve_node0_ip "${NODE0}" "${NIC_NAME}"
 log_info "Node0 IP (DP master): ${NODE0_IP}"
 
 # ------------------------------------------------------------------------------
@@ -152,6 +98,61 @@ fi
 # ------------------------------------------------------------------------------
 # 6. 构建 vLLM 启动参数 (参考 vllm_model_server.sh 的分块构建方式)
 # ------------------------------------------------------------------------------
+
+_build_base_args() {
+    local array_name="$1"
+    eval "${array_name}+=(serve \"${MODEL_PATH}\")"
+    eval "${array_name}+=(--host 0.0.0.0)"
+    eval "${array_name}+=(--port \"${VLLM_PORT}\")"
+    eval "${array_name}+=(--trust-remote-code)"
+    eval "${array_name}+=(--served-model-name \"${SERVED_MODEL_NAME}\")"
+    eval "${array_name}+=(--seed 1024)"
+    eval "${array_name}+=(--tensor-parallel-size \"${TENSOR_PARALLEL_SIZE}\")"
+    eval "${array_name}+=(--pipeline-parallel-size \"${PIPELINE_PARALLEL_SIZE}\")"
+    eval "${array_name}+=(--max-num-seqs \"${MAX_NUM_SEQS}\")"
+    eval "${array_name}+=(--max-model-len \"${MAX_MODEL_LEN}\")"
+    eval "${array_name}+=(--max-num-batched-tokens \"${MAX_NUM_BATCHED_TOKENS}\")"
+    eval "${array_name}+=(--gpu-memory-utilization \"${GPU_MEMORY_UTILIZATION}\")"
+    eval "${array_name}+=(--no-enable-prefix-caching)"
+}
+
+_build_mp_args() {
+    local array_name="$1"
+    local node_rank="$2" master_addr="$3" nnodes="$4"
+    if [[ "${nnodes}" -gt 1 ]]; then
+        eval "${array_name}+=(--distributed-executor-backend mp)"
+        eval "${array_name}+=(--nnodes \"${nnodes}\")"
+        eval "${array_name}+=(--node-rank \"${node_rank}\")"
+        eval "${array_name}+=(--master-addr \"${master_addr}\")"
+    fi
+}
+
+_build_dp_args() {
+    local array_name="$1"
+    local is_headless="$2" dp_size_local="$3" dp_start_rank="$4"
+    if [[ "${DP_SIZE}" -gt 1 ]]; then
+        eval "${array_name}+=(--data-parallel-size \"${DP_SIZE}\")"
+        eval "${array_name}+=(--data-parallel-size-local \"${dp_size_local}\")"
+        eval "${array_name}+=(--data-parallel-address \"${NODE0_IP}\")"
+        eval "${array_name}+=(--data-parallel-rpc-port \"${DP_RPC_PORT}\")"
+        if [[ "${is_headless}" == "true" ]]; then
+            eval "${array_name}+=(--headless)"
+            eval "${array_name}+=(--data-parallel-start-rank \"${dp_start_rank}\")"
+        fi
+    else
+        if [[ "${is_headless}" == "true" ]]; then
+            eval "${array_name}+=(--headless)"
+        fi
+    fi
+}
+
+_build_a2_compile_args() {
+    local array_name="$1"
+    eval "${array_name}+=(--compilation-config '{\"cudagraph_mode\": \"FULL_DECODE_ONLY\", \"cudagraph_capture sizes\":[8, 16, 24, 32, 40, 48]}')"
+    eval "${array_name}+=(--additional-config '{\"layer_sharding\": [\"q_b_proj\", \"o_proj\"]}')"
+    eval "${array_name}+=(--speculative-config '{\"num_speculative_tokens\": 3, \"method\": \"deepseek_mtp\"}')"
+}
+
 build_vllm_args_declare() {
     local is_headless="$1"
     local node_rank="$2"
@@ -167,50 +168,18 @@ build_vllm_args_declare() {
     local ep_size="${EXPERT_PARALLEL_SIZE}"
 
     local -a args=()
-    args+=(serve "${MODEL_PATH}")
-    args+=(--host 0.0.0.0)
-    args+=(--port "${vllm_port}")
-    args+=(--trust-remote-code)
-    args+=(--served-model-name "${SERVED_MODEL_NAME}")
-    args+=(--seed 1024)
-    args+=(--tensor-parallel-size "${tp_size}")
-    args+=(--pipeline-parallel-size "${pp_size}")
+    _build_base_args args
+    _build_mp_args args "${node_rank}" "${master_addr}" "${nnodes}"
 
-    # 多节点 Multiprocessing 参数
-    # 参考: https://docs.vllm.ai/en/stable/serving/parallelism_scaling/#running-vllm-with-multiprocessing
-    if [[ "${nnodes}" -gt 1 ]]; then
-        args+=(--distributed-executor-backend mp)
-        args+=(--nnodes "${nnodes}")
-        args+=(--node-rank "${node_rank}")
-        args+=(--master-addr "${master_addr}")
-    fi
-
-    # Data Parallel 参数（仅在单节点实例模式下使用内部 DP）
-    if [[ "${use_internal_dp}" == "true" && "${DP_SIZE}" -gt 1 ]]; then
-        args+=(--data-parallel-size "${DP_SIZE}")
-        args+=(--data-parallel-size-local "${dp_size_local}")
-        args+=(--data-parallel-address "${NODE0_IP}")
-        args+=(--data-parallel-rpc-port "${DP_RPC_PORT}")
-        if [[ "${is_headless}" == "true" ]]; then
-            args+=(--headless)
-            args+=(--data-parallel-start-rank "${dp_start_rank}")
-        fi
+    if [[ "${use_internal_dp}" == "true" ]]; then
+        _build_dp_args args "${is_headless}" "${dp_size_local}" "${dp_start_rank}"
     else
         if [[ "${is_headless}" == "true" ]]; then
             args+=(--headless)
         fi
     fi
 
-    args+=(--max-num-seqs "${MAX_NUM_SEQS}")
-    args+=(--max-model-len "${MAX_MODEL_LEN}")
-    args+=(--max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}")
-    args+=(--gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}")
-    args+=(--no-enable-prefix-caching)
-
-    # A2 编译配置
-    args+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes":[8, 16, 24, 32, 40, 48]}')
-    args+=(--additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}')
-    args+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}')
+    _build_a2_compile_args args
 
     local help_text=""
     [[ "${AUTO_DETECT_FLAGS}" == "1" ]] && help_text="$(vllm_help)"

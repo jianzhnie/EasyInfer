@@ -20,6 +20,9 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 加载共享工具函数
+source "${SCRIPT_DIR}/../common.sh"
+
 # 首先加载 set_env.sh
 SET_ENV_FILE="${SCRIPT_DIR}/set_env.sh"
 if [[ -f "$SET_ENV_FILE" ]]; then
@@ -197,18 +200,11 @@ MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-10}"
 
 # -----------------------------------------------------------------------------
-# 辅助函数
-# -----------------------------------------------------------------------------
-has_flag() {
-    [[ "${HELP_TEXT:-}" == *"$1"* ]]
-}
-
-# -----------------------------------------------------------------------------
 # 前置检查
 # -----------------------------------------------------------------------------
-command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
-[[ -e "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
-[[ -f "$MODEL_PATH/config.json" ]] || { echo "[ERROR] config.json not found" >&2; exit 2; }
+command -v vllm >/dev/null 2>&1 || { log_err "vllm not found"; exit "$E_CMD_NOT_FOUND"; }
+[[ -e "$MODEL_PATH" ]] || { log_err "MODEL_PATH not found: $MODEL_PATH"; exit "$E_NOT_FOUND"; }
+[[ -f "$MODEL_PATH/config.json" ]] || { log_err "config.json not found in: $MODEL_PATH"; exit "$E_NOT_FOUND"; }
 
 # -----------------------------------------------------------------------------
 # 动态检测 vLLM 支持的参数
@@ -242,7 +238,7 @@ args=(
 # Chunked Prefill
 [[ "$ENABLE_CHUNKED_PREFILL" == "1" ]] && args+=(--enable-chunked-prefill)
 # Swap Space (vLLM v1 已移除此参数)
-has_flag "--swap-space" && args+=(--swap-space "$SWAP_SPACE")
+has_flag "$HELP_TEXT" "--swap-space" && args+=(--swap-space "$SWAP_SPACE")
 # API Key
 [[ -n "$API_KEY" ]] && args+=(--api-key "$API_KEY")
 # Tool Calling
@@ -251,43 +247,43 @@ if [[ "$ENABLE_TOOL_CALLING" == "1" ]]; then
     [[ -n "$TOOL_CALL_PARSER" ]] && args+=(--tool-call-parser "$TOOL_CALL_PARSER")
 fi
 # max_tokens_per_sequence
-[[ -n "${MAX_TOKENS_PER_SEQUENCE:-}" ]] && has_flag "--max-tokens-per-sequence" && \
+[[ -n "${MAX_TOKENS_PER_SEQUENCE:-}" ]] && has_flag "$HELP_TEXT" "--max-tokens-per-sequence" && \
     args+=(--max-tokens-per-sequence "$MAX_TOKENS_PER_SEQUENCE")
 # num-scheduler-steps
-has_flag "--num-scheduler-steps" && args+=(--num-scheduler-steps "$NUM_SCHEDULER_STEPS")
+has_flag "$HELP_TEXT" "--num-scheduler-steps" && args+=(--num-scheduler-steps "$NUM_SCHEDULER_STEPS")
 
 # 动态特性检测
 if [[ "$AUTO_DETECT_FLAGS" == "1" ]]; then
     # Expert Parallel
-    if [[ "$ENABLE_EXPERT_PARALLEL" == "1" ]] && has_flag "--enable-expert-parallel"; then
+    if [[ "$ENABLE_EXPERT_PARALLEL" == "1" ]] && has_flag "$HELP_TEXT" "--enable-expert-parallel"; then
         args+=("--enable-expert-parallel")
     fi
 
     # Prefix Caching — 优先 enable，否则按 disable 处理
-    if [[ "$PREFIX_CACHING" == "1" ]] && has_flag "--enable-prefix-caching"; then
+    if [[ "$PREFIX_CACHING" == "1" ]] && has_flag "$HELP_TEXT" "--enable-prefix-caching"; then
         args+=("--enable-prefix-caching")
-    elif [[ "$PREFIX_CACHING" == "0" ]] && has_flag "--disable-prefix-caching"; then
+    elif [[ "$PREFIX_CACHING" == "0" ]] && has_flag "$HELP_TEXT" "--disable-prefix-caching"; then
         args+=("--disable-prefix-caching")
     fi
 
     # CUDA Graph (enforce-eager 须检测版本支持)
     if [[ "$ENFORCE_EAGER" == "1" ]]; then
-        has_flag "--enforce-eager" && args+=(--enforce-eager)
-    elif has_flag "--max-seq-len-to-capture"; then
+        has_flag "$HELP_TEXT" "--enforce-eager" && args+=(--enforce-eager)
+    elif has_flag "$HELP_TEXT" "--max-seq-len-to-capture"; then
         args+=(--max-seq-len-to-capture "$MAX_SEQ_LEN_TO_CAPTURE")
     fi
 
     # 日志级别
-    has_flag "--log-level" && args+=(--log-level "$LOG_LEVEL")
+    has_flag "$HELP_TEXT" "--log-level" && args+=(--log-level "$LOG_LEVEL")
 
     # Metrics
-    if [[ "$ENABLE_METRICS" == "1" ]] && has_flag "--enable-metrics"; then
+    if [[ "$ENABLE_METRICS" == "1" ]] && has_flag "$HELP_TEXT" "--enable-metrics"; then
         args+=(--enable-metrics)
-        has_flag "--metrics-port" && args+=(--metrics-port "$METRICS_PORT")
+        has_flag "$HELP_TEXT" "--metrics-port" && args+=(--metrics-port "$METRICS_PORT")
     fi
 
-    has_flag "--allowed-origins" && args+=(--allowed-origins "$ALLOWED_ORIGINS")
-    [[ "$DISABLE_LOG_REQUESTS" == "1" ]] && has_flag "--disable-log-requests" && args+=(--disable-log-requests)
+    has_flag "$HELP_TEXT" "--allowed-origins" && args+=(--allowed-origins "$ALLOWED_ORIGINS")
+    [[ "$DISABLE_LOG_REQUESTS" == "1" ]] && has_flag "$HELP_TEXT" "--disable-log-requests" && args+=(--disable-log-requests)
 fi
 
 # 额外参数去重
@@ -340,19 +336,18 @@ while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
     EXIT_CODE=$?
 
     if [[ $EXIT_CODE -eq 0 ]]; then
-        echo "[INFO] vLLM server exited normally."
+        log_info "vLLM server exited normally."
         break
     elif [[ $EXIT_CODE -eq 130 || $EXIT_CODE -eq 137 ]]; then
-        echo "[INFO] Terminated by signal (exit $EXIT_CODE)."
+        log_info "Terminated by signal (exit $EXIT_CODE)."
         exit 0
     else
         RETRY_COUNT=$((RETRY_COUNT + 1))
         if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
-            echo "[WARN] Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"
+            log_warn "Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"
             sleep "$RETRY_DELAY"
         else
-            echo "[FATAL] Max retries reached."
-            exit "$EXIT_CODE"
+            log_fatal "Max retries reached."
         fi
     fi
 done

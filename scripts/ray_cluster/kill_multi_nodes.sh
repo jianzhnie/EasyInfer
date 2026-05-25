@@ -14,6 +14,7 @@ ENV_FILE="${SCRIPT_DIR}/set_ray_env.sh"
 
 # 加载共享工具函数
 source "${SCRIPTS_DIR}/common.sh"
+source "${SCRIPT_DIR}/_kill_lib.sh"
 
 # ------------------------------------------
 # 引入环境变量
@@ -98,243 +99,6 @@ cleanup_jobs() {
 }
 trap cleanup_jobs INT TERM
 
-# ------------------------------------------
-# SSH 辅助
-# ------------------------------------------
-ssh_run_with_timeout() {
-    local node="$1"
-    shift
-    local exit_code=0
-
-    if command -v timeout >/dev/null 2>&1; then
-        # shellcheck disable=SC2086
-        timeout "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
-    else
-        # shellcheck disable=SC2086
-        perl -e '
-            use strict; use warnings;
-            my $timeout = shift @ARGV; my @cmd = @ARGV;
-            eval { local $SIG{ALRM} = sub { die "TIMEOUT\n" }; alarm $timeout; system(@cmd); alarm 0; };
-            if ($@ eq "TIMEOUT\n") { print STDERR "[ERROR] Command timed out after ${timeout}s\n"; exit 124; }
-            exit $? >> 8;
-        ' "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
-    fi
-
-    return $exit_code
-}
-
-# ------------------------------------------
-# 正则转义
-# ------------------------------------------
-escape_regex() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//./\\.}"
-    s="${s//\*/\\*}"
-    s="${s//+/\\+}"
-    s="${s//\?/\\?}"
-    s="${s//^/\\^}"
-    s="${s//\$/\\$}"
-    s="${s\//\(/\\(}"
-    s="${s\//\)/\\)}"
-    s="${s//\[/\\[}"
-    s="${s//\]/\\]}"
-    s="${s//\{/\\{}"
-    s="${s//\}/\\}}"
-    s="${s//|/\\|}"
-    printf '%s' "$s"
-}
-
-# ------------------------------------------
-# 参数解析
-# ------------------------------------------
-parse_args() {
-    SKIP_CONFIRM=false
-    DRY_RUN=false
-    QUIET=false
-
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -y|--yes)      SKIP_CONFIRM=true; shift ;;
-            -n|--dry-run)  DRY_RUN=true; shift ;;
-            -q|--quiet)    QUIET=true; shift ;;
-            -k|--keywords)
-                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
-                IFS=',' read -ra KEYWORDS <<< "$2"
-                shift 2
-                ;;
-            -t|--timeout)
-                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
-                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "超时时间必须是正整数"; exit 1; }
-                KILL_TIMEOUT="$2"; shift 2
-                ;;
-            -j|--jobs)
-                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
-                [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { log_err "并发数必须是正整数"; exit 1; }
-                MAX_JOBS="$2"; shift 2
-                ;;
-            --ssh-timeout)
-                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
-                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "SSH 超时时间必须是正整数"; exit 1; }
-                SSH_TIMEOUT="$2"; shift 2
-                ;;
-            -h|--help)     usage; exit 0 ;;
-            -*)            log_err "未知选项: $1"; usage >&2; exit 1 ;;
-            *)            NODE_LIST_FILE="$1"; shift ;;
-        esac
-    done
-}
-
-# ------------------------------------------
-# 远程脚本生成
-# ------------------------------------------
-_build_kill_pattern() {
-    local escaped_keywords=()
-    local kw
-    for kw in "${KEYWORDS[@]}"; do
-        escaped_keywords+=("$(escape_regex "$kw")")
-    done
-    IFS='|'; echo "${escaped_keywords[*]}"
-}
-
-_gen_kill_remote_script() {
-    local pattern="$1" kill_timeout="$2" dry_run="$3"
-    local script
-    read -r -d '' script << 'REMOTE_SCRIPT'
-        set -euo pipefail
-        PATTERN="__PATTERN__"
-        KILL_TIMEOUT="__KILL_TIMEOUT__"
-        DRY_RUN="__DRY_RUN__"
-
-        get_matching_pids() {
-            ps aux | grep -E "$PATTERN" | grep -v grep | \
-                grep -v -E '(vscode-server|code-server|sshd:|/bin/sh -c|extension|/agent/|ssh.*:)' | \
-                awk '{print $2}' | sort -u | tr '\n' ' ' || true
-        }
-
-        get_process_info() {
-            local pids="$1"
-            # shellcheck disable=SC2086
-            ps -p $pids -o pid,ppid,user,%cpu,%mem,etime,args 2>/dev/null || true
-        }
-
-        all_pids=$(get_matching_pids)
-        if [ -z "$all_pids" ] || [ "$all_pids" = " " ]; then
-            echo "STATUS:NO_PROCESSES"
-            exit 0
-        fi
-
-        echo "STATUS:FOUND"
-        echo "PIDS:$all_pids"
-        echo "PROCESS_INFO:"
-        get_process_info "$all_pids"
-
-        if [ "$DRY_RUN" = "true" ]; then
-            echo "ACTION:SKIP_DRY_RUN"
-            exit 0
-        fi
-
-        echo "ACTION:SIGTERM"
-        kill -15 $all_pids 2>/dev/null || true
-        sleep "$KILL_TIMEOUT"
-
-        remaining=""
-        for pid in $all_pids; do
-            if kill -0 "$pid" 2>/dev/null; then
-                remaining="$remaining $pid"
-            fi
-        done
-        remaining="${remaining# }"
-
-        if [ -z "$remaining" ]; then
-            echo "STATUS:TERMINATED"
-            exit 0
-        fi
-
-        echo "ACTION:SIGKILL:$remaining"
-        kill -9 $remaining 2>/dev/null || true
-        sleep 1
-
-        still_alive=""
-        for pid in $remaining; do
-            if kill -0 "$pid" 2>/dev/null; then
-                still_alive="$still_alive $pid"
-            fi
-        done
-        still_alive="${still_alive# }"
-
-        if [ -n "$still_alive" ]; then
-            echo "STATUS:FAILED:$still_alive"
-            exit 1
-        fi
-        echo "STATUS:KILLED"
-REMOTE_SCRIPT
-    script="${script//__PATTERN__/$pattern}"
-    script="${script//__KILL_TIMEOUT__/$kill_timeout}"
-    script="${script//__DRY_RUN__/$dry_run}"
-    printf '%s' "$script"
-}
-
-# ------------------------------------------
-# 结果解析与日志
-# ------------------------------------------
-_parse_kill_status() {
-    local output="$1" exit_code="$2"
-    if [[ "$output" == *"STATUS:NO_PROCESSES"* ]]; then
-        echo "no_processes"
-    elif [[ "$output" == *"STATUS:TERMINATED"* ]]; then
-        echo "success"
-    elif [[ "$output" == *"STATUS:KILLED"* ]]; then
-        echo "killed"
-    elif [[ "$output" == *"STATUS:FAILED"* ]]; then
-        echo "failed"
-    elif [[ $exit_code -eq 124 ]]; then
-        echo "timeout"
-    else
-        echo "failed"
-    fi
-}
-
-_log_kill_status() {
-    local node="$1" status="$2" pids="$3" quiet="$4"
-
-    case $status in
-        no_processes)
-            [[ "$quiet" == false ]] && log_info "[Node: $node] 未找到匹配的进程"
-            return 0
-            ;;
-        success)
-            [[ "$quiet" == false ]] && log_info "[Node: $node] 进程已正常终止 (PIDs: $pids)"
-            return 0
-            ;;
-        killed)
-            log_warn "[Node: $node] 进程已强制终止 (PIDs: $pids)"
-            return 0
-            ;;
-        timeout)
-            log_err "[Node: $node] SSH 连接超时 (${SSH_TIMEOUT}s)"
-            return 124
-            ;;
-        failed)
-            log_err "[Node: $node] 无法终止所有进程 (PIDs: $pids)"
-            return 1
-            ;;
-    esac
-}
-
-_parse_and_log_kill_result() {
-    local node="$1" output="$2" exit_code="$3" quiet="$4"
-    local status pids=""
-
-    status=$(_parse_kill_status "$output" "$exit_code")
-
-    if [[ "$output" =~ PIDS:([^[:space:]]+) ]]; then
-        pids="${BASH_REMATCH[1]}"
-    fi
-
-    _log_kill_status "$node" "$status" "$pids" "$quiet"
-}
-
 kill_processes_on_node() {
     local node="$1" dry_run="${2:-false}" quiet="${3:-false}"
 
@@ -347,7 +111,7 @@ kill_processes_on_node() {
     remote_cmd=$(_gen_kill_remote_script "$pattern" "$KILL_TIMEOUT" "$dry_run")
 
     local output exit_code=0
-    output=$(ssh_run_with_timeout "$node" "$remote_cmd" 2>&1) || exit_code=$?
+    output=$(ssh_run_timeout "$SSH_TIMEOUT" "$node" "$remote_cmd" 2>&1) || exit_code=$?
 
     _parse_and_log_kill_result "$node" "$output" "$exit_code" "$quiet"
 }
@@ -405,6 +169,50 @@ print_summary() {
         echo "超时的节点:"
         printf '  - %s\n' "${TIMEOUT_NODES[@]}"
     fi
+}
+
+# ------------------------------------------
+# 参数解析
+# ------------------------------------------
+parse_args() {
+    SKIP_CONFIRM=false
+    DRY_RUN=false
+    QUIET=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -y|--yes)      SKIP_CONFIRM=true; shift ;;
+            -n|--dry-run)  DRY_RUN=true; shift ;;
+            -q|--quiet)    QUIET=true; shift ;;
+            -k|--keywords)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                IFS=',' read -ra KEYWORDS <<< "$2"
+                shift 2
+                ;;
+            -t|--timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "超时时间必须是正整数"; exit "$E_INVALID_ARG"; }
+                KILL_TIMEOUT="$2"; shift 2
+                ;;
+            -j|--jobs)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { log_err "并发数必须是正整数"; exit "$E_INVALID_ARG"; }
+                MAX_JOBS="$2"; shift 2
+                ;;
+            --ssh-timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "SSH 超时时间必须是正整数"; exit "$E_INVALID_ARG"; }
+                SSH_TIMEOUT="$2"; shift 2
+                ;;
+            --file|-f)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                NODE_LIST_FILE="$2"; shift 2
+                ;;
+            -h|--help)     usage; exit 0 ;;
+            -*)            log_err "未知选项: $1"; usage >&2; exit "$E_INVALID_ARG" ;;
+            *)            NODE_LIST_FILE="$1"; shift ;;
+        esac
+    done
 }
 
 # ------------------------------------------

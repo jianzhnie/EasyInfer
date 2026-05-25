@@ -92,6 +92,87 @@ _add_prefix_caching_args() {
 }
 
 # ------------------------------------------------------------------------------
+# 共享多节点部署逻辑
+# ------------------------------------------------------------------------------
+
+# 读取并验证节点列表
+load_and_validate_nodes() {
+    local nodes_file="$1"
+    local min_nodes="${2:-2}"
+
+    if [[ ! -f "${nodes_file}" ]]; then
+        log_fatal "Node list file not found: ${nodes_file}"
+    fi
+
+    ALL_NODES=()
+    while IFS= read -r line; do
+        ALL_NODES+=("$line")
+    done < <(read_nodes "${nodes_file}")
+    TOTAL_NODES=${#ALL_NODES[@]}
+
+    if [[ ${TOTAL_NODES} -lt ${min_nodes} ]]; then
+        log_fatal "Need at least ${min_nodes} nodes, got ${TOTAL_NODES}"
+    fi
+
+    NODE0="${ALL_NODES[0]}"
+    log_info "Loaded ${TOTAL_NODES} nodes from ${nodes_file}"
+    log_info "Master node: ${NODE0}"
+}
+
+# 验证并行配置合法性
+validate_parallelism_config() {
+    local total_nodes="$1"
+    local npus_per_node="$2"
+
+    TOTAL_CARDS=$((total_nodes * npus_per_node))
+    CARDS_PER_INSTANCE=$((TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE))
+
+    if [[ ${CARDS_PER_INSTANCE} -eq 0 ]]; then
+        log_fatal "Invalid config: TENSOR_PARALLEL_SIZE * PIPELINE_PARALLEL_SIZE = 0"
+    fi
+
+    if [[ $((TOTAL_CARDS % CARDS_PER_INSTANCE)) -ne 0 ]]; then
+        log_fatal "Card mismatch: TOTAL_CARDS (${TOTAL_CARDS}) is not divisible by CARDS_PER_INSTANCE (${CARDS_PER_INSTANCE})"
+    fi
+
+    DP_SIZE=$((TOTAL_CARDS / CARDS_PER_INSTANCE))
+    if [[ ${DP_SIZE} -lt 1 ]]; then
+        log_fatal "Invalid config: DP_SIZE (${DP_SIZE}) must be >= 1"
+    fi
+
+    if [[ ${CARDS_PER_INSTANCE} -le ${npus_per_node} ]]; then
+        DP_SIZE_LOCAL=$((npus_per_node / CARDS_PER_INSTANCE))
+    else
+        DP_SIZE_LOCAL=1
+    fi
+
+    if [[ ${CARDS_PER_INSTANCE} -gt ${npus_per_node} ]]; then
+        NODES_PER_INSTANCE=$((CARDS_PER_INSTANCE / npus_per_node))
+        if [[ $((total_nodes % NODES_PER_INSTANCE)) -ne 0 ]]; then
+            log_fatal "Node mismatch: each instance needs ${NODES_PER_INSTANCE} nodes"
+        fi
+        if [[ $((DP_SIZE * NODES_PER_INSTANCE)) -ne ${total_nodes} ]]; then
+            log_fatal "Config mismatch: DP_SIZE * NODES_PER_INSTANCE != TOTAL_NODES"
+        fi
+    else
+        NODES_PER_INSTANCE=1
+    fi
+
+    log_info "Config: TOTAL_CARDS=${TOTAL_CARDS}, TP=${TENSOR_PARALLEL_SIZE}, PP=${PIPELINE_PARALLEL_SIZE}, DP=${DP_SIZE}, DP_LOCAL=${DP_SIZE_LOCAL}, NODES_PER_INSTANCE=${NODES_PER_INSTANCE}"
+}
+
+# 获取 node0 IP
+resolve_node0_ip() {
+    local node0="$1"
+    local nic_name="$2"
+    NODE0_IP=$(get_node_ip "${node0}" "${nic_name}")
+    if [[ -z "${NODE0_IP}" ]]; then
+        log_fatal "Failed to get IP for node ${node0} on interface ${nic_name}"
+    fi
+    log_info "Node0 IP: ${NODE0_IP}"
+}
+
+# ------------------------------------------------------------------------------
 # SSH 连通性检查（检测全部节点）
 # 依赖全局数组: ALL_NODES, SSH_OPTS
 # ------------------------------------------------------------------------------
