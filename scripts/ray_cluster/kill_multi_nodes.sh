@@ -172,6 +172,50 @@ print_summary() {
 }
 
 # ------------------------------------------
+# 参数解析
+# ------------------------------------------
+parse_args() {
+    SKIP_CONFIRM=false
+    DRY_RUN=false
+    QUIET=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -y|--yes)      SKIP_CONFIRM=true; shift ;;
+            -n|--dry-run)  DRY_RUN=true; shift ;;
+            -q|--quiet)    QUIET=true; shift ;;
+            -k|--keywords)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                IFS=',' read -ra KEYWORDS <<< "$2"
+                shift 2
+                ;;
+            -t|--timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "超时时间必须是正整数"; exit "$E_INVALID_ARG"; }
+                KILL_TIMEOUT="$2"; shift 2
+                ;;
+            -j|--jobs)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { log_err "并发数必须是正整数"; exit "$E_INVALID_ARG"; }
+                MAX_JOBS="$2"; shift 2
+                ;;
+            --ssh-timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "SSH 超时时间必须是正整数"; exit "$E_INVALID_ARG"; }
+                SSH_TIMEOUT="$2"; shift 2
+                ;;
+            --file|-f)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit "$E_INVALID_ARG"; }
+                NODE_LIST_FILE="$2"; shift 2
+                ;;
+            -h|--help)     usage; exit 0 ;;
+            -*)            log_err "未知选项: $1"; usage >&2; exit "$E_INVALID_ARG" ;;
+            *)            NODE_LIST_FILE="$1"; shift ;;
+        esac
+    done
+}
+
+# ------------------------------------------
 # 主逻辑
 # ------------------------------------------
 parse_args "$@"
