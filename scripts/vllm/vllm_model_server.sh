@@ -202,9 +202,9 @@ RETRY_DELAY="${RETRY_DELAY:-10}"
 # -----------------------------------------------------------------------------
 # 前置检查
 # -----------------------------------------------------------------------------
-command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
-[[ -e "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
-[[ -f "$MODEL_PATH/config.json" ]] || { echo "[ERROR] config.json not found" >&2; exit 2; }
+command -v vllm >/dev/null 2>&1 || { log_err "vllm not found"; exit "$E_CMD_NOT_FOUND"; }
+[[ -e "$MODEL_PATH" ]] || { log_err "MODEL_PATH not found: $MODEL_PATH"; exit "$E_NOT_FOUND"; }
+[[ -f "$MODEL_PATH/config.json" ]] || { log_err "config.json not found in: $MODEL_PATH"; exit "$E_NOT_FOUND"; }
 
 # -----------------------------------------------------------------------------
 # 动态检测 vLLM 支持的参数
@@ -336,19 +336,18 @@ while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
     EXIT_CODE=$?
 
     if [[ $EXIT_CODE -eq 0 ]]; then
-        echo "[INFO] vLLM server exited normally."
+        log_info "vLLM server exited normally."
         break
     elif [[ $EXIT_CODE -eq 130 || $EXIT_CODE -eq 137 ]]; then
-        echo "[INFO] Terminated by signal (exit $EXIT_CODE)."
+        log_info "Terminated by signal (exit $EXIT_CODE)."
         exit 0
     else
         RETRY_COUNT=$((RETRY_COUNT + 1))
         if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
-            echo "[WARN] Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"
+            log_warn "Crashed (exit $EXIT_CODE), retrying in ${RETRY_DELAY}s... ($RETRY_COUNT/$MAX_RETRIES)"
             sleep "$RETRY_DELAY"
         else
-            echo "[FATAL] Max retries reached."
-            exit "$EXIT_CODE"
+            log_fatal "Max retries reached."
         fi
     fi
 done
