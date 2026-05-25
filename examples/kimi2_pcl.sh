@@ -4,6 +4,12 @@
 # 用法: 环境变量覆盖: MODEL_PATH=/path/to/model bash kimi2_pcl.sh
 #
 
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/common.sh
+source "${SCRIPT_DIR}/../scripts/common.sh"
+
 MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/pcl-kimi2-stage2/kimi2-mcore2hf_step_550_v1}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
@@ -11,8 +17,8 @@ TP_SIZE="${TP_SIZE:-64}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 
 # 前置检查
-command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
-[[ -e "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
+command -v vllm >/dev/null 2>&1 || { log_err "vllm not found"; exit "$E_CMD_NOT_FOUND"; }
+[[ -e "$MODEL_PATH" ]] || { log_err "MODEL_PATH not found: $MODEL_PATH"; exit "$E_NOT_FOUND"; }
 
 vllm serve "$MODEL_PATH" \
     --distributed-executor-backend ray \

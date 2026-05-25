@@ -43,6 +43,9 @@ AUTO_DETECT_FLAGS="${AUTO_DETECT_FLAGS:-1}"
 source "${SCRIPT_DIR}/../../common.sh"
 source "${SCRIPT_DIR}/_common.sh"
 
+# 使用带 DRY_RUN 回退的 IP 获取函数
+get_node_ip() { _get_node_ip_with_fallback "$@"; }
+
 # 部署配置 (可通过环境变量覆盖)
 NIC_NAME="${NIC_NAME:-enp66s0f0}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -204,61 +207,18 @@ build_vllm_args_declare() {
     args+=(--gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}")
     args+=(--no-enable-prefix-caching)
 
-    # A2  compilation-config
+    # A2 编译配置
     args+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes":[8, 16, 24, 32, 40, 48]}')
     args+=(--additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}')
     args+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}')
 
-    # 动态探测 Help 信息
     local help_text=""
-    if [[ "${AUTO_DETECT_FLAGS}" == "1" ]]; then
-        help_text="$(vllm_help)"
-    fi
+    [[ "${AUTO_DETECT_FLAGS}" == "1" ]] && help_text="$(vllm_help)"
 
-    # Expert Parallel
-    if [[ "${ENABLE_EXPERT_PARALLEL}" == "1" ]]; then
-        local ep_flag="--enable-expert-parallel"
-        if [[ -n "$help_text" ]]; then
-            ep_flag="$(choose_flag "$help_text" "--enable-expert-parallel" "--enable_expert_parallel")"
-        fi
-        args+=("${ep_flag}")
-        # 如果 vLLM 版本支持 --expert-parallel-size, 显式设置
-        if [[ -n "$help_text" ]]; then
-            if has_flag "$help_text" "--expert-parallel-size"; then
-                args+=(--expert-parallel-size "${ep_size}")
-            fi
-        fi
-    fi
+    _add_ep_args args "$help_text" "$ep_size"
+    _add_chunked_prefill_args args "$help_text"
+    _add_prefix_caching_args args "$help_text"
 
-    # Chunked Prefill
-    if [[ "${ENABLE_CHUNKED_PREFILL}" == "1" ]]; then
-        if [[ -n "$help_text" ]]; then
-            if has_flag "$help_text" "--enable-chunked-prefill"; then
-                args+=(--enable-chunked-prefill)
-            fi
-        else
-            args+=(--enable-chunked-prefill)
-        fi
-    fi
-
-    # Prefix Caching (命令行已经默认加了 --no-enable-prefix-caching, 这里处理启用情况)
-    if [[ "${PREFIX_CACHING}" == "1" ]]; then
-        # 移除默认的 --no-enable-prefix-caching
-        local -a new_args=()
-        for a in "${args[@]}"; do
-            if [[ "$a" != "--no-enable-prefix-caching" ]]; then
-                new_args+=("$a")
-            fi
-        done
-        args=("${new_args[@]}")
-        local pc_flag="--enable-prefix-caching"
-        if [[ -n "$help_text" ]]; then
-            pc_flag="$(choose_flag "$help_text" "--enable-prefix-caching" "--enable_prefix_caching")"
-        fi
-        args+=("${pc_flag}")
-    fi
-
-    # 输出数组定义, 可被远程 bash eval 安全执行
     declare -p args
 }
 
@@ -309,6 +269,66 @@ launch_on_node() {
 # ------------------------------------------------------------------------------
 # 8. 标准多节点部署
 # ------------------------------------------------------------------------------
+
+# 场景 A: 单个模型实例跨多个节点
+_deploy_multinode_instance() {
+    log_info "Mode: multi-node per instance (${NODES_PER_INSTANCE} nodes per instance, independent instances)"
+
+    if [[ ${DP_SIZE} -gt 1 ]]; then
+        log_warn "Internal DP is disabled because each instance spans multiple nodes."
+        log_warn "Please configure an external load balancer for ports ${VLLM_PORT}-$((VLLM_PORT + DP_SIZE - 1)) on master nodes."
+    fi
+
+    local dp_idx instance_start_node instance_master_idx instance_master_node instance_master_ip instance_port
+    local offset node_idx node local_ip is_headless
+    for ((dp_idx = 0; dp_idx < DP_SIZE; dp_idx++)); do
+        instance_start_node=$((dp_idx * NODES_PER_INSTANCE))
+        instance_master_idx=${instance_start_node}
+        instance_master_node="${ALL_NODES[$instance_master_idx]}"
+        instance_master_ip=$(get_node_ip "${instance_master_node}" "${NIC_NAME}")
+        instance_port=$((VLLM_PORT + dp_idx))
+
+        log_info "Deploying instance ${dp_idx}/${DP_SIZE} on nodes ${instance_start_node}..$((instance_start_node + NODES_PER_INSTANCE - 1)), master=${instance_master_node}:${instance_port}"
+
+        for ((offset = 0; offset < NODES_PER_INSTANCE; offset++)); do
+            node_idx=$((instance_start_node + offset))
+            node="${ALL_NODES[$node_idx]}"
+            local_ip=$(get_node_ip "${node}" "${NIC_NAME}")
+            [[ -n "${local_ip}" ]] || { log_warn "Skip ${node}: cannot detect IP on ${NIC_NAME}"; continue; }
+
+            is_headless="false"
+            [[ ${offset} -gt 0 ]] && is_headless="true"
+
+            launch_on_node "${node}" "${local_ip}" "${is_headless}" "${offset}" "0" "1" "${instance_master_ip}" "${NODES_PER_INSTANCE}" "${instance_port}" "false"
+        done
+    done
+}
+
+# 场景 B: 单个模型实例可放在一个节点内 (单节点 TP/PP，多节点 DP)
+_deploy_singlenode_instance() {
+    log_info "Mode: single-node per instance, ${DP_SIZE_LOCAL} instances per node"
+
+    local node_idx node local_ip local_dp dp_rank port is_headless
+    for ((node_idx = 0; node_idx < TOTAL_NODES; node_idx++)); do
+        node="${ALL_NODES[$node_idx]}"
+        local_ip=$(get_node_ip "${node}" "${NIC_NAME}")
+        [[ -n "${local_ip}" ]] || { log_warn "Skip ${node}: cannot detect IP on ${NIC_NAME}"; continue; }
+
+        for ((local_dp = 0; local_dp < DP_SIZE_LOCAL; local_dp++)); do
+            dp_rank=$((node_idx * DP_SIZE_LOCAL + local_dp))
+            port=$((VLLM_PORT + local_dp))
+            is_headless="false"
+
+            # 只有全局第一个实例 (Node0, local_dp=0) 启动 API server
+            if [[ ${node_idx} -gt 0 || ${local_dp} -gt 0 ]]; then
+                is_headless="true"
+            fi
+
+            launch_on_node "${node}" "${local_ip}" "${is_headless}" "0" "${dp_rank}" "${DP_SIZE_LOCAL}" "${local_ip}" "1" "${port}" "true"
+        done
+    done
+}
+
 deploy_standard() {
     local tp_size="${TENSOR_PARALLEL_SIZE}"
     local pp_size="${PIPELINE_PARALLEL_SIZE}"
@@ -320,71 +340,9 @@ deploy_standard() {
     log_info "============================================================"
 
     if [[ ${CARDS_PER_INSTANCE} -gt ${NPUS_PER_NODE} ]]; then
-        # ----------------------------------------------------------------------
-        # 场景 A: 单个模型实例跨多个节点
-        # vLLM 内部 DP 模式不支持单个 DP engine 跨节点分布 TP/PP worker，
-        # 因此每个 DP 副本必须作为完全独立的 vLLM 实例启动，使用不同端口。
-        # 用户需要自行配置外部负载均衡（如 Nginx）分发请求到各实例 master。
-        # ----------------------------------------------------------------------
-        log_info "Mode: multi-node per instance (${NODES_PER_INSTANCE} nodes per instance, independent instances)"
-
-        if [[ ${DP_SIZE} -gt 1 ]]; then
-            log_warn "Internal DP is disabled because each instance spans multiple nodes."
-            log_warn "Please configure an external load balancer for ports ${VLLM_PORT}-$((VLLM_PORT + DP_SIZE - 1)) on master nodes."
-        fi
-
-        for ((dp_idx = 0; dp_idx < DP_SIZE; dp_idx++)); do
-            local instance_start_node=$((dp_idx * NODES_PER_INSTANCE))
-            local instance_master_idx=${instance_start_node}
-            local instance_master_node="${ALL_NODES[$instance_master_idx]}"
-            local instance_master_ip
-            instance_master_ip=$(get_node_ip "${instance_master_node}" "${NIC_NAME}")
-            local instance_port=$((VLLM_PORT + dp_idx))
-
-            log_info "Deploying instance ${dp_idx}/${DP_SIZE} on nodes ${instance_start_node}..$((instance_start_node + NODES_PER_INSTANCE - 1)), master=${instance_master_node}:${instance_port}"
-
-            for ((offset = 0; offset < NODES_PER_INSTANCE; offset++)); do
-                local node_idx=$((instance_start_node + offset))
-                local node="${ALL_NODES[$node_idx]}"
-                local local_ip
-                local_ip=$(get_node_ip "${node}" "${NIC_NAME}")
-                [[ -n "${local_ip}" ]] || { log_warn "Skip ${node}: cannot detect IP on ${NIC_NAME}"; continue; }
-
-                local is_headless="false"
-                # 实例内的 worker 节点使用 --headless
-                if [[ ${offset} -gt 0 ]]; then
-                    is_headless="true"
-                fi
-
-                launch_on_node "${node}" "${local_ip}" "${is_headless}" "${offset}" "0" "1" "${instance_master_ip}" "${NODES_PER_INSTANCE}" "${instance_port}" "false"
-            done
-        done
+        _deploy_multinode_instance
     else
-        # ----------------------------------------------------------------------
-        # 场景 B: 单个模型实例可放在一个节点内 (单节点 TP/PP，多节点 DP)
-        # 此时不需要 --nnodes / --node-rank / --master-addr，但可能需要在同一节点上启动多个 DP 实例
-        # ----------------------------------------------------------------------
-        log_info "Mode: single-node per instance, ${DP_SIZE_LOCAL} instances per node"
-
-        for ((node_idx = 0; node_idx < TOTAL_NODES; node_idx++)); do
-            local node="${ALL_NODES[$node_idx]}"
-            local local_ip
-            local_ip=$(get_node_ip "${node}" "${NIC_NAME}")
-            [[ -n "${local_ip}" ]] || { log_warn "Skip ${node}: cannot detect IP on ${NIC_NAME}"; continue; }
-
-            for ((local_dp = 0; local_dp < DP_SIZE_LOCAL; local_dp++)); do
-                local dp_rank=$((node_idx * DP_SIZE_LOCAL + local_dp))
-                local port=$((VLLM_PORT + local_dp))
-                local is_headless="false"
-
-                # 只有全局第一个实例 (Node0, local_dp=0) 启动 API server
-                if [[ ${node_idx} -gt 0 || ${local_dp} -gt 0 ]]; then
-                    is_headless="true"
-                fi
-
-                launch_on_node "${node}" "${local_ip}" "${is_headless}" "0" "${dp_rank}" "${DP_SIZE_LOCAL}" "${local_ip}" "1" "${port}" "true"
-            done
-        done
+        _deploy_singlenode_instance
     fi
 }
 

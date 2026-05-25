@@ -6,6 +6,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../common.sh
+source "${SCRIPT_DIR}/../../common.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../set_env.sh"
 
@@ -17,6 +19,8 @@ NUM_GPUS="${NUM_GPUS:-8}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
 PORT="${PORT:-8000}"
+
+log_info "Starting vLLM test server: model=$MODEL_NAME, tp=$NUM_GPUS, port=$PORT"
 
 vllm serve "$MODEL_PATH" \
     --trust-remote-code \

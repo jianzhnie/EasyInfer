@@ -15,15 +15,13 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 MODEL_NAME="${MODEL_NAME:-qwen3-32b}"
 
-# 颜色输出
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../common.sh
+source "${SCRIPT_DIR}/../../common.sh"
 
-pass() { printf "${GREEN}[PASS]${NC} %s\n" "$1"; }
-fail() { printf "${RED}[FAIL]${NC} %s\n" "$1"; }
-info() { printf "${YELLOW}[INFO]${NC} %s\n" "$1"; }
+pass() { log_info "[PASS] $1"; }
+fail() { log_err "[FAIL] $1"; }
+info() { log_info "[INFO] $1"; }
 
 # -----------------------------------------------------------------------------
 # 测试 1: 服务健康检查

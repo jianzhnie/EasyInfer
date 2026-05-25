@@ -5,51 +5,34 @@
 
 set -euo pipefail
 
-# 网络配置 — 请根据实际环境修改
-NIC_NAME="${NIC_NAME:-enp66s0f0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_node_env.sh
+source "${SCRIPT_DIR}/_node_env.sh"
+
+# 加载并导出公共环境变量
 LOCAL_IP="${LOCAL_IP:-10.42.28.195}"
 NODE0_IP="${NODE0_IP:-10.42.28.194}"
-
-# 模型配置
-MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/models/moonshotai/Kimi-K2-Base}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-kimi-k2-base}"
-VLLM_PORT="${VLLM_PORT:-8077}"
-
-# 环境变量
-export HCCL_OP_EXPANSION_MODE="AIV"
-export HCCL_IF_IP="$LOCAL_IP"
-export GLOO_SOCKET_IFNAME="$NIC_NAME"
-export TP_SOCKET_IFNAME="$NIC_NAME"
-export HCCL_SOCKET_IFNAME="$NIC_NAME"
-export OMP_PROC_BIND=false
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-100}"
-export VLLM_USE_V1=1
-export HCCL_BUFFSIZE=200
-export VLLM_ASCEND_ENABLE_MLAPO=1
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export HCCL_CONNECT_TIMEOUT=120
-export HCCL_INTRA_PCIE_ENABLE=1
-export HCCL_INTRA_ROCE_ENABLE=0
+DP_START_RANK="${DP_START_RANK:-1}"
+export_env_vars
 
 vllm serve "$MODEL_PATH" \
     --host 0.0.0.0 \
     --port "$VLLM_PORT" \
     --headless \
-    --data-parallel-size "${DP_SIZE:-2}" \
-    --data-parallel-size-local "${DP_SIZE_LOCAL:-1}" \
-    --data-parallel-start-rank "${DP_START_RANK:-1}" \
+    --data-parallel-size "$DP_SIZE" \
+    --data-parallel-size-local "$DP_SIZE_LOCAL" \
+    --data-parallel-start-rank "$DP_START_RANK" \
     --data-parallel-address "$NODE0_IP" \
-    --data-parallel-rpc-port "${DP_RPC_PORT:-13389}" \
-    --tensor-parallel-size "${TP_SIZE:-8}" \
+    --data-parallel-rpc-port "$DP_RPC_PORT" \
+    --tensor-parallel-size "$TP_SIZE" \
     --seed 1024 \
     --served-model-name "$SERVED_MODEL_NAME" \
     --enable-expert-parallel \
-    --max-num-seqs "${MAX_NUM_SEQS:-16}" \
-    --max-model-len "${MAX_MODEL_LEN:-8192}" \
-    --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS:-4096}" \
+    --max-num-seqs "$MAX_NUM_SEQS" \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
     --trust-remote-code \
     --no-enable-prefix-caching \
-    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.92}" \
+    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes":[8, 16, 24, 32, 40, 48]}' \
     --additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}'

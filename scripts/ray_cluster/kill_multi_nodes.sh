@@ -33,8 +33,6 @@ SSH_TIMEOUT="${SSH_TIMEOUT:-10}"
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
 
 # 定义要 kill 的关键词（支持正则，可通过环境变量扩展）
-# 包含 Ray 各组件：raylet, plasma_store, gcs_server, ray::IDLE, dashboard_agent, runtime_env_agent
-# 注意：移除了 "python" 因为它太宽泛，容易误杀系统进程
 DEFAULT_KEYWORDS=("llmtuner" "mindspeed" "ray" "vllm" "verl" "raylet" "plasma_store" "gcs_server" "dashboard_agent" "runtime_env_agent")
 if [[ -n "${EXTRA_KEYWORDS:-}" ]]; then
     IFS=',' read -ra EXTRA_KEYWORDS_ARRAY <<< "$EXTRA_KEYWORDS"
@@ -50,8 +48,6 @@ SSH_USER_HOST_PREFIX="${SSH_USER_HOST_PREFIX:-}"
 # ------------------------------------------
 # 全局状态跟踪
 # ------------------------------------------
-# NODE_STATUS reserved for future use (per-node status tracking)
-# declare -A NODE_STATUS
 declare -a FAILED_NODES=()
 declare -a TIMEOUT_NODES=()
 
@@ -61,14 +57,6 @@ declare -a TIMEOUT_NODES=()
 usage() {
     cat <<EOF
 Usage: $0 [OPTIONS] [node_list_file]
-
-Description:
-  通过 SSH 并发连接到多个节点，根据关键字终止指定的进程。
-  首先尝试 SIGTERM 温和终止，超时后若进程仍存活则使用 SIGKILL 强制终止。
-
-Arguments:
-  node_list_file    节点列表文件路径 (默认: $NODE_LIST_FILE)
-                    环境变量 NODES_FILE 也可指定此路径
 
 Options:
   -y, --yes              跳过确认步骤，直接执行
@@ -82,27 +70,21 @@ Options:
   -h, --help             显示此帮助信息
 
 Environment Variables:
-  NODES_FILE             节点列表文件路径
-  SSH_OPTS               SSH 连接选项
-  SSH_USER_HOST_PREFIX   SSH 目标前缀 (如: user@)
-  EXTRA_KEYWORDS         额外的关键词，逗号分隔（追加到默认列表）
-  MAX_JOBS               最大并发任务数
-  KILL_TIMEOUT           终止进程超时时间
-  SSH_TIMEOUT            SSH 连接超时时间
+  NODES_FILE, SSH_OPTS, SSH_USER_HOST_PREFIX, EXTRA_KEYWORDS
+  MAX_JOBS, KILL_TIMEOUT, SSH_TIMEOUT
 
 Examples:
-  $0                                    # 使用默认配置
-  $0 /path/to/nodes.txt                 # 指定节点列表文件
-  $0 -y                                 # 跳过确认
-  $0 -n                                 # 干运行模式，查看会杀哪些进程
-  $0 -k "myapp,worker"                  # 自定义关键词（替换默认）
-  $0 -y -k "ray" -t 5                   # 强制模式，只杀 ray 进程，超时 5 秒
-
+  $0                          # 使用默认配置
+  $0 /path/to/nodes.txt       # 指定节点列表文件
+  $0 -y                       # 跳过确认
+  $0 -n                       # 干运行模式
+  $0 -k "myapp,worker"        # 自定义关键词
+  $0 -y -k "ray" -t 5         # 强制模式，只杀 ray 进程，超时 5 秒
 EOF
 }
 
 # ------------------------------------------
-# 信号处理：清理后台作业
+# 信号处理
 # ------------------------------------------
 # shellcheck disable=SC2329
 cleanup_jobs() {
@@ -117,44 +99,33 @@ cleanup_jobs() {
 trap cleanup_jobs INT TERM
 
 # ------------------------------------------
-# 辅助函数 (ssh_target/limit_jobs from common.sh)
+# SSH 辅助
 # ------------------------------------------
-
-# 执行带超时的 SSH 命令
 ssh_run_with_timeout() {
     local node="$1"
     shift
     local exit_code=0
-    
-    # 优先使用 timeout 命令，回退到 Perl 实现
+
     if command -v timeout >/dev/null 2>&1; then
         # shellcheck disable=SC2086
         timeout "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     else
         # shellcheck disable=SC2086
         perl -e '
-            use strict;
-            use warnings;
-            my $timeout = shift @ARGV;
-            my @cmd = @ARGV;
-            eval {
-                local $SIG{ALRM} = sub { die "TIMEOUT\n" };
-                alarm $timeout;
-                system(@cmd);
-                alarm 0;
-            };
-            if ($@ eq "TIMEOUT\n") {
-                print STDERR "[ERROR] Command timed out after ${timeout}s\n";
-                exit 124;
-            }
+            use strict; use warnings;
+            my $timeout = shift @ARGV; my @cmd = @ARGV;
+            eval { local $SIG{ALRM} = sub { die "TIMEOUT\n" }; alarm $timeout; system(@cmd); alarm 0; };
+            if ($@ eq "TIMEOUT\n") { print STDERR "[ERROR] Command timed out after ${timeout}s\n"; exit 124; }
             exit $? >> 8;
         ' "$SSH_TIMEOUT" ssh ${SSH_OPTS} "$(ssh_target "$node")" "$@" || exit_code=$?
     fi
-    
+
     return $exit_code
 }
 
-# 转义正则表达式特殊字符
+# ------------------------------------------
+# 正则转义
+# ------------------------------------------
 escape_regex() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -164,8 +135,8 @@ escape_regex() {
     s="${s//\?/\\?}"
     s="${s//^/\\^}"
     s="${s//\$/\\$}"
-    s="${s//\(/\\(}"
-    s="${s//\)/\\)}"
+    s="${s\//\(/\\(}"
+    s="${s\//\)/\\)}"
     s="${s//\[/\\[}"
     s="${s//\]/\\]}"
     s="${s//\{/\\{}"
@@ -175,10 +146,48 @@ escape_regex() {
 }
 
 # ------------------------------------------
-# 核心函数：终止指定节点上的进程
+# 参数解析
 # ------------------------------------------
+parse_args() {
+    SKIP_CONFIRM=false
+    DRY_RUN=false
+    QUIET=false
 
-# 构建转义后的正则表达式（使用全局 KEYWORDS 数组）
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -y|--yes)      SKIP_CONFIRM=true; shift ;;
+            -n|--dry-run)  DRY_RUN=true; shift ;;
+            -q|--quiet)    QUIET=true; shift ;;
+            -k|--keywords)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
+                IFS=',' read -ra KEYWORDS <<< "$2"
+                shift 2
+                ;;
+            -t|--timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "超时时间必须是正整数"; exit 1; }
+                KILL_TIMEOUT="$2"; shift 2
+                ;;
+            -j|--jobs)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
+                [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { log_err "并发数必须是正整数"; exit 1; }
+                MAX_JOBS="$2"; shift 2
+                ;;
+            --ssh-timeout)
+                [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; exit 1; }
+                [[ "$2" =~ ^[0-9]+$ ]] || { log_err "SSH 超时时间必须是正整数"; exit 1; }
+                SSH_TIMEOUT="$2"; shift 2
+                ;;
+            -h|--help)     usage; exit 0 ;;
+            -*)            log_err "未知选项: $1"; usage >&2; exit 1 ;;
+            *)            NODE_LIST_FILE="$1"; shift ;;
+        esac
+    done
+}
+
+# ------------------------------------------
+# 远程脚本生成
+# ------------------------------------------
 _build_kill_pattern() {
     local escaped_keywords=()
     local kw
@@ -188,21 +197,17 @@ _build_kill_pattern() {
     IFS='|'; echo "${escaped_keywords[*]}"
 }
 
-# 生成远程 kill 脚本（通过 SSH 发送到目标节点执行）
-# 参数: pattern kill_timeout dry_run
 _gen_kill_remote_script() {
     local pattern="$1" kill_timeout="$2" dry_run="$3"
     local script
     read -r -d '' script << 'REMOTE_SCRIPT'
         set -euo pipefail
-
         PATTERN="__PATTERN__"
         KILL_TIMEOUT="__KILL_TIMEOUT__"
         DRY_RUN="__DRY_RUN__"
 
         get_matching_pids() {
-            ps aux | grep -E "$PATTERN" | \
-                grep -v grep | \
+            ps aux | grep -E "$PATTERN" | grep -v grep | \
                 grep -v -E '(vscode-server|code-server|sshd:|/bin/sh -c|extension|/agent/|ssh.*:)' | \
                 awk '{print $2}' | sort -u | tr '\n' ' ' || true
         }
@@ -214,7 +219,6 @@ _gen_kill_remote_script() {
         }
 
         all_pids=$(get_matching_pids)
-
         if [ -z "$all_pids" ] || [ "$all_pids" = " " ]; then
             echo "STATUS:NO_PROCESSES"
             exit 0
@@ -242,28 +246,28 @@ _gen_kill_remote_script() {
         done
         remaining="${remaining# }"
 
-        if [ -n "$remaining" ]; then
-            echo "ACTION:SIGKILL:$remaining"
-            kill -9 $remaining 2>/dev/null || true
-            sleep 1
-
-            still_alive=""
-            for pid in $remaining; do
-                if kill -0 "$pid" 2>/dev/null; then
-                    still_alive="$still_alive $pid"
-                fi
-            done
-            still_alive="${still_alive# }"
-
-            if [ -n "$still_alive" ]; then
-                echo "STATUS:FAILED:$still_alive"
-                exit 1
-            else
-                echo "STATUS:KILLED"
-            fi
-        else
+        if [ -z "$remaining" ]; then
             echo "STATUS:TERMINATED"
+            exit 0
         fi
+
+        echo "ACTION:SIGKILL:$remaining"
+        kill -9 $remaining 2>/dev/null || true
+        sleep 1
+
+        still_alive=""
+        for pid in $remaining; do
+            if kill -0 "$pid" 2>/dev/null; then
+                still_alive="$still_alive $pid"
+            fi
+        done
+        still_alive="${still_alive# }"
+
+        if [ -n "$still_alive" ]; then
+            echo "STATUS:FAILED:$still_alive"
+            exit 1
+        fi
+        echo "STATUS:KILLED"
 REMOTE_SCRIPT
     script="${script//__PATTERN__/$pattern}"
     script="${script//__KILL_TIMEOUT__/$kill_timeout}"
@@ -271,60 +275,64 @@ REMOTE_SCRIPT
     printf '%s' "$script"
 }
 
-# 解析远程 kill 脚本输出并打印结果
-# 参数: node output exit_code quiet → 设置 status/pids 并输出日志
+# ------------------------------------------
+# 结果解析与日志
+# ------------------------------------------
+_parse_kill_status() {
+    local output="$1" exit_code="$2"
+    if [[ "$output" == *"STATUS:NO_PROCESSES"* ]]; then
+        echo "no_processes"
+    elif [[ "$output" == *"STATUS:TERMINATED"* ]]; then
+        echo "success"
+    elif [[ "$output" == *"STATUS:KILLED"* ]]; then
+        echo "killed"
+    elif [[ "$output" == *"STATUS:FAILED"* ]]; then
+        echo "failed"
+    elif [[ $exit_code -eq 124 ]]; then
+        echo "timeout"
+    else
+        echo "failed"
+    fi
+}
+
+_log_kill_status() {
+    local node="$1" status="$2" pids="$3" quiet="$4"
+
+    case $status in
+        no_processes)
+            [[ "$quiet" == false ]] && log_info "[Node: $node] 未找到匹配的进程"
+            return 0
+            ;;
+        success)
+            [[ "$quiet" == false ]] && log_info "[Node: $node] 进程已正常终止 (PIDs: $pids)"
+            return 0
+            ;;
+        killed)
+            log_warn "[Node: $node] 进程已强制终止 (PIDs: $pids)"
+            return 0
+            ;;
+        timeout)
+            log_err "[Node: $node] SSH 连接超时 (${SSH_TIMEOUT}s)"
+            return 124
+            ;;
+        failed)
+            log_err "[Node: $node] 无法终止所有进程 (PIDs: $pids)"
+            return 1
+            ;;
+    esac
+}
+
 _parse_and_log_kill_result() {
     local node="$1" output="$2" exit_code="$3" quiet="$4"
-    local status="failed" pids=""
+    local status pids=""
 
-    if [[ "$output" == *"STATUS:NO_PROCESSES"* ]]; then
-        status="no_processes"
-    elif [[ "$output" == *"STATUS:TERMINATED"* ]]; then
-        status="success"
-    elif [[ "$output" == *"STATUS:KILLED"* ]]; then
-        status="killed"
-    elif [[ "$output" == *"STATUS:FAILED"* ]]; then
-        status="failed"
-    elif [[ $exit_code -eq 124 ]]; then
-        status="timeout"
-    fi
+    status=$(_parse_kill_status "$output" "$exit_code")
 
     if [[ "$output" =~ PIDS:([^[:space:]]+) ]]; then
         pids="${BASH_REMATCH[1]}"
     fi
 
-    case $status in
-        no_processes)
-            [[ "$quiet" == false ]] && log_info "[Node: $node] 未找到匹配的进程"
-            ;;
-        success)
-            [[ "$quiet" == false ]] && log_info "[Node: $node] 进程已正常终止 (PIDs: $pids)"
-            ;;
-        killed)
-            log_warn "[Node: $node] 进程已强制终止 (PIDs: $pids)"
-            ;;
-        failed)
-            log_err "[Node: $node] 无法终止所有进程 (PIDs: $pids)"
-            ;;
-        timeout)
-            log_err "[Node: $node] SSH 连接超时 (${SSH_TIMEOUT}s)"
-            ;;
-        *)
-            log_err "[Node: $node] 处理失败 (退出码: $exit_code)"
-            if [[ -n "$output" ]]; then
-                echo "$output" | while read -r line; do
-                    log_err "    $line"
-                done
-            fi
-            ;;
-    esac
-
-    case $status in
-        no_processes|success) return 0 ;;
-        killed) return 0 ;;
-        timeout) return 124 ;;
-        *) return 1 ;;
-    esac
+    _log_kill_status "$node" "$status" "$pids" "$quiet"
 }
 
 kill_processes_on_node() {
@@ -345,118 +353,15 @@ kill_processes_on_node() {
 }
 
 # ------------------------------------------
-# 主逻辑
+# 用户确认
 # ------------------------------------------
+confirm_operation() {
+    local skip="$1" dry="$2"
+    if $skip || $dry; then
+        $dry || log_info "跳过确认步骤 (-y 模式)"
+        return 0
+    fi
 
-# 参数解析
-SKIP_CONFIRM=false
-DRY_RUN=false
-QUIET=false
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -y|--yes)
-            SKIP_CONFIRM=true
-            shift
-            ;;
-        -n|--dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        -q|--quiet)
-            QUIET=true
-            shift
-            ;;
-        -k|--keywords)
-            if [[ -z "${2:-}" ]] || [[ "$2" == -* ]]; then
-                log_err "选项 $1 需要一个参数"
-                exit 1
-            fi
-            IFS=',' read -ra KEYWORDS <<< "$2"
-            shift 2
-            ;;
-        -t|--timeout)
-            if [[ -z "${2:-}" ]] || [[ "$2" == -* ]]; then
-                log_err "选项 $1 需要一个参数"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                log_err "超时时间必须是正整数"
-                exit 1
-            fi
-            KILL_TIMEOUT="$2"
-            shift 2
-            ;;
-        -j|--jobs)
-            if [[ -z "${2:-}" ]] || [[ "$2" == -* ]]; then
-                log_err "选项 $1 需要一个参数"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
-                log_err "并发数必须是正整数"
-                exit 1
-            fi
-            MAX_JOBS="$2"
-            shift 2
-            ;;
-        --ssh-timeout)
-            if [[ -z "${2:-}" ]] || [[ "$2" == -* ]]; then
-                log_err "选项 $1 需要一个参数"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                log_err "SSH 超时时间必须是正整数"
-                exit 1
-            fi
-            SSH_TIMEOUT="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -*)
-            log_err "未知选项: $1"
-            usage >&2
-            exit 1
-            ;;
-        *)
-            # 非选项参数，视为节点列表文件
-            NODE_LIST_FILE="$1"
-            shift
-            ;;
-    esac
-done
-
-# 检查节点列表文件
-if [[ ! -f "$NODE_LIST_FILE" ]]; then
-    log_err "节点列表文件未找到: $NODE_LIST_FILE"
-    exit 1
-fi
-
-# 读取节点列表 (兼容 bash 3.x / macOS)
-NODES=()
-while IFS= read -r line; do
-    NODES+=("$line")
-done < <(awk 'NF && !/^#/ {print $1}' "$NODE_LIST_FILE")
-
-if [[ ${#NODES[@]} -eq 0 ]]; then
-    log_err "节点列表为空: $NODE_LIST_FILE"
-    exit 1
-fi
-
-# 输出配置信息
-log_info "开始多节点进程清理..."
-$DRY_RUN && log_info "[DRY RUN 模式] 不会实际终止进程"
-log_info "目标关键词: ${KEYWORDS[*]}"
-log_info "节点列表文件: $NODE_LIST_FILE"
-log_info "节点数量: ${#NODES[@]}"
-log_info "最大并发数: $MAX_JOBS"
-log_info "终止超时: ${KILL_TIMEOUT}s"
-log_info "SSH 超时: ${SSH_TIMEOUT}s"
-
-# 用户确认（除非使用 -y 跳过或 dry-run 模式）
-if ! $SKIP_CONFIRM && ! $DRY_RUN; then
     echo "================================================================"
     echo "警告: 此脚本将终止以下节点上的指定进程"
     echo "   目标关键词: ${KEYWORDS[*]}"
@@ -475,29 +380,81 @@ if ! $SKIP_CONFIRM && ! $DRY_RUN; then
     fi
     echo "================================================================"
     log_info "确认继续，开始清理..."
-else
-    $DRY_RUN || log_info "跳过确认步骤 (-y 模式)"
+}
+
+# ------------------------------------------
+# 结果汇总
+# ------------------------------------------
+print_summary() {
+    local success="$1" failed="$2" timeout="$3"
+
+    echo "================================================================"
+    log_info "所有节点处理完成"
+    echo "----------------------------------------------------------------"
+    echo "  成功:     $success"
+    echo "  失败:     $failed"
+    echo "  超时:     $timeout"
+    echo "----------------------------------------------------------------"
+
+    if [[ ${#FAILED_NODES[@]} -gt 0 ]]; then
+        echo "失败的节点:"
+        printf '  - %s\n' "${FAILED_NODES[@]}"
+    fi
+
+    if [[ ${#TIMEOUT_NODES[@]} -gt 0 ]]; then
+        echo "超时的节点:"
+        printf '  - %s\n' "${TIMEOUT_NODES[@]}"
+    fi
+}
+
+# ------------------------------------------
+# 主逻辑
+# ------------------------------------------
+parse_args "$@"
+
+# 检查节点列表文件
+if [[ ! -f "$NODE_LIST_FILE" ]]; then
+    log_err "节点列表文件未找到: $NODE_LIST_FILE"
+    exit 1
 fi
+
+# 读取节点列表
+NODES=()
+while IFS= read -r line; do
+    NODES+=("$line")
+done < <(read_nodes "$NODE_LIST_FILE")
+
+if [[ ${#NODES[@]} -eq 0 ]]; then
+    log_err "节点列表为空: $NODE_LIST_FILE"
+    exit 1
+fi
+
+# 输出配置信息
+log_info "开始多节点进程清理..."
+$DRY_RUN && log_info "[DRY RUN 模式] 不会实际终止进程"
+log_info "目标关键词: ${KEYWORDS[*]}"
+log_info "节点列表文件: $NODE_LIST_FILE"
+log_info "节点数量: ${#NODES[@]}"
+log_info "最大并发数: $MAX_JOBS"
+log_info "终止超时: ${KILL_TIMEOUT}s"
+log_info "SSH 超时: ${SSH_TIMEOUT}s"
+
+# 用户确认
+confirm_operation "$SKIP_CONFIRM" "$DRY_RUN"
 
 # 并发处理所有节点
 declare -i SUCCESS_COUNT=0
-declare -i FAILED_COUNT=0
-declare -i TIMEOUT_COUNT=0
+ declare -i FAILED_COUNT=0
+ declare -i TIMEOUT_COUNT=0
 
-# 创建临时目录和文件
 TMP_LOG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kill_nodes_$$.XXXXXX")
-export TMP_LOG_DIR
 trap 'rm -rf "$TMP_LOG_DIR"' EXIT
 
-# 为每个节点创建独立的日志文件以避免竞争
 for node in "${NODES[@]}"; do
     [[ -z "$node" ]] && continue
     limit_jobs "$MAX_JOBS"
-    
-    # 使用独立的日志文件避免竞争
+
     local_log="${TMP_LOG_DIR}/${node}.log"
-    
-    # 使用子 shell 捕获每个节点的结果
     (
         set +e
         kill_processes_on_node "$node" "$DRY_RUN" "$QUIET"
@@ -512,7 +469,6 @@ for node in "${NODES[@]}"; do
     ) &
 done
 
-# 等待所有后台任务完成（禁用 ERR 陷阱避免被信号中断）
 set +e
 wait
 set -e
@@ -532,23 +488,7 @@ if [[ -d "$TMP_LOG_DIR" ]]; then
 fi
 
 # 输出汇总
-echo "================================================================"
-log_info "所有节点处理完成"
-echo "----------------------------------------------------------------"
-echo "  成功:     $SUCCESS_COUNT"
-echo "  失败:     $FAILED_COUNT"
-echo "  超时:     $TIMEOUT_COUNT"
-echo "----------------------------------------------------------------"
-
-if [[ ${#FAILED_NODES[@]} -gt 0 ]]; then
-    echo "失败的节点:"
-    printf '  - %s\n' "${FAILED_NODES[@]}"
-fi
-
-if [[ ${#TIMEOUT_NODES[@]} -gt 0 ]]; then
-    echo "超时的节点:"
-    printf '  - %s\n' "${TIMEOUT_NODES[@]}"
-fi
+print_summary "$SUCCESS_COUNT" "$FAILED_COUNT" "$TIMEOUT_COUNT"
 
 # 根据结果返回退出码
 if [[ $FAILED_COUNT -eq 0 && $TIMEOUT_COUNT -eq 0 ]]; then
