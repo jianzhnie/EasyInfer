@@ -27,72 +27,14 @@ RUN_CONTAINER="${SCRIPT_DIR}/run_npuslim_container.sh"
 # MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
 # WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/llm_workspace_1P/robin/npuslim-master}"
 
-# Detect local IPs
-read -ra LOCAL_IPS < <(hostname -I 2>/dev/null || true)
-
 # 默认 NPUSlim 路径（可通过环境变量覆盖）
 MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-}"
 WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-}"
 
-# ------------------------------------------
-# 节点列表解析
-# ------------------------------------------
-# 优先级: --hosts (CLI) > --file/-f (CLI) > NODES_FILE (env) > 默认 node_list.txt
-# 用法: resolve_hosts [--hosts ip1 ip2 ...] [--file path]
-# 输出: 将解析后的节点列表存入 HOSTS 数组
-resolve_hosts() {
-    HOSTS=()
-    local nodes_file=""
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --hosts) shift
-                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                    HOSTS+=("$1"); shift
-                done ;;
-            --file|-f)
-                shift || true
-                [[ $# -gt 0 ]] || log_fatal "-f/--file 需要指定文件路径"
-                nodes_file="$1"; shift
-                ;;
-            --npuslim|--no-npuslim) shift ;;
-            *) shift ;;
-        esac
-    done
-
-    # 如果已通过 --hosts 指定，直接返回
-    [[ ${#HOSTS[@]} -gt 0 ]] && return 0
-
-    # 否则从节点列表文件读取
-    local file="${nodes_file:-$NODES_FILE}"
-    if [[ ! -f "$file" ]]; then
-        log_fatal "节点列表文件未找到: $file"
-    fi
-
-    while IFS= read -r ip; do
-        [[ -n "$ip" ]] && HOSTS+=("$ip")
-    done < <(read_nodes "$file")
-
-    if [[ ${#HOSTS[@]} -eq 0 ]]; then
-        log_fatal "节点列表文件为空: $file"
-    fi
-}
-
-# ------------------------------------------
-# 辅助函数
-# ------------------------------------------
-is_local() {
-    local ip="$1" lip
-    for lip in "${LOCAL_IPS[@]}"; do
-        [[ "$ip" == "$lip" ]] && return 0
-    done
-    return 1
-}
-
 # Get npuslim path for a given host
 npuslim_path_for() {
     local host="$1"
-    local master="${HOSTS[0]:-}"
+    local master="${RESOLVED_NODES[0]:-}"
     if [[ "$host" == "$master" ]]; then
         echo "$MASTER_NPUSLIM_PATH"
     else
@@ -105,7 +47,7 @@ npuslim_path_for() {
 # Execute docker command on remote or local node
 remote_docker_cmd() {
     local host="$1"; shift
-    if is_local "$host"; then
+    if is_local_ip "$host"; then
         docker "$@"
     else
         # shellcheck disable=SC2029
@@ -116,7 +58,7 @@ remote_docker_cmd() {
 # Run a bash command on remote or local node
 remote_bash() {
     local host="$1"; shift
-    if is_local "$host"; then
+    if is_local_ip "$host"; then
         bash -c "$*"
     else
         # shellcheck disable=SC2029
@@ -127,17 +69,16 @@ remote_bash() {
 # ─── Commands ────────────────────────────────────────────────────────────────
 
 cmd_start() {
-    resolve_hosts "$@"
+    resolve_nodes "$@"
     local with_npuslim=true
 
-    # 解析非 hosts 选项
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --no-npuslim) with_npuslim=false; shift ;;
             --npuslim) with_npuslim=true; shift ;;
             --hosts) shift
-                while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do shift; done ;;
-            --file|-f) shift || true; shift || true ;;
+                while [[ $# -gt 0 && "$1" != -* ]]; do shift; done ;;
+            --file|-f) shift 2 ;;
             *) shift ;;
         esac
     done
@@ -145,20 +86,18 @@ cmd_start() {
     echo "========================================"
     echo "Starting Containers"
     echo "========================================"
-    echo "Hosts:   ${HOSTS[*]}"
+    echo "Hosts:   ${RESOLVED_NODES[*]}"
     echo "NPUSlim: ${with_npuslim}"
     echo ""
 
-    for host in "${HOSTS[@]}"; do
+    for host in "${RESOLVED_NODES[@]}"; do
         echo "--- Starting on ${host} ---"
-
         local npuslim_arg=""
         if $with_npuslim; then
             local npath
             npath=$(npuslim_path_for "$host")
             npuslim_arg="--npuslim=${npath}"
         fi
-
         remote_bash "$host" "bash ${RUN_CONTAINER} --multi-node --daemon ${npuslim_arg}"
         echo ""
     done
@@ -169,15 +108,15 @@ cmd_start() {
 }
 
 cmd_stop() {
-    resolve_hosts "$@"
+    resolve_nodes "$@"
 
     echo "========================================"
     echo "Stopping Containers"
     echo "========================================"
-    echo "Hosts: ${HOSTS[*]}"
+    echo "Hosts: ${RESOLVED_NODES[*]}"
     echo ""
 
-    for host in "${HOSTS[@]}"; do
+    for host in "${RESOLVED_NODES[@]}"; do
         echo "--- Stopping on ${host} ---"
         local cid
         # shellcheck disable=SC2086
@@ -196,15 +135,15 @@ cmd_stop() {
 }
 
 cmd_status() {
-    resolve_hosts "$@"
+    resolve_nodes "$@"
 
     echo "========================================"
     echo "Container Status"
     echo "========================================"
 
-    for host in "${HOSTS[@]}"; do
+    for host in "${RESOLVED_NODES[@]}"; do
         local marker=""
-        is_local "$host" && marker=" (local)"
+        is_local_ip "$host" && marker=" (local)"
         printf "  %-16s" "${host}${marker}"
 
         local cid
