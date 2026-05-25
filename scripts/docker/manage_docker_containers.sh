@@ -37,7 +37,6 @@ USAGE
 # 参数解析
 # ------------------------------------------
 ACTION="start"
-NODES_FILE_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,17 +51,7 @@ while [[ $# -gt 0 ]]; do
       else
         log_err "选项 $1 需要一个参数: start, stop 或 restart"
         usage
-        exit 1
-      fi
-      ;;
-    -f|--file)
-      if [[ -n "${2:-}" && "${2:-}" != -* ]]; then
-        NODES_FILE_ARG="$2"
-        shift 2
-      else
-        log_err "选项 $1 需要一个参数: 节点列表文件路径"
-        usage
-        exit 1
+        exit "$E_INVALID_ARG"
       fi
       ;;
     start|stop|restart)
@@ -72,13 +61,13 @@ while [[ $# -gt 0 ]]; do
     *)
       log_err "未知参数: $1"
       usage
-      exit 1
+      exit "$E_INVALID_ARG"
       ;;
   esac
 done
 
-# 命令行参数优先于环境变量
-[[ -n "$NODES_FILE_ARG" ]] && NODES_FILE="$NODES_FILE_ARG"
+# 解析节点列表参数
+NODES_FILE=$(parse_nodes_file_arg "$@")
 
 if [[ "$ACTION" != "start" && "$ACTION" != "stop" && "$ACTION" != "restart" ]]; then
   log_err "动作参数必须是 start, stop 或 restart，当前值: $ACTION"
