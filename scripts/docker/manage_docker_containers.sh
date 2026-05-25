@@ -142,6 +142,58 @@ check_dependencies
 # 注意: 下列带 _remote 前缀的函数将通过 declare -f 被序列化发送至远程执行
 # ------------------------------------------
 
+_remote_ensure_docker_running() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[ERROR] docker command not found" >&2
+    exit 127
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "[INFO] Docker service not running, attempting to start..."
+    if ! systemctl daemon-reload || ! systemctl start docker; then
+      echo "[ERROR] Failed to start Docker service" >&2
+      exit 1
+    fi
+  fi
+}
+
+_remote_cleanup_containers() {
+  echo "[INFO] Stopping and removing all existing containers..."
+  docker ps -aq 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+  docker ps -aq 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+  docker ps -aq 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+}
+
+_remote_load_and_run() {
+  local image_name="$1" image_tar="$2" run_container_script="$3" container_name="$4"
+
+  if docker image inspect "${image_name}" >/dev/null 2>&1; then
+    :
+  else
+    if [[ ! -f "${image_tar}" ]]; then
+      echo "[ERROR] image tar not found: ${image_tar}" >&2
+      exit 2
+    fi
+    echo "[INFO] Loading image from ${image_tar}..."
+    docker load -i "${image_tar}"
+  fi
+
+  if [[ ! -f "${run_container_script}" ]]; then
+    echo "[ERROR] run script not found: ${run_container_script}" >&2
+    exit 2
+  fi
+
+  export IMAGE_NAME="${image_name}"
+  export CONTAINER_NAME="${container_name}"
+  bash "${run_container_script}"
+
+  if docker ps --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null; then
+    echo "[INFO] Container ready: ${container_name}"
+  else
+    echo "[ERROR] Failed to start container: ${container_name}" >&2
+    exit 1
+  fi
+}
+
 _remote_prepare_node() {
   local image_name="$1"
   local image_tar="$2"
@@ -151,56 +203,14 @@ _remote_prepare_node() {
 
   set -euo pipefail
 
-  # 确保 Docker 命令可用
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "[ERROR] docker command not found" >&2
-    exit 127
-  fi
+  _remote_ensure_docker_running
 
-  # 确保 Docker 服务已启动（如果不可用则尝试启动）
-  if ! docker info >/dev/null 2>&1; then
-    echo "[INFO] Docker service not running, attempting to start..."
-    if ! systemctl daemon-reload || ! systemctl start docker; then
-      echo "[ERROR] Failed to start Docker service" >&2
-      exit 1
-    fi
-  fi
-
-  # 在 restart 或 stop 模式下执行 stop & kill 容器操作
   if [[ "$action" == "restart" || "$action" == "stop" ]]; then
-    echo "[INFO] Stopping and removing all existing containers..."
-    docker ps -aq 2>/dev/null | xargs -r docker stop 2>/dev/null || true
-    docker ps -aq 2>/dev/null | xargs -r docker kill 2>/dev/null || true
-    docker ps -aq 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+    _remote_cleanup_containers
   fi
 
   if [[ "$action" == "start" || "$action" == "restart" ]]; then
-    if docker image inspect "${image_name}" >/dev/null 2>&1; then
-      : # 镜像已存在
-    else
-      if [[ ! -f "${image_tar}" ]]; then
-        echo "[ERROR] image tar not found: ${image_tar}" >&2
-        exit 2
-      fi
-      echo "[INFO] Loading image from ${image_tar}..."
-      docker load -i "${image_tar}"
-    fi
-
-    if [[ ! -f "${run_container_script}" ]]; then
-      echo "[ERROR] run script not found: ${run_container_script}" >&2
-      exit 2
-    fi
-
-    export IMAGE_NAME="${image_name}"
-    export CONTAINER_NAME="${container_name}"
-    bash "${run_container_script}"
-
-    if docker ps --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null; then
-      echo "[INFO] Container ready: ${container_name}"
-    else
-      echo "[ERROR] Failed to start container: ${container_name}" >&2
-      exit 1
-    fi
+    _remote_load_and_run "${image_name}" "${image_tar}" "${run_container_script}" "${container_name}"
   else
     echo "[INFO] Action is 'stop', skipping image load and container start."
   fi
