@@ -152,6 +152,61 @@ fi
 # ------------------------------------------------------------------------------
 # 6. 构建 vLLM 启动参数 (参考 vllm_model_server.sh 的分块构建方式)
 # ------------------------------------------------------------------------------
+
+_build_base_args() {
+    local -n arr="$1"
+    arr+=(serve "${MODEL_PATH}")
+    arr+=(--host 0.0.0.0)
+    arr+=(--port "${VLLM_PORT}")
+    arr+=(--trust-remote-code)
+    arr+=(--served-model-name "${SERVED_MODEL_NAME}")
+    arr+=(--seed 1024)
+    arr+=(--tensor-parallel-size "${TENSOR_PARALLEL_SIZE}")
+    arr+=(--pipeline-parallel-size "${PIPELINE_PARALLEL_SIZE}")
+    arr+=(--max-num-seqs "${MAX_NUM_SEQS}")
+    arr+=(--max-model-len "${MAX_MODEL_LEN}")
+    arr+=(--max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}")
+    arr+=(--gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}")
+    arr+=(--no-enable-prefix-caching)
+}
+
+_build_mp_args() {
+    local -n arr="$1"
+    local node_rank="$2" master_addr="$3" nnodes="$4"
+    if [[ "${nnodes}" -gt 1 ]]; then
+        arr+=(--distributed-executor-backend mp)
+        arr+=(--nnodes "${nnodes}")
+        arr+=(--node-rank "${node_rank}")
+        arr+=(--master-addr "${master_addr}")
+    fi
+}
+
+_build_dp_args() {
+    local -n arr="$1"
+    local is_headless="$2" dp_size_local="$3" dp_start_rank="$4"
+    if [[ "${DP_SIZE}" -gt 1 ]]; then
+        arr+=(--data-parallel-size "${DP_SIZE}")
+        arr+=(--data-parallel-size-local "${dp_size_local}")
+        arr+=(--data-parallel-address "${NODE0_IP}")
+        arr+=(--data-parallel-rpc-port "${DP_RPC_PORT}")
+        if [[ "${is_headless}" == "true" ]]; then
+            arr+=(--headless)
+            arr+=(--data-parallel-start-rank "${dp_start_rank}")
+        fi
+    else
+        if [[ "${is_headless}" == "true" ]]; then
+            arr+=(--headless)
+        fi
+    fi
+}
+
+_build_a2_compile_args() {
+    local -n arr="$1"
+    arr+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture sizes":[8, 16, 24, 32, 40, 48]}')
+    arr+=(--additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}')
+    arr+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}')
+}
+
 build_vllm_args_declare() {
     local is_headless="$1"
     local node_rank="$2"
@@ -167,50 +222,18 @@ build_vllm_args_declare() {
     local ep_size="${EXPERT_PARALLEL_SIZE}"
 
     local -a args=()
-    args+=(serve "${MODEL_PATH}")
-    args+=(--host 0.0.0.0)
-    args+=(--port "${vllm_port}")
-    args+=(--trust-remote-code)
-    args+=(--served-model-name "${SERVED_MODEL_NAME}")
-    args+=(--seed 1024)
-    args+=(--tensor-parallel-size "${tp_size}")
-    args+=(--pipeline-parallel-size "${pp_size}")
+    _build_base_args args
+    _build_mp_args args "${node_rank}" "${master_addr}" "${nnodes}"
 
-    # 多节点 Multiprocessing 参数
-    # 参考: https://docs.vllm.ai/en/stable/serving/parallelism_scaling/#running-vllm-with-multiprocessing
-    if [[ "${nnodes}" -gt 1 ]]; then
-        args+=(--distributed-executor-backend mp)
-        args+=(--nnodes "${nnodes}")
-        args+=(--node-rank "${node_rank}")
-        args+=(--master-addr "${master_addr}")
-    fi
-
-    # Data Parallel 参数（仅在单节点实例模式下使用内部 DP）
-    if [[ "${use_internal_dp}" == "true" && "${DP_SIZE}" -gt 1 ]]; then
-        args+=(--data-parallel-size "${DP_SIZE}")
-        args+=(--data-parallel-size-local "${dp_size_local}")
-        args+=(--data-parallel-address "${NODE0_IP}")
-        args+=(--data-parallel-rpc-port "${DP_RPC_PORT}")
-        if [[ "${is_headless}" == "true" ]]; then
-            args+=(--headless)
-            args+=(--data-parallel-start-rank "${dp_start_rank}")
-        fi
+    if [[ "${use_internal_dp}" == "true" ]]; then
+        _build_dp_args args "${is_headless}" "${dp_size_local}" "${dp_start_rank}"
     else
         if [[ "${is_headless}" == "true" ]]; then
             args+=(--headless)
         fi
     fi
 
-    args+=(--max-num-seqs "${MAX_NUM_SEQS}")
-    args+=(--max-model-len "${MAX_MODEL_LEN}")
-    args+=(--max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}")
-    args+=(--gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}")
-    args+=(--no-enable-prefix-caching)
-
-    # A2 编译配置
-    args+=(--compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes":[8, 16, 24, 32, 40, 48]}')
-    args+=(--additional-config '{"layer_sharding": ["q_b_proj", "o_proj"]}')
-    args+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}')
+    _build_a2_compile_args args
 
     local help_text=""
     [[ "${AUTO_DETECT_FLAGS}" == "1" ]] && help_text="$(vllm_help)"
