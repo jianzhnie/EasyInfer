@@ -203,7 +203,7 @@ launch_on_node() {
     prefix="export SCRIPT_DIR='${SCRIPT_DIR}' && cd '${SCRIPT_DIR}' && source ../set_env.sh"$'\n'"${env_exports}"
     _launch_vllm_on_node "$node" "$local_ip" "$prefix" \
         "build_vllm_args_declare '${is_headless}' '${node_rank}' '${dp_start_rank}' '${dp_size_local}' '${master_addr}' '${nnodes}' '${vllm_port}' '${use_internal_dp}'" \
-        "_${node}_${vllm_port}"
+        "_${vllm_port}"
 }
 
 # ------------------------------------------------------------------------------
