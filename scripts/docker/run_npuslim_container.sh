@@ -177,7 +177,7 @@ DOCKER_ARGS+=(
     # -v ~/.cache/modelscope:/root/.cache/modelscope
     --name "${CONTAINER_NAME}" \
     -v /llm_workspace_1P/robin:/llm_workspace_1P/robin
-    -v /mnt/xufan_400T:/mnt/xufan_400T
+    -v /home/jianzhnie/llmtuner:/home/jianzhnie/llmtuner
     -e HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 )
 
