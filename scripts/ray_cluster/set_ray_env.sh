@@ -61,10 +61,11 @@ export WAIT_TIME="${WAIT_TIME:-5}"
 export VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
 export MAX_SSH_PARALLELISM="${MAX_SSH_PARALLELISM:-10}"
 export CONTAINER_NAME="${CONTAINER_NAME:-npuslim-env}"
-export NODE_LIST="${NODE_LIST:-/llm_workspace_1P/robin/EasyInfer/scripts/node_list.txt}"
 
-# 容器内 set_ray_env.sh 的路径
-export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-/llm_workspace_1P/robin/EasyInfer/scripts/ray_cluster/set_ray_env.sh}"
+# 项目根目录（通过 BASH_SOURCE 自动推导，适配不同部署路径）
+_RAY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export NODE_LIST="${NODE_LIST:-${_RAY_SCRIPT_DIR}/../node_list.txt}"
+export RAY_ENV_SCRIPT="${RAY_ENV_SCRIPT:-${_RAY_SCRIPT_DIR}/set_ray_env.sh}"
 
 # ------------------------------------------
 # Ascend NPU 与底层环境配置

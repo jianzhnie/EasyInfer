@@ -16,7 +16,6 @@ source "${SCRIPT_DIR}/../common.sh"
 IMAGE_NAME="${IMAGE_NAME:-ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0}"
 SSH_USER="${SSH_USER:-root}"
 RAY_PORT="${RAY_PORT:-6379}"
-NODES_FILE="${NODES_FILE:-${SCRIPT_DIR}/../node_list.txt}"
 
 # Find the running container
 get_container() {
