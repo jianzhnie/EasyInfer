@@ -1,133 +1,77 @@
 #!/bin/bash
-# Ray Cluster Manager for remote Docker containers
-# Usage: bash ray_cluster.sh <command> [options]
-#   start   [--head <ip>] [--workers <ip1> <ip2> ...] [--file <node_list>]
-#   stop    [--hosts <ip1> <ip2> ...] [--file <node_list>]
-#   status  [--hosts <ip1> <ip2> ...] [--file <node_list>]
-# Default: read nodes from scripts/node_list.txt (first = head, rest = workers)
+# ==========================================
+# NPUSlim Ray 集群管理脚本
+# 在容器内管理 Ray 集群 (start/stop/status)
+# 节点列表从文件读取，首节点为 Head，其余为 Worker
+# ==========================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 加载共享库
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=./docker_env.sh
+source "${SCRIPT_DIR}/../docker/docker_env.sh"
 
-IMAGE_NAME="${IMAGE_NAME:-ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0}"
-SSH_USER="${SSH_USER:-root}"
 RAY_PORT="${RAY_PORT:-6379}"
 
-# Find the running container
-get_container() {
-    docker ps -q --filter ancestor="${IMAGE_NAME}" | head -1
-}
-
-# Execute a command inside the container
+# 在远程节点的容器内执行命令（通过 IMAGE_NAME 查找容器）
 node_exec() {
-    local host="$1"
+    local host=$1 container
     shift
-    local container
-    if is_local_ip "$host"; then
-        container=$(get_container)
-        if [[ -z "$container" ]]; then
-            log_err "本地未找到运行中的容器"
-            return 1
-        fi
-        docker exec "$container" bash -lc "$*"
-    else
-        # shellcheck disable=SC2029
-        container=$(ssh "${SSH_USER}@${host}" "docker ps -q --filter ancestor=${IMAGE_NAME} | head -1" 2>/dev/null)
-        if [[ -z "$container" ]]; then
-            log_err "${host} 上未找到运行中的容器"
-            return 1
-        fi
-        # shellcheck disable=SC2029
-        ssh "${SSH_USER}@${host}" "docker exec ${container} bash -lc $(printf '%q' "$*")" 2>/dev/null
-    fi
+    container=$(ssh_run "$host" "docker ps -q --filter ancestor=${IMAGE_NAME} | head -1" 2>/dev/null)
+    [[ -n "$container" ]] || { log_err "${host}: 未找到运行中的容器"; return 1; }
+    ssh_run "$host" "docker exec ${container} bash -lc $(printf '%q' "$*")"
 }
 
+# ------------------------------------------
+# 参数解析
+# ------------------------------------------
 CMD="${1:-help}"
 shift || true
 
 case "$CMD" in
+    start|stop|status) ;;
+    *) echo "Usage: bash start_npuslim_ray_cluster.sh <start|stop|status> -f <FILE>"; exit 0 ;;
+esac
+
+# 必须通过 -f/--file 指定节点列表文件
+[[ "$*" =~ (-f|--file) ]] || log_fatal "必须指定节点文件: -f <FILE>"
+resolve_nodes "$@"
+head_ip="${RESOLVED_NODES[0]}"
+workers=("${RESOLVED_NODES[@]:1}")
+
+# ------------------------------------------
+# 主流程
+# ------------------------------------------
+case "$CMD" in
     start)
-        HEAD_IP=""
-        WORKERS=()
-        local_nodes_file=""
-        while [[ $# -gt 0 ]]; do
-            case $1 in
-                --head) HEAD_IP="$2"; shift 2 ;;
-                --workers) shift
-                    while [[ $# -gt 0 && "$1" != -* ]]; do
-                        WORKERS+=("$1"); shift
-                    done ;;
-                --file|-f) local_nodes_file="$2"; shift 2 ;;
-                *) shift ;;
-            esac
-        done
+        log_info "Head: ${head_ip}:${RAY_PORT}  Workers: ${workers[*]:-none}"
 
-        # 解析节点列表
-        [[ -n "${local_nodes_file:-}" ]] && NODES_FILE="$local_nodes_file"
-        resolve_nodes
-
-        # 默认：第一个 IP = head，其余 = workers
-        if [[ -z "$HEAD_IP" ]]; then
-            HEAD_IP="${RESOLVED_NODES[0]}"
-            for ((i = 1; i < ${#RESOLVED_NODES[@]}; i++)); do
-                WORKERS+=("${RESOLVED_NODES[$i]}")
-            done
-        fi
-
-        log_info "========================================"
-        log_info "Starting Ray Cluster"
-        log_info "Head:    ${HEAD_IP}:${RAY_PORT}"
-        log_info "Workers: ${WORKERS[*]:-none}"
-
-        log_info "--- Starting head on ${HEAD_IP} ---"
-        node_exec "$HEAD_IP" "ray start --head --port=${RAY_PORT}"
-
+        log_info "--- Starting head on ${head_ip} ---"
+        node_exec "$head_ip" "ray start --head --port=${RAY_PORT}"
         sleep 2
 
-        for worker in "${WORKERS[@]}"; do
+        for worker in "${workers[@]}"; do
             log_info "--- Starting worker on ${worker} ---"
-            node_exec "$worker" "ray start --address=${HEAD_IP}:${RAY_PORT} --node-ip-address=${worker}"
+            node_exec "$worker" "ray start --address=${head_ip}:${RAY_PORT} --node-ip-address=${worker}"
         done
 
-        log_info "--- Cluster status ---"
-        node_exec "$HEAD_IP" "ray status"
-        log_info "========================================"
+        node_exec "$head_ip" "ray status"
         log_info "Ray cluster started."
-        log_info "========================================"
         ;;
-
     stop)
-        resolve_nodes "$@"
-
         for host in "${RESOLVED_NODES[@]}"; do
-            echo "--- Stopping Ray on ${host} ---"
             node_exec "$host" "ray stop" || true
         done
+        log_info "Ray cluster stopped."
         ;;
-
     status)
-        resolve_nodes "$@"
-
         for host in "${RESOLVED_NODES[@]}"; do
-            echo "--- Ray status on ${host} ---"
-            node_exec "$host" "ray status" || echo "Ray not running"
+            echo "--- ${host} ---"
+            node_exec "$host" "ray status" || echo "  Ray not running"
             echo ""
         done
-        ;;
-
-    help|*)
-        echo "Usage: bash ray_cluster.sh <command> [options]"
-        echo ""
-        echo "Commands:"
-        echo "  start   [--head <ip>] [--workers <ip1> <ip2> ...] [--file <path>]"
-        echo "  stop    [--hosts <ip1> <ip2> ...] [--file <path>]"
-        echo "  status  [--hosts <ip1> <ip2> ...] [--file <path>]"
-        echo ""
-        echo "Default node list: ${NODES_FILE}"
-        echo "Environment: NODES_FILE, IMAGE_NAME, SSH_USER, RAY_PORT"
         ;;
 esac

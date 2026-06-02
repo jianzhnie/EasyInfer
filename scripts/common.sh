@@ -5,21 +5,19 @@
 # 注意: 本文件被 source 而非直接执行，刻意不加 set -euo pipefail，
 #       以免影响调用脚本的 shell 选项。所有函数内部自行处理错误。
 
-# 颜色常量
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
+# 颜色常量 / 项目根路径 / 错误码
+readonly RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPTS_ROOT
+# shellcheck disable=SC2034
+readonly E_OK=0 E_GENERAL=1 E_INVALID_ARG=2 E_NOT_FOUND=3 E_TIMEOUT=124 E_CMD_NOT_FOUND=127
 
 # ------------------------------------------------------------------------------
 # 日志函数
 # ------------------------------------------------------------------------------
-_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
-
 _log() {
     local color="$1" level="$2"; shift 2
-    printf "${color}[%-5s]${NC} %s - %s\n" "$level" "$(_timestamp)" "$*"
+    printf "${color}[%-5s]${NC} %s - %s\n" "$level" "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
 log_info()  { _log "$GREEN"  "INFO"  "$@"; }
@@ -126,21 +124,13 @@ require_cmds() {
 # 等待 TCP 端口可达
 # 用法: wait_for_port <host> <port> [timeout_sec] [interval_sec]
 wait_for_port() {
-    local host="${1:?用法: wait_for_port <host> <port> [timeout] [interval]}"
-    local port="${2:?用法: wait_for_port <host> <port> [timeout] [interval]}"
-    local timeout="${3:-120}"
-    local interval="${4:-5}"
-    local start elapsed=0
-    start=$(date +%s)
+    local host="${1:?}" port="${2:?}" timeout="${3:-120}" interval="${4:-5}"
+    local start=$(date +%s) elapsed
 
     while true; do
-        if command -v nc >/dev/null 2>&1; then
-            nc -z -w 2 "$host" "$port" 2>/dev/null && return 0
-        elif command -v timeout >/dev/null 2>&1; then
-            timeout 2 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null && return 0
-        elif [[ -e /dev/tcp ]]; then
-            (echo >/dev/tcp/"$host"/"$port") 2>/dev/null && return 0
-        fi
+        { command -v nc >/dev/null 2>&1 && nc -z -w 2 "$host" "$port" 2>/dev/null; } ||
+        { command -v timeout >/dev/null 2>&1 && timeout 2 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null; } ||
+        { [[ -e /dev/tcp ]] && (echo >/dev/tcp/"$host"/"$port") 2>/dev/null; } && return 0
         elapsed=$(( $(date +%s) - start ))
         [[ "$elapsed" -ge "$timeout" ]] && return 1
         sleep "$interval"
@@ -206,11 +196,38 @@ resolve_nodes() {
 }
 
 # ------------------------------------------------------------------------------
-# 等待 vLLM HTTP 服务就绪
+# 服务就绪信息打印（URL 和可选 Claude Code 配置）
 # ------------------------------------------------------------------------------
+_print_server_info() {
+    local host="${1}" port="${2}" model_name="${3:-}"
+    log_info "  vLLM server is READY"
+    log_info "  Health check:  http://${host}:${port}/health"
+    log_info "  API endpoint:  http://${host}:${port}/v1"
+    log_info "  Models list:   http://${host}:${port}/v1/models"
+    if [[ -n "$model_name" ]]; then
+        log_info ""
+        log_info "  --- Claude Code 配置 ---"
+        log_info "  方式一: 写入 ~/.claude/settings.json"
+        log_info "  { \"env\": {"
+        log_info "      \"ANTHROPIC_BASE_URL\": \"http://${host}:${port}/v1\","
+        log_info "      \"ANTHROPIC_API_KEY\": \"dummy\","
+        log_info "      \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"${model_name}\","
+        log_info "      \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"${model_name}\","
+        log_info "      \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"${model_name}\""
+        log_info "  } }"
+        log_info ""
+        log_info "  方式二: 命令行直接使用"
+        log_info "  ANTHROPIC_BASE_URL=http://${host}:${port}/v1 \\"
+        log_info "  ANTHROPIC_API_KEY=dummy \\"
+        log_info "  ANTHROPIC_DEFAULT_SONNET_MODEL=${model_name} \\"
+        log_info "  claude"
+    fi
+}
+
+# 等待 vLLM HTTP 服务就绪
 wait_for_server() {
     local host="${1:?用法: wait_for_server <host> <port> [timeout_sec]}"
-    local port="${2:?用法: wait_for_server <host> <port> [timeout_sec]}"
+    local port="${2:?}"
     local max_wait="${3:-600}"
     local url="http://${host}:${port}/health"
     local elapsed=0 interval=5
@@ -218,13 +235,9 @@ wait_for_server() {
     log_info "Waiting for server to become ready..."
     while (( elapsed < max_wait )); do
         if curl -sf "$url" >/dev/null 2>&1; then
-            log_info "================================================================================="
-            log_info "  vLLM server is READY"
-            log_info "================================================================================="
-            log_info "  Health check:  http://${host}:${port}/health"
-            log_info "  API endpoint:  http://${host}:${port}/v1"
-            log_info "  Models list:   http://${host}:${port}/v1/models"
-            log_info "================================================================================="
+            log_info "$(printf '=%.0s' {1..80})"
+            _print_server_info "$host" "$port"
+            log_info "$(printf '=%.0s' {1..80})"
             return 0
         fi
         sleep "$interval"
@@ -236,47 +249,15 @@ wait_for_server() {
     return 1
 }
 
-# ------------------------------------------------------------------------------
-# 打印服务就绪后的 Claude Code 配置输出
-# ------------------------------------------------------------------------------
+# 打印服务就绪信息（含 Claude Code 配置）
 print_server_ready() {
-    local host_ip="${1:?用法: print_server_ready <host> <port> [model_name]}"
-    local port="${2:?用法: print_server_ready <host> <port> [model_name]}"
+    local host="${1:?用法: print_server_ready <host> <port> [model_name]}"
+    local port="${2:?}"
     local model_name="${3:-}"
-
-    log_info "================================================================================="
-    log_info "  vLLM server is READY"
-    log_info "================================================================================="
-    log_info "  Health check:  http://${host_ip}:${port}/health"
-    log_info "  API endpoint:  http://${host_ip}:${port}/v1"
-    log_info "  Models list:   http://${host_ip}:${port}/v1/models"
-    if [[ -n "$model_name" ]]; then
-        log_info ""
-        log_info "  --- Claude Code 配置 ---"
-        log_info ""
-        log_info "  方式一: 写入 ~/.claude/settings.json"
-        log_info "  {"
-        log_info "    \"env\": {"
-        log_info "      \"ANTHROPIC_BASE_URL\": \"http://${host_ip}:${port}/v1\","
-        log_info "      \"ANTHROPIC_API_KEY\": \"dummy\","
-        log_info "      \"ANTHROPIC_AUTH_TOKEN\": \"dummy\","
-        log_info "      \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"${model_name}\","
-        log_info "      \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"${model_name}\","
-        log_info "      \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"${model_name}\""
-        log_info "    }"
-        log_info "  }"
-        log_info ""
-        log_info "  方式二: 命令行直接使用"
-        log_info "  ANTHROPIC_BASE_URL=http://${host_ip}:${port}/v1 \\"
-        log_info "  ANTHROPIC_API_KEY=dummy \\"
-        log_info "  ANTHROPIC_AUTH_TOKEN=dummy \\"
-        log_info "  ANTHROPIC_DEFAULT_SONNET_MODEL=${model_name} \\"
-        log_info "  ANTHROPIC_DEFAULT_HAIKU_MODEL=${model_name} \\"
-        log_info "  ANTHROPIC_DEFAULT_OPUS_MODEL=${model_name} \\"
-        log_info "  claude"
-    fi
+    log_info "$(printf '=%.0s' {1..80})"
+    _print_server_info "$host" "$port" "$model_name"
     log_info ""
-    log_info "================================================================================="
+    log_info "$(printf '=%.0s' {1..80})"
 }
 
 # ------------------------------------------------------------------------------
@@ -316,55 +297,34 @@ confirm() {
 }
 
 # ------------------------------------------------------------------------------
-# 错误码常量 (供外部脚本使用)
-# ------------------------------------------------------------------------------
-# shellcheck disable=SC2034
-readonly E_OK=0
-# shellcheck disable=SC2034
-readonly E_GENERAL=1
-# shellcheck disable=SC2034
-readonly E_INVALID_ARG=2
-# shellcheck disable=SC2034
-readonly E_NOT_FOUND=3
-# shellcheck disable=SC2034
-readonly E_TIMEOUT=124
-# shellcheck disable=SC2034
-readonly E_CMD_NOT_FOUND=127
-
-# ------------------------------------------------------------------------------
 # 网络工具：获取节点网卡 IP
 # ------------------------------------------------------------------------------
 # 获取指定节点上指定网卡的 IP 地址
-# 用法: get_node_ip [node] <interface>
-#   node      - 目标节点（空字符串表示本地）
-#   interface - 网卡名称
+# 用法: get_node_ip <interface>          → 本地
+#       get_node_ip <node> <interface>   → 远程
 get_node_ip() {
-    local node="${1:-}"
-    local interface="${2:-}"
-    local ip=""
-
-    # 兼容旧版单参数调用: get_node_ip <interface>
-    if [[ -z "$interface" && -n "$node" ]]; then
-        interface="$node"
-        node=""
-    fi
-
-    [[ -n "$interface" ]] || { printf '\n'; return; }
-
-    local cmd=""
-    if command -v ip >/dev/null 2>&1; then
-        cmd="ip -4 addr show ${interface} 2>/dev/null | awk '/inet / {print \$2}' | cut -d/ -f1 | head -n 1"
-    elif command -v ifconfig >/dev/null 2>&1; then
-        cmd="ifconfig ${interface} 2>/dev/null | awk '/inet / {print \$2}' | head -n 1"
+    local node="" interface=""
+    if [[ $# -eq 1 ]]; then
+        interface="$1"
     else
-        printf '\n'
-        return
+        node="$1"; interface="$2"
+    fi
+    [[ -n "$interface" ]] || { echo; return; }
+
+    # 构造获取 IP 的命令
+    local cmd
+    if command -v ip >/dev/null 2>&1; then
+        printf -v cmd 'ip -4 addr show %s 2>/dev/null | awk '"'"'/inet /{print $2}'"'"' | cut -d/ -f1 | head -1' "$interface"
+    elif command -v ifconfig >/dev/null 2>&1; then
+        printf -v cmd 'ifconfig %s 2>/dev/null | awk '"'"'/inet /{print $2}'"'"' | head -1' "$interface"
+    else
+        echo; return
     fi
 
+    local ip
     if [[ -z "$node" || "$node" == "$(hostname -s 2>/dev/null)" || "$node" == "$(hostname 2>/dev/null)" ]]; then
         ip=$(eval "$cmd")
     else
-        # shellcheck disable=SC2086,SC2029
         ip=$(ssh ${SSH_OPTS:-} "$(ssh_target "$node")" "$cmd" 2>/dev/null)
     fi
     printf '%s\n' "${ip:-}"
@@ -372,11 +332,9 @@ get_node_ip() {
 
 # 自动探测默认网卡
 get_default_nic() {
-    local nic=""
     if command -v ip >/dev/null 2>&1; then
-        nic=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
+        ip route 2>/dev/null | awk '/default/ {print $5; exit}'
     fi
-    printf "%s" "${nic:-}"
 }
 
 # 获取本机指定网卡的 IP
@@ -389,64 +347,31 @@ get_local_ip() {
 # ------------------------------------------------------------------------------
 # 临时文件管理
 # ------------------------------------------------------------------------------
-# 创建临时目录并注册清理 trap
-# 用法: mktemp_dir → 输出路径; 全局变量 _TEMP_DIR 可用于 cleanup
+# 创建临时目录并注册 EXIT/INT/TERM 自动清理 trap
+# 用法: dir=$(mktemp_dir)
 mktemp_dir() {
     _TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/easyinfer.XXXXXX")
-    # shellcheck disable=SC2329
-    _tempdir_cleanup() { # invoked via trap below
-        local rc=$?
-        [[ -n "${_TEMP_DIR:-}" && -d "$_TEMP_DIR" ]] && rm -rf "$_TEMP_DIR"
-        exit "$rc"
-    }
-    trap _tempdir_cleanup EXIT INT TERM
+    trap 'rc=$?; rm -rf "$_TEMP_DIR"; exit $rc' EXIT INT TERM
     echo "$_TEMP_DIR"
 }
 
 # ------------------------------------------------------------------------------
-# vLLM 参数探测工具
+# vLLM 参数探测: 根据 vllm serve --help 选择支持的 flag
 # ------------------------------------------------------------------------------
+has_flag()    { [[ "$1" == *"$2"* ]]; }
 
-# 获取 vllm serve --help 输出
-vllm_help() {
-    vllm serve --help 2>/dev/null || true
-}
-
-# 检查 help_text 中是否包含指定 flag
-# 用法: has_flag <help_text> <flag>
-has_flag() {
-    local help_text="$1" flag="$2"
-    [[ "$help_text" == *"$flag"* ]]
-}
-
-# 从 help_text 中选择支持的 flag（优先使用 preferred，不存在则回退到 fallback）
-# 用法: choose_flag <help_text> <preferred> <fallback>
 choose_flag() {
-    local help_text="$1" preferred="$2" fallback="$3"
-    if [[ -n "$preferred" && "$help_text" == *"$preferred"* ]]; then
-        printf '%s' "$preferred"
-        return 0
-    fi
-    if [[ -n "$fallback" && "$help_text" == *"$fallback"* ]]; then
-        printf '%s' "$fallback"
-        return 0
-    fi
+    local help="$1" preferred="$2" fallback="$3"
+    [[ -n "$preferred" && "$help" == *"$preferred"* ]] && { printf '%s' "$preferred"; return 0; }
+    [[ -n "$fallback" && "$help" == *"$fallback"* ]]   && { printf '%s' "$fallback"; return 0; }
     printf '%s' "$preferred"
 }
-
-# ------------------------------------------------------------------------------
-# scripts 目录路径 (基于 common.sh 的位置)
-# ------------------------------------------------------------------------------
-SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC2034
-readonly SCRIPTS_ROOT
 
 # ------------------------------------------------------------------------------
 # 判断 IP 是否为本机
 # ------------------------------------------------------------------------------
 is_local_ip() {
-    local ip="$1"
-    local lip
+    local ip="$1" lip
     for lip in $(hostname -I 2>/dev/null || true); do
         [[ "$ip" == "$lip" ]] && return 0
     done
