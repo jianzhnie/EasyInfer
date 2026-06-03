@@ -185,18 +185,28 @@ INSIDE_CMD=""
 
 # NPUSlim source mount + editable install
 if [[ "$WITH_NPUSLIM" == true ]]; then
-    SRC_DIR="${NPUSLIM_SRC_PATH:-${SCRIPT_DIR}/npuslim}"
+    if [[ -z "$NPUSLIM_SRC_PATH" ]]; then
+        echo "ERROR: --npuslim requires a path, e.g. --npuslim=/path/to/npuslim"
+        exit 1
+    fi
 
-    if [ ! -d "$SRC_DIR" ] || [ ! -f "$SRC_DIR/pyproject.toml" ]; then
-        echo "ERROR: NPUSlim source not found or invalid: $SRC_DIR"
+    if [ ! -d "$NPUSLIM_SRC_PATH" ] || [ ! -f "$NPUSLIM_SRC_PATH/pyproject.toml" ]; then
+        echo "ERROR: NPUSlim source not found or invalid: $NPUSLIM_SRC_PATH"
         echo "Hint: use --npuslim=/path/to/npuslim"
         exit 1
     fi
 
-    DOCKER_ARGS+=(-v "${SRC_DIR}:/workspace/npuslim:rw")
-    INSIDE_CMD="git config --global --add safe.directory '*'; pip install --no-build-isolation --no-deps --root-user-action=ignore -e /workspace/npuslim -v; "
-    echo "NPUSlim source: ${SRC_DIR}"
+    echo "NPUSlim source: ${NPUSLIM_SRC_PATH}"
     echo "  (mounted to /workspace/npuslim, editable install on start)"
+
+    DOCKER_ARGS+=(-v "${NPUSLIM_SRC_PATH}:/workspace/npuslim:rw")
+    # Clean stale CMake build artifacts that break setuptools package discovery,
+    # then editable install (no --no-deps so loguru/rich are auto-installed).
+    INSIDE_CMD="git config --global --add safe.directory '*'; "
+    INSIDE_CMD+="rm -rf /workspace/npuslim/src/npuslim/ops/sparse_matmul/csrc/build; "
+    INSIDE_CMD+="NPUSLIM_SKIP_OPS=1 pip install --no-build-isolation --root-user-action=ignore -e /workspace/npuslim -v "
+    INSIDE_CMD+="&& python -c 'import npuslim; print(\"[NPUSlim] install verified OK\")' "
+    INSIDE_CMD+="|| { echo 'ERROR: npuslim install failed!'; exit 1; }; "
 fi
 
 if [[ "$DAEMON" == true ]]; then

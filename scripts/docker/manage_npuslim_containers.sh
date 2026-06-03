@@ -73,18 +73,8 @@ resolve_nodes "$@"
 RUN_CONTAINER="${SCRIPT_DIR}/run_npuslim_container.sh"
 [[ ! -f "$RUN_CONTAINER" ]] && log_fatal "启动脚本未找到: $RUN_CONTAINER"
 
-# NPUSlim 路径（主节点和工作节点可设不同路径）
-MASTER_NPUSLIM_PATH="${MASTER_NPUSLIM_PATH:-/home/jianzhnie/llmtuner/llm/npuslim}"
-WORKER_NPUSLIM_PATH="${WORKER_NPUSLIM_PATH:-/home/jianzhnie/llmtuner/llm/npuslim}"
-
-npuslim_path_for() {
-    local host="$1"
-    if [[ "$host" == "${RESOLVED_NODES[0]:-}" ]]; then
-        echo "$MASTER_NPUSLIM_PATH"
-    else
-        echo "$WORKER_NPUSLIM_PATH"
-    fi
-}
+# NPUSlim 路径（所有节点使用同一路径，通过环境变量 NPUSLIM_PATH 覆盖）
+NPUSLIM_PATH="${NPUSLIM_PATH:-/home/jianzhnie/llmtuner/llm/npuslim}"
 
 # ------------------------------------------
 # 命令实现
@@ -102,7 +92,7 @@ cmd_start() {
         echo "--- Starting on ${host} ---"
         local npuslim_arg=""
         if $WITH_NPUSLIM; then
-            npuslim_arg="--npuslim=$(npuslim_path_for "$host")"
+            npuslim_arg="--npuslim=${NPUSLIM_PATH}"
         fi
         # shellcheck disable=SC2086
         ssh_run "$host" "bash ${RUN_CONTAINER} --multi-node --daemon ${npuslim_arg}"
