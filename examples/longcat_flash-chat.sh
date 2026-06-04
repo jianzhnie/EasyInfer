@@ -19,12 +19,11 @@ set -euo pipefail
 export VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-"INFO"}
 
 # --- 模型路径 ---
-MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24}"
 # MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/fdd/workspace/models/meituan-longcat/LongCat-Flash-Chat-expanded}"
 
 # --- 并行度 ---
-TENSOR_PARALLEL_SIZE=64        # TP: 显存切分 + 计算切分
-# DP/PP 不设则默认 1
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-64}"         # TP: 单层显存切分
 
 # --- 服务配置 ---
 HOST=${HOST:-"0.0.0.0"}
@@ -40,7 +39,7 @@ MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-"8192"}
 
 # 前置检查
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
-[[ -e "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
+[[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../scripts/common.sh
@@ -54,7 +53,6 @@ log_info "============================================"
 log_info " LongCat-Flash-Chat vLLM Deployment"
 log_info " Model:          ${MODEL_PATH}"
 log_info " TP:             ${TENSOR_PARALLEL_SIZE}"
-log_info " Total GPUs:     128"
 log_info " Host:           ${HOST}:${PORT}"
 log_info " Max Model Len:  ${MAX_MODEL_LEN}"
 log_info " Max Num Seqs:   ${MAX_NUM_SEQS}"

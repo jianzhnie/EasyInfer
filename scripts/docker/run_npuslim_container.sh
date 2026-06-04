@@ -203,7 +203,7 @@ if [[ "$WITH_NPUSLIM" == true ]]; then
     # Clean stale CMake build artifacts that break setuptools package discovery,
     # 清理 CMake 构建产物 + 跳过算子编译，然后 editable 安装
     INSIDE_CMD="git config --global --add safe.directory '*'; "
-    INSIDE_CMD+="pip install --no-build-isolation --no-deps --root-user-action=ignore -e /workspace/npuslim -v;"
+    INSIDE_CMD+="NPUSLIM_SKIP_OPS=1 pip install --no-build-isolation --no-deps --root-user-action=ignore -e /workspace/npuslim -v;"
 fi
 
 if [[ "$DAEMON" == true ]]; then

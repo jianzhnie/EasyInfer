@@ -26,22 +26,26 @@ source "${SCRIPT_DIR}/../scripts/common.sh"
 # ---------------------------------------------------------------------------
 # HF 缓存配置 — 指向本地数据目录，避免重复下载
 # ---------------------------------------------------------------------------
-export HF_HOME="${HF_HOME:-/llm_workspace_1P/robin/hfhub/cache}"
+export HF_HOME="${HF_HOME:-/home/jianzhnie/llmtuner/hfhub/cache}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
-export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
-export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
-export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+# export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+# export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 
 # ---------------------------------------------------------------------------
 # 评测参数
 # ---------------------------------------------------------------------------
-MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
-OUTPUT_DIR="${OUTPUT_DIR:-/llm_workspace_1P/robin/EasyInfer/output/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24}"
+OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Chat-1024E-512Zero-E-Topk24}"
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
-PORT="${PORT:-8080}"
-TASKS="${TASKS:-mmlu}"
+PORT="${PORT:-8000}"
+TASKS="${TASKS:-mmlu_pro}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
+MAX_GEN_TOKS="${MAX_GEN_TOKS:-256}"
+# 额外生成参数，通过 --gen-kwargs 透传给 lm_eval（与 --max-gen-toks 合并）
+# 注意：不要在此设置 max_tokens，会覆盖上面的 MAX_GEN_TOKS
+GEN_KWARGS_EXTRA="${GEN_KWARGS_EXTRA:-}"
 
 # math 500
 # hendrycks_math500,minerva_math500
@@ -52,11 +56,13 @@ BACKEND="${BACKEND:-api}"
 # ---------------------------------------------------------------------------
 log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
 
-bash tools/eval/run_lmeval.sh \
+bash /home/jianzhnie/llmtuner/llm/npuslim/tools/eval/run_lmeval.sh \
     --model-path "$MODEL_PATH" \
     --output-dir "$OUTPUT_DIR" \
     --model-name "${MODEL_NAME}" \
     --backend "$BACKEND" \
     --port "$PORT" \
     --tasks "$TASKS" \
-    --fewshot "$FEWSHOT"
+    --fewshot "$FEWSHOT" \
+    --max-gen-toks "$MAX_GEN_TOKS" \
+    ${GEN_KWARGS_EXTRA:+--gen-kwargs "$GEN_KWARGS_EXTRA"}
