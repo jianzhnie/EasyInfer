@@ -9,6 +9,32 @@ extend-exclude = [
     "*.ipynb",
 ]
 
+dependencies = [
+    "rich",
+    "loguru",
+    "datasets",
+    "accelerate",
+    "transformers<5.0.0",
+]
+
+[project.optional-dependencies]
+eval = [
+    "lm-eval[api]",
+    "evalscope[perf]",
+]
+vllm = [
+    "vllm",
+]
+npu = [
+    "vllm-ascend",
+]
+all = [
+    "lm-eval[api]",
+    "evalscope[perf]",
+    "vllm",
+    "vllm-ascend",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
