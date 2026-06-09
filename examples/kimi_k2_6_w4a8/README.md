@@ -111,7 +111,7 @@ nohup bash examples/kimi_k2_6_w4a8/vllm_server.sh > kimi_k2_6_w4a8_server.log 2>
 | `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (A2=8, A3=16) |
 | `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
 | `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (384 专家 MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
+| `DATA_PARALLEL_SIZE` | `4` | 数据并行度 (官方推荐 dp4tp4) |
 
 ### 内存与量化
 
@@ -119,16 +119,16 @@ nohup bash examples/kimi_k2_6_w4a8/vllm_server.sh > kimi_k2_6_w4a8_server.log 2>
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
 | `QUANTIZATION` | `ascend` | W4A8 Ascend 量化 |
-| `GPU_MEMORY_UTILIZATION` | `0.92` | NPU 显存利用率 |
+| `GPU_MEMORY_UTILIZATION` | `0.9` | NPU 显存利用率 |
 | `SWAP_SPACE` | `32` | CPU 交换空间 (GiB, 384 专家需较大空间) |
 
 ### 序列调度
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MAX_MODEL_LEN` | A2: 32768, A3: 131072 (自动) | 最大上下文长度 |
-| `MAX_NUM_SEQS` | A2: 8, A3: 16 (自动) | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `8192` | 每 step 最大 token 数 |
+| `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
+| `MAX_NUM_SEQS` | `64` | 最大并发请求数 |
+| `MAX_NUM_BATCHED_TOKENS` | `16384` | 每 step 最大 token 数 |
 | `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
 
 ### 华为 NPU 专用
@@ -136,17 +136,20 @@ nohup bash examples/kimi_k2_6_w4a8/vllm_server.sh > kimi_k2_6_w4a8_server.log 2>
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `200` | HCCL 缓冲区大小 (MB) |
+| `HCCL_BUFFSIZE` | `800` | HCCL 缓冲区大小 (MB, 单节点) |
+| `TASK_QUEUE_ENABLE` | `1` | 任务队列 |
 | `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
 | `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
 | `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
 | `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | 通信优化 |
+| `VLLM_ASCEND_ENABLE_MLAPO` | `1` | 融合算子 |
 
 ### 加速特性
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `PREFIX_CACHING` | `1` | 前缀缓存 |
+| `PREFIX_CACHING` | `0` | 禁用前缀缓存 (官方推荐) |
 | `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph (NPU 推荐) |
 | `NUM_SCHEDULER_STEPS` | `8` | 多步调度步数 |
 | `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 (W4A8 推荐) |

@@ -126,8 +126,8 @@ nohup bash examples/deepseek_v4_flash/vllm_server.sh > deepseek_v4_flash_server.
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SPECULATIVE_METHOD` | `deepseek_mtp` | 投机解码方法 (DeepSeek MTP) |
-| `SPECULATIVE_NUM_TOKENS` | `3` | 每次投机生成的 token 数 (推荐 3-5) |
+| `SPECULATIVE_METHOD` | `mtp` | 投机解码方法 (A2: `mtp`, A3/PD: `deepseek_mtp`) |
+| `SPECULATIVE_NUM_TOKENS` | `1` | 每次投机生成的 token 数 (A2 推荐 1) |
 
 ### 华为 NPU 专用
 
@@ -136,9 +136,14 @@ nohup bash examples/deepseek_v4_flash/vllm_server.sh > deepseek_v4_flash_server.
 | `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
 | `HCCL_BUFFSIZE` | `200` | HCCL 缓冲区大小 (MB) |
 | `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
+| `OMP_NUM_THREADS` | `8` | OpenMP 线程数 (A2: 8, A3: 10) |
 | `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配配置 |
 | `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+| `USE_MULTI_GROUPS_KV_CACHE` | `1` | KV Cache 分组 |
+| `USE_MULTI_BLOCK_POOL` | `1` | 多 Block Pool |
+| `ACL_OP_INIT_MODE` | `1` | 算子初始化模式 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | 通信优化 |
+| `LD_PRELOAD` | `/usr/lib/aarch64-linux-gnu/libjemalloc.so.2` | 内存分配器 |
 
 ### 加速特性
 
@@ -154,7 +159,7 @@ nohup bash examples/deepseek_v4_flash/vllm_server.sh > deepseek_v4_flash_server.
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `deepseek_v3` | 工具调用解析器 |
+| `TOOL_CALL_PARSER` | `deepseek_v4` | 工具调用解析器 (需同时设置 `--tokenizer-mode deepseek_v4` 和 `--reasoning-parser deepseek_v4`) |
 
 ## 并行策略推荐
 

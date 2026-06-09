@@ -56,10 +56,14 @@ export PORT="${PORT:-8000}"
 # ------------------------------------------------------------------------------
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND="${OMP_PROC_BIND:-false}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-200}"
 export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+export USE_MULTI_GROUPS_KV_CACHE="${USE_MULTI_GROUPS_KV_CACHE:-1}"
+export USE_MULTI_BLOCK_POOL="${USE_MULTI_BLOCK_POOL:-1}"
+export ACL_OP_INIT_MODE="${ACL_OP_INIT_MODE:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
 
 # ------------------------------------------------------------------------------
 # 并行配置 (DeepSeek V4 Flash MoE + MTP)
@@ -105,8 +109,9 @@ export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
 # 投机解码 (MTP - Multi-Token Prediction)
 # ------------------------------------------------------------------------------
 # DeepSeek V4 Flash 支持 MTP (num_nextn_predict_layers=1)
-export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-deepseek_mtp}"
-export SPECULATIVE_NUM_TOKENS="${SPECULATIVE_NUM_TOKENS:-3}"
+# A2 使用 method: "mtp"，A3/PD 使用 method: "deepseek_mtp"
+export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-mtp}"
+export SPECULATIVE_NUM_TOKENS="${SPECULATIVE_NUM_TOKENS:-1}"
 
 # ------------------------------------------------------------------------------
 # NPU 编译优化 (W8A8 量化)
@@ -125,7 +130,7 @@ export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"
 # 工具调用 (Claude Code 集成)
 # ------------------------------------------------------------------------------
 export ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
-export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseek_v3}"
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseek_v4}"
 
 # ------------------------------------------------------------------------------
 # 监控与日志
@@ -141,10 +146,14 @@ export RETRY_DELAY="${RETRY_DELAY:-10}"
 EXTRA_ARGS=(
     --seed 1024
     --trust-remote-code
+    --tokenizer-mode deepseek_v4
+    --reasoning-parser deepseek_v4
+    --block-size 128
+    --safetensors-load-strategy 'prefetch'
 )
 
 # 投机解码配置 (MTP)
-if [[ "$SPECULATIVE_METHOD" == "deepseek_mtp" ]]; then
+if [[ "$SPECULATIVE_METHOD" == "mtp" || "$SPECULATIVE_METHOD" == "deepseek_mtp" ]]; then
     EXTRA_ARGS+=(
         --speculative-config "{\"num_speculative_tokens\": $SPECULATIVE_NUM_TOKENS, \"method\": \"$SPECULATIVE_METHOD\"}"
     )

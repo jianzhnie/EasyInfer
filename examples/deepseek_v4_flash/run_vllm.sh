@@ -29,10 +29,15 @@ PP="${PP:-1}"
 # HCCL/NPU env
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND=false
-export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS=8
 export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+export USE_MULTI_GROUPS_KV_CACHE=1
+export USE_MULTI_BLOCK_POOL=1
+export ACL_OP_INIT_MODE=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
 
 echo "[INFO] Starting DeepSeek-V4-Flash W8A8 MTP"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
@@ -52,10 +57,14 @@ vllm serve "$MODEL_PATH" \
     --max-model-len 65536 \
     --max-num-seqs 16 \
     --max-num-batched-tokens 8192 \
+    --block-size 128 \
+    --safetensors-load-strategy 'prefetch' \
+    --tokenizer-mode deepseek_v4 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
     --enable-auto-tool-choice \
-    --tool-call-parser deepseek_v3 \
+    --tool-call-parser deepseek_v4 \
+    --reasoning-parser deepseek_v4 \
     --seed 1024 \
     "$@"

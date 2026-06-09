@@ -6,7 +6,7 @@
 
 | 模型 | 架构 | 量化 | 专家数 | MTP | 多模态 | 端口 | Tool Parser |
 |------|------|------|--------|-----|--------|------|-------------|
-| DeepSeek-V4-Flash | DeepseekV4 MoE + MLA | W8A8 | 256 | ✓ | ✗ | 8000 | deepseek_v3 |
+| DeepSeek-V4-Flash | DeepseekV4 MoE + MLA | W8A8 | 256 | ✓ | ✗ | 8000 | deepseek_v4 |
 | GLM-5 | GlmMoeDSA | W4A8 | 256 | ✓ | ✗ | 8001 | glm47 |
 | GLM-5.1 | GlmMoeDSA | W4A8 | 256 | ✓ | ✗ | 8002 | glm47 |
 | Kimi-K2.6 | KimiK25 (DeepSeekV3 + ViT) | W4A8 | 384 | ✗ | ✓ | 8003 | deepseek_v3 |
@@ -148,7 +148,7 @@ Kimi-K2.6 W4A8           1      8    1    8    1    低延迟         ⚠️ 未
 
 | 模型 | MTP 支持 | SPECULATIVE_METHOD | 推荐 tokens |
 |------|---------|-------------------|-------------|
-| DeepSeek-V4-Flash | ✓ | deepseek_mtp | 3 |
+| DeepSeek-V4-Flash | ✓ | `mtp` (A2) / `deepseek_mtp` (A3) | 1 (A2) / 1 (A3) |
 | GLM-5 | ✓ | deepseek_mtp | 3 |
 | GLM-5.1 | ✓ | deepseek_mtp | 3 |
 | Kimi-K2.6 | ✗ | (不配置) | N/A |
@@ -161,7 +161,8 @@ Tool parser 的选择取决于模型系列：
 
 | 模型系列 | Tool Parser | 原因 |
 |---------|------------|------|
-| DeepSeek V3/V4 | `deepseek_v3` | DeepSeek 系列使用自己的 tool call 格式 |
+| DeepSeek V3 | `deepseek_v3` | DeepSeek V3 系列使用自己的 tool call 格式 |
+| DeepSeek V4 | `deepseek_v4` | DeepSeek V4 使用 v4 专用 parser，同时需要 `--tokenizer-mode deepseek_v4` 和 `--reasoning-parser deepseek_v4` |
 | GLM-4/5 | `glm47` | GLM 系列使用 glm47 格式 |
 | Kimi-K2.6 | `deepseek_v3` | 基于 DeepSeek V3 骨干，使用 DeepSeek 格式 |
 | Qwen | `hermes` | Qwen 系列使用 Hermes 格式 |
@@ -174,14 +175,32 @@ Tool parser 的选择取决于模型系列：
 # 必须配置
 export HCCL_OP_EXPANSION_MODE="AIV"        # HCCL 操作优化
 export OMP_PROC_BIND="false"               # 禁用线程绑定
-export OMP_NUM_THREADS="1"                  # 减少 CPU 线程
 export HCCL_BUFFSIZE="200"                  # HCCL 缓冲区 (MB)
 export PYTORCH_NPU_ALLOC_CONF="expandable_segments:True"  # 内存分配
 export VLLM_ASCEND_BALANCE_SCHEDULING="1"   # 负载均衡
 
+# GLM 系列 (所有配置)
+export OMP_NUM_THREADS="1"                  # 减少 CPU 线程
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="1"   # 通信优化
+export VLLM_ASCEND_ENABLE_MLAPO="1"        # 融合算子 (W8A8 必需, W4A8 推荐)
+
+# DeepSeek V4 系列 (A2)
+export OMP_NUM_THREADS="8"                  # A2 推荐 8, A3 推荐 10
+export USE_MULTI_GROUPS_KV_CACHE="1"       # KV Cache 分组
+export USE_MULTI_BLOCK_POOL="1"            # 多 Block Pool
+export ACL_OP_INIT_MODE="1"                # 算子初始化模式
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="1"   # 通信优化
+export LD_PRELOAD="/usr/lib/aarch64-linux-gnu/libjemalloc.so.2"  # 内存分配器
+
+# Kimi-K2.5 系列
+export OMP_NUM_THREADS="1"
+export HCCL_BUFFSIZE="800"                  # 单节点 800, 多节点 1024
+export TASK_QUEUE_ENABLE="1"                # 任务队列
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="1"   # 通信优化
+export VLLM_ASCEND_ENABLE_MLAPO="1"        # 融合算子
+
 # 量化模型推荐 (W4A8/W8A8)
 export QUANTIZATION="ascend"               # vLLM-Ascend 专用量化标识
-export ENABLE_ASYNC_SCHEDULING="1"         # 异步调度
 export ENFORCE_EAGER="1"                   # 禁用 CUDA Graph
 
 # NPU 编译优化
@@ -272,8 +291,9 @@ Kimi-K2.6 的此值为 0，配置 MTP 会导致错误。
 
 ### 4. 量化与 MLAPO 的关系
 
-- W4A8: 不需要 MLAPO
-- W8A8: 可能需要 MLAPO (如 GLM-5 W8A8)，但 DeepSeek V4 Flash W8A8 暂不需要
+- W4A8: GLM W4A8 推荐启用 MLAPO 提升性能
+- W8A8: 必须启用 MLAPO (GLM-5/5.1 W8A8)
+- DeepSeek V4: 不需要 MLAPO，但需要 FlashComm1
 - 判断标准: 查阅对应模型的 vLLM-Ascend 官方文档
 
 ### 5. EP_SIZE 必须整除专家数
@@ -379,7 +399,7 @@ fi
 
 **根因**: `scripts/vllm/set_env.sh` 中引用 `/usr/local/Ascend/ascend-toolkit/set_env.sh`，但实际 CANN 安装在 `/usr/local/Ascend/cann/set_env.sh`。
 
-**修复**: 
+**修复**:
 - 更新 `scripts/vllm/set_env.sh` 优先尝试 `/usr/local/Ascend/cann/set_env.sh`
 - 创建 `run_vllm.sh` 简化部署脚本，通过 `set +u`/`set -u` 包裹 CANN source
 

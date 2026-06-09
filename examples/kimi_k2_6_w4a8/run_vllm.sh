@@ -21,16 +21,18 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8003}"
 TP="${TP:-8}"
 PP="${PP:-2}"
+DP="${DP:-1}"
 
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=200
+export HCCL_BUFFSIZE=800
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+export TASK_QUEUE_ENABLE=1
 
 echo "[INFO] Starting Kimi-K2.6 W4A8"
-echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
+echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
@@ -40,16 +42,20 @@ vllm serve "$MODEL_PATH" \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
+    --data-parallel-size "$DP" \
     --distributed-executor-backend ray \
     --enable-expert-parallel \
     --quantization ascend \
-    --gpu-memory-utilization 0.92 \
+    --gpu-memory-utilization 0.9 \
     --max-model-len 32768 \
-    --max-num-seqs 8 \
-    --max-num-batched-tokens 8192 \
+    --max-num-seqs 64 \
+    --max-num-batched-tokens 16384 \
     --enable-chunked-prefill \
-    --enable-prefix-caching \
+    --no-enable-prefix-caching \
     --enforce-eager \
+    --async-scheduling \
+    --allowed-local-media-path / \
+    --mm-encoder-tp-mode data \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v3 \
     --seed 1024 \

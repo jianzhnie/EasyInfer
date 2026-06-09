@@ -50,6 +50,8 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-200}"
 export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 
 # ------------------------------------------------------------------------------
 # 并行配置 (GLM-5.1 MoE, 256 专家)

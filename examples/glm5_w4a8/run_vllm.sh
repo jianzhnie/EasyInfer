@@ -29,6 +29,8 @@ export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export VLLM_ASCEND_ENABLE_MLAPO=1
 
 echo "[INFO] Starting GLM-5 W4A8"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
@@ -54,5 +56,6 @@ vllm serve "$MODEL_PATH" \
     --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"deepseek_mtp\"}" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
+    --async-scheduling \
     --seed 1024 \
     "$@"

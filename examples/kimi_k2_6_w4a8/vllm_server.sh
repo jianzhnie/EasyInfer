@@ -55,9 +55,12 @@ export PORT="${PORT:-8003}"
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND="${OMP_PROC_BIND:-false}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-200}"
+export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-800}"
 export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+export TASK_QUEUE_ENABLE="${TASK_QUEUE_ENABLE:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 
 # ------------------------------------------------------------------------------
 # 并行配置 (Kimi-K2.6 MoE, 384 专家)
@@ -93,21 +96,18 @@ if [[ -z "${MAX_MODEL_LEN:-}" ]]; then
     fi
 fi
 if [[ -z "${MAX_NUM_SEQS:-}" ]]; then
-    if [[ "${TENSOR_PARALLEL_SIZE:-8}" -ge 16 ]]; then
-        export MAX_NUM_SEQS=16
-    else
-        export MAX_NUM_SEQS=8
-    fi
+    export MAX_NUM_SEQS=64
 fi
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
-export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 export MAX_TOKENS_PER_SEQUENCE="${MAX_TOKENS_PER_SEQUENCE:-40000}"
 export CHAT_TEMPLATE_CONTENT_FORMAT="${CHAT_TEMPLATE_CONTENT_FORMAT:-string}"
 
 # ------------------------------------------------------------------------------
 # 加速特性
 # ------------------------------------------------------------------------------
-export PREFIX_CACHING="${PREFIX_CACHING:-1}"
+# Kimi-K2.5 官方示例使用 --no-enable-prefix-caching
+export PREFIX_CACHING="${PREFIX_CACHING:-0}"
 export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
 
@@ -148,6 +148,10 @@ export RETRY_DELAY="${RETRY_DELAY:-10}"
 EXTRA_ARGS=(
     --seed 1024
     --trust-remote-code
+    --no-enable-prefix-caching
+    --async-scheduling
+    --allowed-local-media-path /
+    --mm-encoder-tp-mode data
 )
 
 # 编译配置 (NPU 专用)
@@ -167,6 +171,6 @@ echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP
 echo "[INFO] Quant:     W4A8 (ascend), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
 echo "[INFO] Features:  MoE (384 experts), Vision (multimodal), Async Scheduling"
-echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB"
+echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB, TASK_QUEUE=$TASK_QUEUE_ENABLE"
 
 exec bash "$VLLM_SCRIPT" "${EXTRA_ARGS[@]}" "$@"

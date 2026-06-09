@@ -43,8 +43,10 @@
 
 | 节点数 | 配置 | 推荐上下文 |
 |--------|------|-----------|
-| 2 节点 × 8 NPU | TP=8, DP=2 | 32k (高吞吐) |
-| 8 节点 × 8 NPU | TP=8, PP=8 / DP=8 | 200k |
+| 2 节点 × 8 NPU | TP=16, DP=1 | 32k (大TP跨节点) |
+| 8 节点 × 8 NPU | TP=64, DP=1 | 200k |
+
+> **注意**: GLM-5.1 不支持 Pipeline Parallelism (PP)，多节点部署应使用更大的 TP 值跨节点。
 
 ## 快速开始
 
@@ -75,7 +77,7 @@ bash examples/glm5_1_w4a8/vllm_server.sh
 ### 多节点部署 (8 节点 × 8 NPU)
 
 ```bash
-PIPELINE_PARALLEL_SIZE=8 DATA_PARALLEL_SIZE=8 \
+TENSOR_PARALLEL_SIZE=64 DATA_PARALLEL_SIZE=1 \
 MAX_MODEL_LEN=131072 \
 bash examples/glm5_1_w4a8/vllm_server.sh
 ```
@@ -141,6 +143,8 @@ nohup bash examples/glm5_1_w4a8/vllm_server.sh > glm5_1_w4a8_server.log 2>&1 &
 | `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
 | `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
 | `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | 通信优化 |
+| `VLLM_ASCEND_ENABLE_MLAPO` | `1` | 融合算子 (W8A8 必需, W4A8 推荐) |
 
 ### 加速特性
 
@@ -170,10 +174,12 @@ nohup bash examples/glm5_1_w4a8/vllm_server.sh > glm5_1_w4a8_server.log 2>&1 &
 场景               TP   PP   EP   DP   MAX_MODEL_LEN
 ─────────────────────────────────────────────────────
 低延迟 (单节点)     8    1    8    1    32768
-均衡 (2 节点)       8    1    8    2    65536
-高吞吐 (4 节点)     8    1    8    4    65536
-长上下文 (8 节点)   8    8    8    1    200000
+均衡 (2 节点)       16   1    16   1    65536
+高吞吐 (4 节点)     32   1    32   1    65536
+长上下文 (8 节点)   64   1    64   1    200000
 ```
+
+> GLM-5.1 不支持 PP，多节点时使用大 TP 跨节点。
 
 ## 功能验证
 
