@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — Agent-Optimized vLLM Deployment with Max Context
+# GLM-5.1 W4A8 — Agent-Optimized vLLM Deployment with Max Context (No MTP)
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
 # Max Position: 202752 | Deploy: 128K context (override with MAX_MODEL_LEN)
 #
-# GLM-5.1 不支持 Pipeline Parallelism (PP)，使用大 TP 跨节点部署
+# GLM-5.1 不支持 Pipeline Parallelism (PP)，使用大 TP 跨节点部署 (No MTP)
 # 默认 TP=16 PP=1 (2节点 × 8 NPU); 单节点: TP=8 PP=1
 #
 # Agent Optimization:
@@ -24,7 +24,7 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}" (No MTP)
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8002}"
 TP="${TP:-16}"
@@ -44,7 +44,7 @@ export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment"
+echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment" (No MTP)
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
@@ -69,7 +69,7 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"deepseek_mtp\"}" \
+    # No MTP (saves memory for single-node deployment)
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --seed 1024 \
