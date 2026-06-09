@@ -319,3 +319,74 @@ examples/
 3. **Kimi-K2.6 多模态**: 确认 Vision Transformer 在 vLLM-Ascend 上的加载和推理是否正常
 4. **MTP 加速效果**: 实际测量各模型启用 MTP 后的 decode 加速比
 5. **多节点 Ray 通信**: 确认 8 节点间的 HCCL 网络配置和 NCCL/HCCL 性能
+
+---
+
+## 部署实操记录 (2026-06-09)
+
+### 环境配置
+
+| 项目 | 详情 |
+|------|------|
+| 集群 | 8 节点 × 8 NPU (Atlas 800 A2/A3) |
+| 容器 | `npuslim-env` (image: ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0) |
+| CANN | 8.5.1, 路径: `/usr/local/Ascend/cann/` |
+| Ray | 每个模型独立 2 节点 Ray 集群 |
+
+### 已修复的 Bug
+
+#### Bug 1: `common.sh` readonly 变量重复 source 错误
+
+**现象**: 当 `common.sh` 被多次 source 时，报错 `RED: readonly variable`
+
+**根因**: `common.sh` 第 9 行和第 13 行直接用 `readonly VAR=value` 声明，第二次 source 时变量已为只读导致失败。
+
+**修复**: 改为条件声明：
+```bash
+if ! declare -p RED &>/dev/null 2>&1; then
+    readonly RED='\033[0;31m' ...
+fi
+```
+
+**影响文件**: `scripts/common.sh`
+
+#### Bug 2: CANN 环境路径错误
+
+**现象**: `libascend_hal.so: cannot open shared object file`
+
+**根因**: `scripts/vllm/set_env.sh` 中引用 `/usr/local/Ascend/ascend-toolkit/set_env.sh`，但实际 CANN 安装在 `/usr/local/Ascend/cann/set_env.sh`。
+
+**修复**: 
+- 更新 `scripts/vllm/set_env.sh` 优先尝试 `/usr/local/Ascend/cann/set_env.sh`
+- 创建 `run_vllm.sh` 简化部署脚本，通过 `set +u`/`set -u` 包裹 CANN source
+
+**影响文件**: `scripts/vllm/set_env.sh`, 所有 `examples/*/run_vllm.sh`
+
+#### Bug 3: CANN set_env.sh 与 bash `set -u` 不兼容
+
+**现象**: `/usr/local/Ascend/cann/set_env.sh: line 31: CMAKE_PREFIX_PATH: unbound variable`
+
+**根因**: CANN 的 `set_env.sh` 脚本引用了未设置的变量（如 `CMAKE_PREFIX_PATH`, `ZSH_VERSION`），与 `set -u` (nounset) 冲突。
+
+**修复**: 在 source CANN 脚本前临时 `set +u`，source 后恢复 `set -u`
+
+### 简化部署方案
+
+为了解决包装器链 (`vllm_server.sh` → `vllm_model_server.sh`) 过于复杂的问题，为每个模型创建了 `run_vllm.sh` 脚本，直接调用 `vllm serve`：
+
+```
+examples/
+├── deepseek_v4_flash/run_vllm.sh   # TP=8 PP=2, MTP, W8A8
+├── glm5_w4a8/run_vllm.sh           # TP=8 PP=2, MTP, W4A8
+├── glm5_1_w4a8/run_vllm.sh         # TP=8 PP=2, MTP, W4A8
+└── kimi_k2_6_w4a8/run_vllm.sh      # TP=8 PP=2, no MTP, W4A8
+```
+
+### 节点分区
+
+| 模型 | Head 节点 | Worker 节点 | 端口 |
+|------|----------|------------|------|
+| DeepSeek-V4-Flash | 10.16.201.229 | 10.16.201.164 | 8000 |
+| GLM-5-w4a8 | 10.16.201.40 | 10.16.201.163 | 8001 |
+| GLM-5.1-w4a8 | 10.16.201.193 | 10.16.201.201 | 8002 |
+| Kimi-K2.6-w4a8 | 10.16.201.153 | 10.16.201.124 | 8003 |
