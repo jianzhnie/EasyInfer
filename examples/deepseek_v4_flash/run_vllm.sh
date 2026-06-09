@@ -3,7 +3,18 @@
 # DeepSeek-V4-Flash W8A8 MTP — 直接 vllm serve 部署
 # TP=8, PP=2, Ray backend, 2 nodes
 # =============================================================================
-set -euo pipefail
+set -eo pipefail
+
+# Load Ascend CANN environment (required for libascend_hal.so)
+# CANN scripts reference unset vars; disable nounset during source
+set +u
+if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
+    source /usr/local/Ascend/cann/set_env.sh
+fi
+if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+set -u
 
 MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp}"
 HOST="${HOST:-0.0.0.0}"
