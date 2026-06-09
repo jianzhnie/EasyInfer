@@ -51,7 +51,6 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"deepseek_mtp\"}" \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v3 \
     --seed 1024 \

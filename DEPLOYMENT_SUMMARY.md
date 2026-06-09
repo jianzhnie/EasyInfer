@@ -390,3 +390,43 @@ examples/
 | GLM-5-w4a8 | 10.16.201.40 | 10.16.201.163 | 8001 |
 | GLM-5.1-w4a8 | 10.16.201.193 | 10.16.201.201 | 8002 |
 | Kimi-K2.6-w4a8 | 10.16.201.153 | 10.16.201.124 | 8003 |
+
+#### Bug 4: 新模型 type 不被 transformers 识别
+
+**现象**: 所有模型报 `Value error, The checkpoint you are trying to load has model type 'deepseek_v4'/'glm_moe_dsa' but Transformers does not recognize this architecture`
+
+**根因**: transformers 4.57.6 内置注册表不包含这些新架构的 model_type，模型目录中又缺少 `auto_map` 配置和自定义 Python 配置文件。
+
+**修复**:
+1. 为每个模型创建 minimal `configuration_<type>.py` 文件，定义 `PretrainedConfig` 子类
+2. 在 `config.json` 中添加 `auto_map` 指向自定义配置类
+
+```python
+# configuration_glm_moe_dsa.py
+from transformers import PretrainedConfig
+class GlmMoeDsaConfig(PretrainedConfig):
+    model_type = "glm_moe_dsa"
+```
+
+```json
+// config.json 添加
+"auto_map": {"AutoConfig": "configuration_glm_moe_dsa.GlmMoeDsaConfig"}
+```
+
+**影响文件**: 模型目录中的 `config.json` 和新建的 `configuration_*.py`
+
+#### Bug 5: `--num-scheduler-steps` 参数不被支持
+
+**现象**: `vllm: error: unrecognized arguments: --num-scheduler-steps`
+
+**根因**: vLLM-Ascend 0.18.0rc1 版本不支持此参数。
+
+**修复**: 从 `run_vllm.sh` 中移除 `--num-scheduler-steps`
+
+#### Bug 6: Tool parser 命名错误
+
+**现象**: `KeyError: 'invalid tool call parser: deepseekv3'`
+
+**根因**: 正确的 parser 名称应为 `deepseek_v3`（下划线分隔），而非 `deepseekv3`
+
+**修复**: `sed -i 's/deepseekv3/deepseek_v3/g'`
