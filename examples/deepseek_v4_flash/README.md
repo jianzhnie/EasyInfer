@@ -1,5 +1,10 @@
 # DeepSeek-V4-Flash W8A8 MTP 部署指南
 
+> ⚠️ **兼容性警告**: vLLM-Ascend 0.18.0rc1 **不支持** `DeepseekV4ForCausalLM` 架构。
+> 引擎初始化会失败 (`Engine core initialization failed`)。
+> 需要升级到支持 DeepSeek V4 的 vLLM-Ascend 版本。
+> 临时方案: 使用 `run_vllm.sh`（已将 architectures 改为 `DeepseekV32ForCausalLM`，但可能仍不兼容）。
+
 本文档提供 DeepSeek-V4-Flash W8A8 MTP 模型在华为昇腾 NPU 环境下的部署指南。
 
 ## 模型简介
@@ -149,7 +154,7 @@ nohup bash examples/deepseek_v4_flash/vllm_server.sh > deepseek_v4_flash_server.
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `deepseekv3` | 工具调用解析器 |
+| `TOOL_CALL_PARSER` | `deepseek_v3` | 工具调用解析器 |
 
 ## 并行策略推荐
 

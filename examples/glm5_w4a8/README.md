@@ -1,5 +1,8 @@
 # GLM-5 W4A8 部署指南
 
+> ✅ **部署验证**: 已在 vLLM-Ascend 0.18.0rc1 + CANN 8.5.1 环境成功部署。
+> 配置: TP=16 PP=1 (2节点), Ray backend. 端口 8001.
+
 本文档提供 GLM-5 W4A8 量化模型在华为昇腾 NPU 环境下的部署指南。
 
 ## 模型简介
@@ -44,6 +47,42 @@
 ## 快速开始
 
 ### 前置条件
+
+1. **tokenizer 配置修复** (模型目录缺少自定义 tokenizer 代码):
+```bash
+# 修复 tokenizer_config.json（如已修复可跳过）
+python3 -c "
+import json
+with open('tokenizer_config.json') as f:
+    cfg = json.load(f)
+cfg.pop('extra_special_tokens', None)
+cfg['tokenizer_class'] = 'PreTrainedTokenizerFast'
+with open('tokenizer_config.json', 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
+```
+
+2. **config.json 修复** (模型目录缺少 `auto_map`):
+```bash
+python3 -c "
+import json
+with open('config.json') as f:
+    cfg = json.load(f)
+cfg['auto_map'] = {'AutoConfig': 'configuration_glm_moe_dsa.GlmMoeDsaConfig'}
+with open('config.json', 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
+```
+
+3. 创建 `configuration_glm_moe_dsa.py`:
+```python
+from transformers import PretrainedConfig
+class GlmMoeDsaConfig(PretrainedConfig):
+    model_type = "glm_moe_dsa"
+    tokenizer_class = "PreTrainedTokenizerFast"
+```
+
+### 启动容器和 Ray
 
 ```bash
 # 1. 启动 NPU Docker 容器

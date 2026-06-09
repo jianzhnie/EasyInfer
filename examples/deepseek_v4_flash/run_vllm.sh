@@ -1,7 +1,11 @@
 #!/bin/bash
 # =============================================================================
 # DeepSeek-V4-Flash W8A8 MTP — 直接 vllm serve 部署
-# TP=8, PP=2, Ray backend, 2 nodes
+# ⚠️ 注意: vLLM-Ascend 0.18.0rc1 不支持 DeepseekV4ForCausalLM 架构。
+# 本脚本已将 architectures 改为 DeepseekV32ForCausalLM 作为临时方案，
+# 但引擎初始化仍可能失败（模型属性不兼容）。
+# 需要升级 vLLM-Ascend 到支持 DeepSeek V4 的版本后才能正常使用。
+# 默认 TP=8 PP=1 (单节点)
 # =============================================================================
 set -eo pipefail
 
@@ -20,7 +24,7 @@ MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/DeepSee
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 TP="${TP:-8}"
-PP="${PP:-2}"
+PP="${PP:-1}"
 
 # HCCL/NPU env
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"

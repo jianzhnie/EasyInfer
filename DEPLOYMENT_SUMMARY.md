@@ -6,10 +6,10 @@
 
 | 模型 | 架构 | 量化 | 专家数 | MTP | 多模态 | 端口 | Tool Parser |
 |------|------|------|--------|-----|--------|------|-------------|
-| DeepSeek-V4-Flash | DeepseekV4 MoE + MLA | W8A8 | 256 | ✓ | ✗ | 8000 | deepseekv3 |
+| DeepSeek-V4-Flash | DeepseekV4 MoE + MLA | W8A8 | 256 | ✓ | ✗ | 8000 | deepseek_v3 |
 | GLM-5 | GlmMoeDSA | W4A8 | 256 | ✓ | ✗ | 8001 | glm47 |
 | GLM-5.1 | GlmMoeDSA | W4A8 | 256 | ✓ | ✗ | 8002 | glm47 |
-| Kimi-K2.6 | KimiK25 (DeepSeekV3 + ViT) | W4A8 | 384 | ✗ | ✓ | 8003 | deepseekv3 |
+| Kimi-K2.6 | KimiK25 (DeepSeekV3 + ViT) | W4A8 | 384 | ✗ | ✓ | 8003 | deepseek_v3 |
 
 ## 架构分析
 
@@ -35,6 +35,7 @@ config.json 关键参数:
 - 尽管如此，仍保持 256 专家和 1M 上下文窗口
 - W8A8 量化比 W4A8 精度更高，但显存占用约 2x
 - head_dim=512 是独特的，大多数模型使用 64-256
+- ⚠️ **vLLM-Ascend 0.18.0rc1 不支持此架构**（见下方部署结果）
 
 ### 2. GLM-5-w4a8 / GLM-5.1-w4a8
 
@@ -104,20 +105,24 @@ config.json 关键参数:
 ### 各模型推荐配置
 
 ```
-模型                   节点数   TP   PP   EP   DP   适用场景
-──────────────────────────────────────────────────────────
-DeepSeek-V4-Flash W8A8   1      8    1    8    1    低延迟
-                         2      8    2    8    1    均衡
-                         8      8    8    8    1    长上下文 (256k+)
+模型                   节点数   TP   PP   EP   DP   适用场景       状态
+──────────────────────────────────────────────────────────────────────
+DeepSeek-V4-Flash W8A8   1      8    1    8    1    低延迟         ❌ 架构不支持
+                         2     16    1    8    1    均衡           ❌ (待升级 vLLM)
+                         8     64    1    8    1    长上下文       ❌
 
-GLM-5/5.1 W4A8           1      8    1    8    1    低延迟
-                         2      8    1    8    2    高吞吐
-                         8      8    8    8    1    长上下文 (200k)
+GLM-5/5.1 W4A8           1      8    1    8    1    低延迟         ✅ 已验证
+                         2     16    1    8    1    多节点大TP     ✅ 已验证 (TP=16)
+                         4     32    1    8    1    大TP           ⚠️ 未测试
 
-Kimi-K2.6 W4A8           1      8    1    8    1    低延迟
-                         2      8    2    8    1    均衡
-                         8      8    8    8    1    长上下文 (262k)
+Kimi-K2.6 W4A8           1      8    1    8    1    低延迟         ⚠️ 未测试
+                         2      8    2    8    1    均衡           ✅ 已验证 (PP=2)
+                         8      8    8    8    1    长上下文       ⚠️ 未测试
 ```
+
+> **重要**: GLM-5/5.1 **不支持 Pipeline Parallelism (PP>1)**。多节点部署时必须使用更大的 TP 值
+> (如 2 节点 TP=16, 4 节点 TP=32)，而非 PP。
+> Kimi-K2.6 是 4 个模型中唯一支持 PP 的。
 
 ### EP 与专家数整除性
 
@@ -156,9 +161,9 @@ Tool parser 的选择取决于模型系列：
 
 | 模型系列 | Tool Parser | 原因 |
 |---------|------------|------|
-| DeepSeek V3/V4 | `deepseekv3` | DeepSeek 系列使用自己的 tool call 格式 |
+| DeepSeek V3/V4 | `deepseek_v3` | DeepSeek 系列使用自己的 tool call 格式 |
 | GLM-4/5 | `glm47` | GLM 系列使用 glm47 格式 |
-| Kimi-K2.6 | `deepseekv3` | 基于 DeepSeek V3 骨干，使用 DeepSeek 格式 |
+| Kimi-K2.6 | `deepseek_v3` | 基于 DeepSeek V3 骨干，使用 DeepSeek 格式 |
 | Qwen | `hermes` | Qwen 系列使用 Hermes 格式 |
 
 ## 华为 NPU 特有配置
@@ -192,9 +197,19 @@ export MULTISTREAM_OVERLAP_SHARED_EXPERT="true"
 
 ```bash
 #!/bin/bash
-set -euo pipefail
+set -eo pipefail  # 注意: 不用 set -u，CANN set_env.sh 与 nounset 不兼容
 
-# 1. 路径推导
+# 1. CANN 环境加载 (必须在其他操作之前)
+set +u  # CANN 脚本引用未定义变量
+if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
+    source /usr/local/Ascend/cann/set_env.sh
+fi
+if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+set -u
+
+# 2. 路径推导
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
 
@@ -293,32 +308,40 @@ MoE 模型的专家并行大小必须能整除专家总数，否则会报错：
 ```
 examples/
 ├── deepseek_v4_flash/
-│   ├── vllm_server.sh      ← 部署脚本 (W8A8 + MTP)
+│   ├── vllm_server.sh      ← 包装器部署 (❌ 架构不兼容)
+│   ├── run_vllm.sh          ← 直接 vllm serve (❌)
 │   ├── curl_test.sh         ← API 测试
 │   └── README.md            ← 部署文档
 ├── glm5_w4a8/
-│   ├── vllm_server.sh      ← 部署脚本 (W4A8 + MTP)
+│   ├── vllm_server.sh      ← 包装器部署
+│   ├── run_vllm.sh          ← 直接 vllm serve (✅ TP=8 PP=1)
 │   ├── curl_test.sh         ← API 测试
 │   └── README.md            ← 部署文档
 ├── glm5_1_w4a8/
-│   ├── vllm_server.sh      ← 部署脚本 (W4A8 + MTP)
+│   ├── vllm_server.sh      ← 包装器部署
+│   ├── run_vllm.sh          ← 直接 vllm serve (✅ TP=8 PP=1)
 │   ├── curl_test.sh         ← API 测试
 │   └── README.md            ← 部署文档
 └── kimi_k2_6_w4a8/
-    ├── vllm_server.sh      ← 部署脚本 (W4A8, 无 MTP, 多模态)
+    ├── vllm_server.sh      ← 包装器部署
+    ├── run_vllm.sh          ← 直接 vllm serve (✅ TP=8 PP=2)
     ├── curl_test.sh         ← API 测试
     └── README.md            ← 部署文档
 ```
 
 ## 待验证事项
 
-以下项目需要在真实 NPU 集群上实际部署后才能确认：
+以下项目已确认或仍需验证：
 
-1. **DeepSeek-V4-Flash W8A8**: 确认 W8A8 是否需要 MLAPO，以及 1M 上下文在 64 NPU 上的实际可达长度
-2. **GLM-5.1 W4A8**: 确认与 GLM-5 的配置完全兼容，无特殊参数需求
-3. **Kimi-K2.6 多模态**: 确认 Vision Transformer 在 vLLM-Ascend 上的加载和推理是否正常
-4. **MTP 加速效果**: 实际测量各模型启用 MTP 后的 decode 加速比
-5. **多节点 Ray 通信**: 确认 8 节点间的 HCCL 网络配置和 NCCL/HCCL 性能
+| # | 事项 | 状态 | 说明 |
+|---|------|------|------|
+| 1 | DeepSeek-V4-Flash 架构兼容性 | ❌ 确认不兼容 | vLLM-Ascend 0.18.0rc1 不支持 |
+| 2 | GLM-5.1 与 GLM-5 配置兼容 | ✅ 确认 | 完全相同架构，部署参数通用 |
+| 3 | Kimi-K2.6 多模态加载 | ⚠️ 待验证 | 文本推理正常，视觉功能未测试 |
+| 4 | GLM 不支持 PP | ✅ 确认 | 使用大 TP 替代 PP 可行 |
+| 5 | MTP 加速效果 (GLM-5/5.1) | ⚠️ 待测量 | deepseek_mtp 正常工作 |
+| 6 | 多节点 TP=16 跨节点通信 | ✅ 确认 | 2 节点 TP=16 通过 Ray 正常 |
+| 7 | tokenizer 兼容性问题 | ✅ 确认 | GLM 需修复 tokenizer_config.json |
 
 ---
 
@@ -376,10 +399,10 @@ fi
 
 ```
 examples/
-├── deepseek_v4_flash/run_vllm.sh   # TP=8 PP=2, MTP, W8A8
-├── glm5_w4a8/run_vllm.sh           # TP=8 PP=2, MTP, W4A8
-├── glm5_1_w4a8/run_vllm.sh         # TP=8 PP=2, MTP, W4A8
-└── kimi_k2_6_w4a8/run_vllm.sh      # TP=8 PP=2, no MTP, W4A8
+├── deepseek_v4_flash/run_vllm.sh   # TP=8 PP=1, W8A8 (❌ 架构不兼容)
+├── glm5_w4a8/run_vllm.sh           # TP=8 PP=1, MTP, W4A8 (✅ 已验证)
+├── glm5_1_w4a8/run_vllm.sh         # TP=8 PP=1, MTP, W4A8 (✅ 已验证)
+└── kimi_k2_6_w4a8/run_vllm.sh      # TP=8 PP=2, no MTP, W4A8 (✅ 已验证)
 ```
 
 ### 节点分区
@@ -425,8 +448,59 @@ class GlmMoeDsaConfig(PretrainedConfig):
 
 #### Bug 6: Tool parser 命名错误
 
-**现象**: `KeyError: 'invalid tool call parser: deepseekv3'`
+**现象**: `KeyError: 'invalid tool call parser: deepseekv3' (chose from { deepseek_v3, deepseek_v31, ... })`
 
 **根因**: 正确的 parser 名称应为 `deepseek_v3`（下划线分隔），而非 `deepseekv3`
 
 **修复**: `sed -i 's/deepseekv3/deepseek_v3/g'`
+
+#### Bug 7: GLM tokenizer extra_special_tokens 类型错误
+
+**现象**: `AttributeError: 'list' object has no attribute 'keys'`
+
+**根因**: GLM-5/5.1 的 `tokenizer_config.json` 中 `extra_special_tokens` 是 list 类型，但 `PreTrainedTokenizerFast.__init__` 期望 dict 类型。
+
+**修复**: 从 `tokenizer_config.json` 中移除 `extra_special_tokens`，并显式设置 `tokenizer_class = "PreTrainedTokenizerFast"`
+
+#### Bug 8: GLM 不支持 Pipeline Parallelism
+
+**现象**: `NotImplementedError: Pipeline parallelism is not supported for this model. Supported models implement the SupportsPP interface.`
+
+**根因**: GLM-5/5.1 的 GlmMoeDsaForCausalLM 未实现 `SupportsPP` 接口。
+
+**修复**: 使用大 TP 跨节点部署替代 PP（如 TP=16 替代 TP=8,PP=2），或单节点 TP=8。Kimi-K2.6 支持 PP，不受影响。
+
+#### Bug 9: DeepSeek V4 Flash 架构不兼容 (未解决)
+
+**现象**: `RuntimeError: Engine core initialization failed. Failed core proc(s): {}`，根因为 `AttributeError: 'DeepseekV4Config' object has no attribute 'kv_lora_rank'`
+
+**根因**: vLLM-Ascend 0.18.0rc1 模型注册表中无 `DeepseekV4ForCausalLM`，且将 `architectures` 改为 `DeepseekV32ForCausalLM` 后，模型特定属性 (head_dim=512, q_lora_rank=1024) 与 DeepSeek V3/V32 Config 不兼容。
+
+**状态**: ❌ 未解决。需要升级 vLLM-Ascend 到支持 DeepSeek V4 的版本。
+
+#### Bug 10: `--speculative-config` with `deepseek_mtp` 不支持 (DeepSeek V4)
+
+**现象**: `NotImplementedError: Unsupported speculative method: 'mtp'`
+
+**根因**: vLLM-Ascend 0.18.0rc1 中 DeepSeek V4 架构不支持 `deepseek_mtp` 投机解码方法。
+
+**修复**: 从 DeepSeek V4 的 `run_vllm.sh` 中移除 `--speculative-config`。GLM 模型的 `deepseek_mtp` 正常工作。
+
+---
+
+## 部署最终结果 (2026-06-09)
+
+| 模型 | 状态 | 配置 | 耗时 | 备注 |
+|------|------|------|------|------|
+| **Kimi-K2.6** | ✅ 成功 | TP=8 PP=2 Ray 2节点 | ~20min | 唯一支持 PP 的模型 |
+| **GLM-5** | ✅ 成功 | TP=16 PP=1 Ray 2节点 | ~15min | 修复 tokenizer/config 后 |
+| **GLM-5.1** | ✅ 成功 | TP=16 PP=1 Ray 2节点 | ~15min | 修复 tokenizer/config 后 |
+| **DeepSeek V4 Flash** | ❌ 失败 | TP=8 PP=1 | N/A | 架构不支持 (Bug 9) |
+
+### API 验证结果
+
+```
+Kimi-K2.6: ✅ /v1/models  ✅ Chat  ✅ Streaming  ✅ Tool Calling
+GLM-5:     ✅ /v1/models  ✅ Chat  ✅ Streaming  (tool call 待测)
+GLM-5.1:   ✅ /v1/models  ✅ Chat  ✅ Streaming  (tool call 待测)
+```

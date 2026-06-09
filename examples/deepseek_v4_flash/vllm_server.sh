@@ -2,6 +2,8 @@
 # =============================================================================
 # DeepSeek-V4-Flash W8A8 MTP 部署示例 (华为 NPU 环境)
 # =============================================================================
+# ⚠️ 兼容性警告: vLLM-Ascend 0.18.0rc1 不支持 DeepseekV4ForCausalLM 架构。
+# 需要升级到支持 DeepSeek V4 的版本。参见 run_vllm.sh 了解直接部署方式。
 # 调用 vllm_model_server.sh 部署 DeepSeek-V4-Flash 模型
 # DeepSeek V4 采用 MoE 架构 + Multi-Token Prediction (MTP)，支持超长上下文
 #
@@ -123,7 +125,7 @@ export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"
 # 工具调用 (Claude Code 集成)
 # ------------------------------------------------------------------------------
 export ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
-export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseekv3}"
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseek_v3}"
 
 # ------------------------------------------------------------------------------
 # 监控与日志

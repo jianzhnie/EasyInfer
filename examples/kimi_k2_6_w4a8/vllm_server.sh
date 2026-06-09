@@ -131,8 +131,8 @@ export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"
 # 工具调用 (Claude Code 集成)
 # ------------------------------------------------------------------------------
 export ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
-# Kimi-K2.6 基于 DeepSeek V3 架构，使用 deepseekv3 tool parser
-export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseekv3}"
+# Kimi-K2.6 基于 DeepSeek V3 架构，使用 deepseek_v3 tool parser
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseek_v3}"
 
 # ------------------------------------------------------------------------------
 # 监控与日志

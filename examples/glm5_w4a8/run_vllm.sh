@@ -1,7 +1,8 @@
 #!/bin/bash
 # =============================================================================
 # GLM-5 W4A8 — 直接 vllm serve 部署
-# TP=8, PP=2, Ray backend, 2 nodes
+# GLM-5 不支持 Pipeline Parallelism (PP)，使用大 TP 跨节点部署
+# 默认 TP=8 PP=1 (单节点); 多节点用 TP=16 PP=1 (2节点)
 # =============================================================================
 set -eo pipefail
 
@@ -20,7 +21,7 @@ MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8001}"
 TP="${TP:-8}"
-PP="${PP:-2}"
+PP="${PP:-1}"
 
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND=false
