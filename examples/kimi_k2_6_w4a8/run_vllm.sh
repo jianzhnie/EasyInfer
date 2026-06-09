@@ -50,8 +50,7 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --num-scheduler-steps 8 \
     --enable-auto-tool-choice \
-    --tool-call-parser deepseekv3 \
+    --tool-call-parser deepseek_v3 \
     --seed 1024 \
     "$@"
