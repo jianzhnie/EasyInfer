@@ -1,0 +1,232 @@
+# GLM-5 W4A8 部署指南
+
+本文档提供 GLM-5 W4A8 量化模型在华为昇腾 NPU 环境下的部署指南。
+
+## 模型简介
+
+| 属性 | 值 |
+|------|-----|
+| **架构** | GLM MoE DSA (MoE + DeepSeek-style Attention) |
+| **路由专家** | 256 (+ 1 共享专家) |
+| **每 Token 激活专家** | 8 |
+| **隐藏维度** | 6144 |
+| **网络层数** | 78 |
+| **注意力头** | 64 (全 GQA) |
+| **原生上下文** | 202,752 |
+| **量化方式** | W4A8 (4-bit 权重 + 8-bit 激活) |
+| **投机解码** | MTP (Multi-Token Prediction), 1 nextn layer |
+| **词表大小** | 154,880 |
+
+## 官方文档参考
+
+- GLM-5 官方部署文档: https://docs.vllm.ai/projects/ascend/en/v0.18.0/tutorials/models/GLM5.html
+
+## 模型权重
+
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8`
+
+## 硬件要求
+
+### 单节点部署
+
+| 硬件 | 配置 | 推荐上下文 |
+|------|------|-----------|
+| Atlas 800 A2 (64G × 8) | W4A8, TP=8 | 32k |
+| Atlas 800 A3 (64G × 16) | W4A8, TP=16 | 200k |
+
+### 多节点部署
+
+| 节点数 | 配置 | 推荐上下文 |
+|--------|------|-----------|
+| 2 节点 × 8 NPU | TP=8, DP=2 | 32k (高吞吐) |
+| 8 节点 × 8 NPU | TP=8, PP=8 / DP=8 | 200k |
+
+## 快速开始
+
+### 前置条件
+
+```bash
+# 1. 启动 NPU Docker 容器
+bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
+
+# 2. 启动 Ray 集群
+bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
+```
+
+### 单节点 A2 部署 (8 卡, 默认)
+
+```bash
+cd /home/jianzhnie/llmtuner/llm/EasyInfer
+bash examples/glm5_w4a8/vllm_server.sh
+```
+
+### 单节点 A3 部署 (16 卡, 200k 上下文)
+
+```bash
+TENSOR_PARALLEL_SIZE=16 MAX_MODEL_LEN=200000 MAX_NUM_SEQS=8 \
+bash examples/glm5_w4a8/vllm_server.sh
+```
+
+### 多节点部署 (8 节点 × 8 NPU)
+
+```bash
+PIPELINE_PARALLEL_SIZE=8 DATA_PARALLEL_SIZE=8 \
+MAX_MODEL_LEN=131072 \
+bash examples/glm5_w4a8/vllm_server.sh
+```
+
+### 后台运行
+
+```bash
+nohup bash examples/glm5_w4a8/vllm_server.sh > glm5_w4a8_server.log 2>&1 &
+```
+
+## 环境变量说明
+
+### 基础配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8` | 模型权重路径 |
+| `SERVED_MODEL_NAME` | `glm-5` | API 中的模型名称 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `PORT` | `8001` | 监听端口 |
+
+### 并行配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (A2=8, A3=16) |
+| `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 (多节点时设为节点数) |
+| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
+| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
+
+### 内存与量化
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `DTYPE` | `bfloat16` | 计算数据类型 |
+| `QUANTIZATION` | `ascend` | W4A8 Ascend 量化 |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | NPU 显存利用率 (W4A8 可设较高) |
+| `SWAP_SPACE` | `16` | CPU 交换空间 (GiB) |
+
+### 序列调度
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MAX_MODEL_LEN` | A2: 32768, A3: 200000 (自动) | 最大上下文长度 |
+| `MAX_NUM_SEQS` | A2: 2, A3: 8 (自动) | 最大并发请求数 |
+| `MAX_NUM_BATCHED_TOKENS` | `4096` | 每 step 最大 token 数 |
+| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
+
+### 投机解码 (MTP)
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SPECULATIVE_METHOD` | `deepseek_mtp` | 投机解码方法 |
+| `SPECULATIVE_NUM_TOKENS` | `3` | 每次投机 token 数 (推荐 3-5) |
+
+### 华为 NPU 专用
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
+| `HCCL_BUFFSIZE` | `200` | HCCL 缓冲区大小 (MB) |
+| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
+| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
+| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
+| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+
+### 加速特性
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PREFIX_CACHING` | `1` | 前缀缓存 |
+| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph |
+| `NUM_SCHEDULER_STEPS` | `4` | 多步调度步数 |
+| `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 (W4A8 推荐) |
+| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
+| `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展优化 |
+| `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
+| `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
+
+### 工具调用
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
+| `TOOL_CALL_PARSER` | `glm47` | GLM 系列工具调用解析器 |
+
+## 并行策略推荐
+
+### 8 节点 × 8 NPU (64 卡) 环境
+
+```
+场景               TP   PP   EP   DP   MAX_MODEL_LEN
+─────────────────────────────────────────────────────
+低延迟 (单节点)     8    1    8    1    32768
+均衡 (2 节点)       8    1    8    2    65536
+高吞吐 (4 节点)     8    1    8    4    65536
+长上下文 (8 节点)   8    8    8    1    200000
+```
+
+## 性能调优
+
+### 低延迟场景
+- 单节点 A2/A3 部署
+- 减小 `MAX_NUM_SEQS` (如 2)
+- 启用 MTP 投机解码 (3 tokens)
+- 减小 `NUM_SCHEDULER_STEPS` (如 4)
+
+### 高吞吐场景
+- 增大 `MAX_NUM_SEQS` (如 8-16)
+- 启用 Chunked Prefill 和 Prefix Caching
+- 启用异步调度
+- 多节点数据并行 (增大 `DATA_PARALLEL_SIZE`)
+
+### 长上下文场景
+- A3 (16卡) 单节点: MAX_MODEL_LEN=200000
+- 多节点: 增大 PIPELINE_PARALLEL_SIZE
+- 提高 GPU_MEMORY_UTILIZATION (如 0.95)
+- 增大 MAX_NUM_BATCHED_TOKENS
+
+## 功能验证
+
+### 自动测试
+
+```bash
+bash examples/glm5_w4a8/curl_test.sh
+```
+
+### 手动测试
+
+```bash
+# 检查服务
+curl http://localhost:8001/v1/models
+
+# Chat Completion
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "glm-5",
+    "messages": [{"role": "user", "content": "你好，请介绍一下自己"}],
+    "max_tokens": 200
+  }'
+```
+
+## 常见问题
+
+### Q: GLM-5 和 GLM-5.1 有什么区别？
+A: GLM-5.1 是 GLM-5 的升级版，采用相同的模型架构，但改进了训练数据和后训练流程，推理和 agent 能力更强。部署配置完全相同。
+
+### Q: W4A8 量化是否支持异步调度？
+A: 是的，W4A8 量化模型推荐启用异步调度 (`ENABLE_ASYNC_SCHEDULING=1`) 以提升大规模推理效率。
+
+### Q: 如何选择 max_model_len？
+A:
+- A2 (8卡) W4A8: 推荐 32k
+- A3 (16卡) W4A8: 推荐 200k
+- 多节点: 根据 PP 节点数线性扩展
+
+### Q: 工具调用使用什么 parser？
+A: GLM 系列使用 `glm47` tool parser，支持 function calling 和 tool choice。
