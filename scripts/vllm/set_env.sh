@@ -47,8 +47,10 @@ export WAIT_TIME="${WAIT_TIME:-1}"
 # Ascend NPU 与底层环境配置
 # ------------------------------------------
 
-# 加载 Ascend Toolkit 环境
-if [[ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]]; then
+# 加载 Ascend CANN 环境（通过 symlink 或版本目录）
+if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
+    source /usr/local/Ascend/cann/set_env.sh
+elif [[ -f "/usr/local/Ascend/ascend-toolkit/set_env.sh" ]]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
 
