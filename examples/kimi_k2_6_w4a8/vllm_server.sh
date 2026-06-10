@@ -106,10 +106,11 @@ export CHAT_TEMPLATE_CONTENT_FORMAT="${CHAT_TEMPLATE_CONTENT_FORMAT:-string}"
 # ------------------------------------------------------------------------------
 # 加速特性
 # ------------------------------------------------------------------------------
-# Kimi-K2.5 官方示例使用 --no-enable-prefix-caching
-export PREFIX_CACHING="${PREFIX_CACHING:-0}"
+# Prefix caching 对 Agent 场景效果显著 (Claude Code 系统提示缓存复用)
+export PREFIX_CACHING="${PREFIX_CACHING:-1}"
 export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
-export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
+# 注意: --num-scheduler-steps 在 vLLM-Ascend 0.18.0rc1 不支持
+# export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
 
 # Kimi-K2.6 无 MTP (num_nextn_predict_layers=0)，不启用投机解码
 # export SPECULATIVE_METHOD="deepseek_mtp"  # 不适用
@@ -125,14 +126,18 @@ export MULTISTREAM_OVERLAP_SHARED_EXPERT="${MULTISTREAM_OVERLAP_SHARED_EXPERT:-t
 # ------------------------------------------------------------------------------
 # 异步调度 (W4A8 量化模型推荐)
 # ------------------------------------------------------------------------------
-export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"
+# 注意: --async-scheduling 不支持 Ray backend (仅 mp/external_launcher)
+# 注意: --num-scheduler-steps 在 vLLM-Ascend 0.18.0rc1 不支持
+# 异步调度已禁用 (Ray 兼容性)
+# export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-8}"
+# export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"  # Ray 不支持
 
 # ------------------------------------------------------------------------------
 # 工具调用 (Claude Code 集成)
 # ------------------------------------------------------------------------------
 export ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-1}"
-# Kimi-K2.6 基于 DeepSeek V3 架构，使用 deepseek_v3 tool parser
-export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-deepseek_v3}"
+# Kimi-K2.6 基于 DeepSeek V3 架构，使用 kimi_k2 tool parser (适配 Kimi tokenizer)
+export TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-kimi_k2}"
 
 # ------------------------------------------------------------------------------
 # 监控与日志
@@ -148,8 +153,7 @@ export RETRY_DELAY="${RETRY_DELAY:-10}"
 EXTRA_ARGS=(
     --seed 1024
     --trust-remote-code
-    --no-enable-prefix-caching
-    --async-scheduling
+    --enable-prefix-caching
     --allowed-local-media-path /
     --mm-encoder-tp-mode data
 )

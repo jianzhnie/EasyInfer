@@ -178,7 +178,7 @@ TASK_QUEUE_ENABLE=1              # Kimi 性能优化
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `PREFIX_CACHING` | `0` | 禁用前缀缓存 (官方推荐) |
+| `PREFIX_CACHING` | `1` | 前缀缓存 (Agent 优化) |
 | `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph (NPU 推荐) |
 | `NUM_SCHEDULER_STEPS` | `8` | 多步调度步数 |
 | `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 (W4A8 推荐) |
@@ -192,7 +192,7 @@ TASK_QUEUE_ENABLE=1              # Kimi 性能优化
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `deepseek_v3` | 基于 DeepSeek V3 架构，使用 deepseek_v3 parser |
+| `TOOL_CALL_PARSER` | `kimi_k2` | Kimi 工具调用解析器 (基于 DeepSeek V3 但适配 Kimi tokenizer) |
 
 
 ### Agent 优化

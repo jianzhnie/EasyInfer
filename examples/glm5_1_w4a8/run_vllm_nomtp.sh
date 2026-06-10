@@ -24,7 +24,7 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}" (No MTP)
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8002}"
 TP="${TP:-16}"
@@ -44,7 +44,7 @@ export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment" (No MTP)
+echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment (No MTP)"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"

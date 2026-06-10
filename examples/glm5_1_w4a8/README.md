@@ -196,7 +196,7 @@ VLLM_ASCEND_BALANCE_SCHEDULING=1
 | `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
 | `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
 | `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | 通信优化 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `0` | 通信优化 (GLM W4A8 必须为 0) |
 | `VLLM_ASCEND_ENABLE_MLAPO` | `1` | 融合算子 (W8A8 必需, W4A8 推荐) |
 
 ### 加速特性

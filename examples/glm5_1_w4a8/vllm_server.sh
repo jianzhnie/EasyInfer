@@ -50,7 +50,7 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-200}"
 export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
-export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-0}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 
 # ------------------------------------------------------------------------------
@@ -97,7 +97,8 @@ export CHAT_TEMPLATE_CONTENT_FORMAT="${CHAT_TEMPLATE_CONTENT_FORMAT:-string}"
 # ------------------------------------------------------------------------------
 export PREFIX_CACHING="${PREFIX_CACHING:-1}"
 export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
-export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-4}"
+# 注意: --num-scheduler-steps 在 vLLM-Ascend 0.18.0rc1 不支持
+# export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-4}"
 
 # ------------------------------------------------------------------------------
 # 投机解码 (MTP)
@@ -116,7 +117,8 @@ export MULTISTREAM_OVERLAP_SHARED_EXPERT="${MULTISTREAM_OVERLAP_SHARED_EXPERT:-t
 # ------------------------------------------------------------------------------
 # 异步调度
 # ------------------------------------------------------------------------------
-export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"
+# 注意: --async-scheduling 不支持 Ray backend (仅 mp/external_launcher)
+# export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"  # Ray 不支持
 
 # ------------------------------------------------------------------------------
 # 工具调用
