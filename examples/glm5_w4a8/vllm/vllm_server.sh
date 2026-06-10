@@ -111,7 +111,7 @@ export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 # ------------------------------------------------------------------------------
 # 投机解码 (MTP)
 # ------------------------------------------------------------------------------
-export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-deepseek_mtp}"
+export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-mtp}"
 export SPECULATIVE_NUM_TOKENS="${SPECULATIVE_NUM_TOKENS:-3}"
 
 # ------------------------------------------------------------------------------
@@ -150,7 +150,7 @@ EXTRA_ARGS=(
     --trust-remote-code
 )
 
-if [[ "$SPECULATIVE_METHOD" == "deepseek_mtp" ]]; then
+if [[ "$SPECULATIVE_METHOD" == "mtp" ]]; then
     EXTRA_ARGS+=(
         --speculative-config "{\"num_speculative_tokens\": $SPECULATIVE_NUM_TOKENS, \"method\": \"$SPECULATIVE_METHOD\"}"
     )

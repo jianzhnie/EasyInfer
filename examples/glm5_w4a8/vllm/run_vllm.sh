@@ -89,7 +89,7 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"deepseek_mtp\"}" \
+    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"mtp\"}" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --seed 1024 \

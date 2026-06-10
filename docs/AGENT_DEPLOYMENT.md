@@ -1,7 +1,7 @@
 # Agent-Optimized LLM Deployment on Ascend NPU Cluster
 
-> **Date**: 2026-06-09 | **Cluster**: 2×8 Ascend 910C (40 + 153) | **vLLM-Ascend**: 0.18.0rc1 | **CANN**: 8.5.1
-> **Status**: ✅ All 3 Models Deployed, Verified, and Claude Code Ready
+> **Date**: 2026-06-10 | **Cluster**: 1×8 Ascend 910C (Node 40 only) | **vLLM-Ascend**: 0.18.0 | **CANN**: 8.5.1
+> **Status**: ⚠️ GLM-5.1 Single-Node Deployed (32K) | ❌ Multi-Node Blocked by HCCL AICPU Bug | ❌ Kimi Single-Node OOM
 
 ---
 
@@ -25,9 +25,9 @@
 
 | # | Model | Architecture | Port | TP×PP | Context | MTP | Tool Parser | Max Seqs | Time | Status |
 |---|-------|-------------|------|-------|---------|-----|-------------|----------|------|--------|
-| 1 | **GLM-5** W4A8 | GlmMoeDSA / 256E / MLA | 8001 | 16×1 | **202,752** | ✅ deepseek_mtp | glm47 | 8 | ~12m | ✅ |
-| 2 | **GLM-5.1** W4A8 | GlmMoeDSA / 256E / MLA | 8002 | 16×1 | **202,752** | ✅ deepseek_mtp | glm47 | 8 | ~12m | ✅ |
-| 3 | **Kimi-K2.6** W4A8 | KimiK25 / 384E / MLA / Vision | 8003 | 8×2 | **262,144** | ❌ N/A | **kimi_k2** | 16 | ~15m | ✅ |
+| 1 | **GLM-5** W4A8 | GlmMoeDSA / 256E / MLA | 8001 | 16×1 | **202,752** | ✅ mtp | glm47 | 8 | ~12m | ❌ Multi-Node Blocked |
+| 2 | **GLM-5.1** W4A8 | GlmMoeDSA / 256E / MLA | 8002 | 8×1 | **32,768** | ❌ No MTP | glm47 | 4 | ~5m | ✅ Single-Node |
+| 3 | **Kimi-K2.6** W4A8 | KimiK25 / 384E / MLA / Vision | 8003 | 8×2 | **262,144** | ❌ N/A | **kimi_k2** | 16 | ~15m | ❌ NPU OOM / HCCL |
 
 **关键成果**:
 - 全部模型在 **max_position_embeddings** (原生最大上下文) 运行
@@ -135,14 +135,20 @@ MTP (Multi-Token Prediction) 会加载第二份模型权重，严重减少 KV ca
 ### 前置条件
 
 ```bash
-# 集群节点
-HEAD=10.16.201.40   # bms-luyao-0003, 8× Ascend 910C
-WORKER=10.16.201.153  # bms-004, 8× Ascend 910C
+# 当前工作集群 (2026-06-10)
+HEAD=10.16.201.40   # bms-luyao-0003, 8× Ascend 910C, 唯一正常工作节点
 
 # 容器镜像: ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0
 # 模型路径: /home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/
 
-# 排除节点: 10.16.201.163 (GCC 10.3.1 Triton kernel 编译 bug)
+# ⚠️ 排除节点:
+#   10.16.201.163 — Bug 1: GCC 10.3.1 Triton kernel 编译 bug
+#   10.16.201.164 — Bug 6: AICPU exception (chipId:2,3)
+#   10.16.201.229 — Bug 6: AICPU exception (chipId:3)
+#   10.16.201.153 — Bug 7: NPU 内存残留 (34.88/61 GiB free)
+#   10.16.201.124 — Bug 7: NPU 内存残留 (36.15/61 GiB free)
+#   10.16.201.193 — sglang-ascend-env 容器 (待切换)
+#   10.16.201.201 — sglang-ascend-env 容器 (待切换)
 ```
 
 ### Step 1: 清理并重启容器
@@ -154,52 +160,39 @@ done
 sleep 15
 ```
 
-### Step 2: 启动 Ray 集群
+### Step 2: 启动 Ray 集群 (单节点模式)
 
 ```bash
-# Head
+# 单节点 Ray (仅 head)
 ssh $HEAD "docker exec npuslim-env bash -c '
   source /usr/local/Ascend/cann/set_env.sh
   ray start --head --port=6379 --resources='\''{\"NPU\": 8}'\'' --num-gpus=8
 '"
-
 sleep 5
 
-# Worker
-ssh $WORKER "docker exec npuslim-env bash -c '
-  source /usr/local/Ascend/cann/set_env.sh
-  ray start --address=${HEAD}:6379 --resources='\''{\"NPU\": 8}'\'' --num-gpus=8
-'"
-
-sleep 5
-
-# 验证: 2 nodes, 16 NPU
+# 验证: 1 node, 8 NPU
 ssh $HEAD "docker exec npuslim-env ray status | grep -E 'NPU|Active'"
 ```
 
-### Step 3: 部署模型
+> ⚠️ 多节点 Ray 当前不可用 (Bug 6/7)，待修复后恢复下方多节点命令。
+
+### Step 3: 部署模型 (单节点已验证)
 
 ```bash
-# === GLM-5 (Port 8001) ===
-ssh $HEAD 'docker exec npuslim-env bash -c "
-> /tmp/vllm_glm5.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_1_w4a8/vllm
-MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8001 MODEL_PATH=/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8 nohup bash run_vllm.sh >> /tmp/vllm_glm5.log 2>&1 &
-"'
-
-# === GLM-5.1 (Port 8002) ===
+# === GLM-5.1 (Port 8002, 单节点已验证 ✅) ===
 ssh $HEAD 'docker exec npuslim-env bash -c "
 > /tmp/vllm_glm51.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_1_w4a8/vllm
-MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8002 nohup bash run_vllm.sh >> /tmp/vllm_glm51.log 2>&1 &
+cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_w4a8/vllm
+MAX_MODEL_LEN=32768 TP=8 PP=1 PORT=8002 nohup bash run_vllm_nomtp.sh >> /tmp/vllm_glm51.log 2>&1 &
 "'
 
-# === Kimi-K2.6 (Port 8003, 推荐) ===
-ssh $HEAD 'docker exec npuslim-env bash -c "
-> /tmp/vllm_kimi.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/kimi_k2_6_w4a8
-MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 nohup bash run_vllm.sh >> /tmp/vllm_kimi.log 2>&1 &
-"'
+# === GLM-5 (Port 8001) 多节点 — 待 Bug 6 修复 ===
+# ssh $HEAD 'docker exec npuslim-env bash -c "
+# MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8001 MODEL_PATH=.../GLM-5-w4a8 bash run_vllm.sh"'
+
+# === Kimi-K2.6 (Port 8003) 多节点 — 待 Bug 6/7 修复 ===
+# ssh $HEAD 'docker exec npuslim-env bash -c "
+# MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 bash run_vllm.sh"'
 ```
 
 ### Step 4: 等待并验证
@@ -309,6 +302,54 @@ GLM-5 config: index_topk=2048
 | **错误** | `Invalid device is 29/30/31 and the input visible device is 0,1,2,3,4,5,6,7` |
 | **状态** | 待 vLLM-Ascend 修复 |
 
+### Bug 6: 跨节点 HCCL AllReduce AICPU 异常 ← 新发现 🔴
+
+| 项目 | 内容 |
+|------|------|
+| **严重度** | BLOCKING (所有跨节点 TP>8 部署均失败) |
+| **现象** | 模型权值加载成功后，在 `profile_run` 阶段崩溃 |
+| **错误** | `E39999: The error from device(chipId:X, dieId:Y), serial number is N, an exception occurred during AICPU execution` |
+| **触发位置** | `torch_npu.npu_rms_norm()` → `HcclAllreduce` → AICPU exception |
+| **影响节点** | 164 (chipId:2,3), 229 (chipId:3) — 仅 worker 节点, head 节点 40 正常 |
+| **Root Cause** | 跨节点 TP (TP=16 分布于 2 节点) 时每个 transformer 层的 RMS Norm 触发 HCCL AllReduce，Ascend NPU 的 AICPU (AI CPU) 在执行此算子时抛异常 |
+| **影响模型** | 所有需要跨节点 TP 的模型 (GLM 因不支持 PP 只能用大 TP) |
+| **诊断方法** | `grep "aicpu execute failed" /tmp/vllm_*.log` |
+| **临时方案** | 单节点 TP=8 部署 (缩水上下文) |
+| **永久修复** | 待华为 CANN/vLLM-Ascend 团队修复 HCCL AllReduce + RMS Norm 跨节点兼容性 |
+
+**Root Cause Chain**:
+```
+模型 forward (profile_run)
+  → deepseek_v2.py:1102 → input_layernorm(hidden_states)
+  → custom_op.py:135 → _forward_method()
+  → layernorm.py:82 → torch_npu.npu_rms_norm(x, self.weight, ...)
+  → torch/_ops.py:1255 → HcclAllreduce (跨节点 TP 通信)
+  → AICPU execute failed (chipId:X, dieId:Y)
+  → rtDeviceSynchronizeWithTimeout → aicpu exception
+  → EngineCore crash
+```
+
+**已测试节点**:
+| 节点对 | 结果 |
+|--------|------|
+| 40(head) + 153(worker) | ❌ NPU 内存不足 (153 有 26 GiB 残留) |
+| 40(head) + 164(worker) | ❌ Bug 6: AICPU chipId:2/3 |
+| 40(head) + 229(worker) | ❌ Bug 6: AICPU chipId:3 |
+| 40(head) + 124(worker) | ❌ NPU 内存不足 (124 有 25 GiB 残留) |
+| 40 单节点 | ✅ TP=8 single-node works |
+
+### Bug 7: Worker 节点 NPU 内存持久残留 ← 新发现 🟡
+
+| 项目 | 内容 |
+|------|------|
+| **严重度** | MEDIUM (阻止部分节点参与部署) |
+| **现象** | Worker 节点在容器重启后仍有 ~25 GiB NPU 内存被占用 |
+| **错误** | `ValueError: Free memory on device (34.88/61.28 GiB) on startup is less than desired GPU memory utilization` |
+| **影响节点** | 153 (34.88 GiB free), 124 (36.15 GiB free) |
+| **Root Cause** | 之前运行的 sglang/vllm 进程释放不彻底；NPU 驱动层内存残留 (需主机级重置) |
+| **修复方案** | 节点主机级重启 或 `npu-smi` 复位; Docker restart 不足够 |
+| **诊断方法** | `npu-smi info` 检查 Used/Free memory |
+
 ---
 
 ## 6. Claude Code 集成
@@ -317,12 +358,12 @@ GLM-5 config: index_topk=2048
 
 **方式一: 环境变量 (临时)**
 ```bash
-ANTHROPIC_BASE_URL=http://10.16.201.40:8003 \
+ANTHROPIC_BASE_URL=http://10.16.201.40:8002 \
 ANTHROPIC_API_KEY=dummy \
 ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6 \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6 \
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
+ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.1 \
+ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1 \
+ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.1 \
 claude
 ```
 
@@ -342,7 +383,7 @@ claude
 
 **方式三: shell 配置文件 (永久)**
 ```bash
-export ANTHROPIC_BASE_URL=http://10.16.201.40:8003
+export ANTHROPIC_BASE_URL=http://10.16.201.40:8002
 export ANTHROPIC_API_KEY=dummy
 export ANTHROPIC_AUTH_TOKEN=dummy
 export ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6
