@@ -86,11 +86,13 @@ vllm serve "$MODEL_PATH" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens 16384 \
+    --chat-template-content-format=string \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"mtp\"}" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
+    --reasoning-parser glm45 \
+    --speculative-config.method mtp \
+    --speculative-config.num_speculative_tokens 3 \
     --seed 1024 \
     "$@"

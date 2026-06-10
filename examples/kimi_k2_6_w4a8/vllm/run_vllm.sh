@@ -26,6 +26,7 @@ fi
 set -u
 
 MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8}"
+SPECULATIVE_MODEL_PATH="${SPECULATIVE_MODEL_PATH:-$MODEL_PATH/speculative-model}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8003}"
 TP="${TP:-8}"
