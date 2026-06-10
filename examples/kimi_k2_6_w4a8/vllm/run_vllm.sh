@@ -35,20 +35,34 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 
+# Optional configurations for compilation and speculative decoding
+DEFAULT_COMPILATION_CONFIG='{"cudagraph_capture_sizes":[4,8,16,32,64,128,256], "cudagraph_mode":"FULL_DECODE_ONLY"}'
+DEFAULT_SPECULATIVE_CONFIG='{"model":"lightseekorg/kimi-k2.6-eagle3-mla","method":"eagle3","num_speculative_tokens":3}'
+
+COMPILATION_CONFIG="${COMPILATION_CONFIG:-$DEFAULT_COMPILATION_CONFIG}"
+SPECULATIVE_CONFIG="${SPECULATIVE_CONFIG:-$DEFAULT_SPECULATIVE_CONFIG}"
+LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-true}"
+
 # NPU performance optimizations
-export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
+export HCCL_OP_EXPANSION_MODE="AIV"
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=800
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export TASK_QUEUE_ENABLE=1
+
+export HCCL_BUFFSIZE=800
+export VLLM_ASCEND_ENABLE_MLAPO=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export VLLM_ASCEND_BALANCE_SCHEDULING=1
 
 echo "============================================"
 echo "[INFO] Kimi-K2.6 W4A8 — Agent-Optimized Deployment"
 echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] COMPILATION_CONFIG=$COMPILATION_CONFIG"
+echo "[INFO] SPECULATIVE_CONFIG=$SPECULATIVE_CONFIG"
+echo "[INFO] LANGUAGE_MODEL_ONLY=$LANGUAGE_MODEL_ONLY"
 echo "[INFO] Prefix Caching: ENABLED (agent-optimized)"
 echo "============================================"
 
@@ -70,8 +84,10 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens 16384 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
-    --allowed-local-media-path / \
+    --allowed-local-media-path \
+    ${COMPILATION_CONFIG:+--compilation-config "$COMPILATION_CONFIG"} \
+    ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
+    $([[ "$LANGUAGE_MODEL_ONLY" == "true" ]] && echo "--language-model-only") \
     --mm-encoder-tp-mode data \
     --enable-auto-tool-choice \
     --tool-call-parser kimi_k2 \

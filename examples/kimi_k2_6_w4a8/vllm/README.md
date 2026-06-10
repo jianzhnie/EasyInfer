@@ -30,7 +30,7 @@ Kimi-K2.6 是部署的三个模型中**唯一支持 Pipeline Parallelism** 且**
 Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。
 因此**不需要** `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`，也**需要不同**的 HCCL 配置。
 
-## ⚠️ 重要: 工具调用解析器
+### ⚠️ 重要: 工具调用解析器
 
 Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`, `<|tool_call_end|>` 等)，
 **必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
@@ -54,8 +54,8 @@ Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`
 
 | 硬件 | 配置 | 推荐上下文 |
 |------|------|-----------|
-| Atlas 800 A2 (64G × 8) | W4A8, TP=8 | 32k |
-| Atlas 800 A3 (64G × 16) | W4A8, TP=16 | 131k |
+| Atlas 800 A2 (64G × 8) | TP=8  | 32k |
+| Atlas 800 A3 (64G × 16) | TP=16 | 131k |
 
 #### 多节点部署
 
@@ -79,14 +79,13 @@ MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 bash run_vllm.sh
 | max_model_len | **262,144** | 模型原生最大上下文 |
 | max_num_seqs | 16 | 无 MTP 开销，高并发 |
 | GPU 利用率 | 0.92 | 预留视觉组件空间 |
-| 加载时间 | ~15 分钟 | 126 shards(比 GLM 多 26 个), 含 warmup |
-
+| 加载时间 | ~15 分钟 | 126 shards , 含 warmup |
 
 ## 快速开始
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8`
+模型路径: `Eco-Tech/Kimi-K2.6-w4a8`
 
 > **注意**: 模型包含自定义代码 (`configuration_kimi_k25.py`, `modeling_kimi_k25.py`)，必须启用 `--trust-remote-code`。
 
@@ -109,7 +108,7 @@ bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 docker exec npuslim-env bash
 
 # 2. 进入项目目录
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/kimi_k2_6_w4a8
+cd EasyInfer/examples/vllm/kimi_k2_6_w4a8
 
 # 3. 部署模型
 MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 nohup bash run_vllm.sh >> vllm_kimi.log 2>&1 &
@@ -119,19 +118,19 @@ curl http://10.16.201.40:8003/v1/models
 # 预期: model=kimi-k2.6, max_model_len=262144
 ```
 
-
 ## NPU 环境变量
 
-### 性能优化
-
 ```bash
-HCCL_OP_EXPANSION_MODE=AIV
-HCCL_BUFFSIZE=800                # 384 专家需要更大的 HCCL 缓冲 (GLM 用 200)
-OMP_PROC_BIND=false
-OMP_NUM_THREADS=1
-PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-VLLM_ASCEND_BALANCE_SCHEDULING=1
-TASK_QUEUE_ENABLE=1              # Kimi 性能优化
+export HCCL_OP_EXPANSION_MODE="AIV"
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export OMP_PROC_BIND=false
+export OMP_NUM_THREADS=1
+export TASK_QUEUE_ENABLE=1
+
+export HCCL_BUFFSIZE=800
+export VLLM_ASCEND_ENABLE_MLAPO=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export VLLM_ASCEND_BALANCE_SCHEDULING=1
 ```
 
 
@@ -141,7 +140,7 @@ TASK_QUEUE_ENABLE=1              # Kimi 性能优化
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8` | 模型权重路径 |
+| `MODEL_PATH` | `Eco-Tech/Kimi-K2.6-w4a8` | 模型权重路径 |
 | `SERVED_MODEL_NAME` | `kimi-k2.6` | API 中的模型名称 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | `8003` | 监听端口 |
@@ -153,7 +152,7 @@ TASK_QUEUE_ENABLE=1              # Kimi 性能优化
 | `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (A2=8, A3=16) |
 | `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
 | `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (384 专家 MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `4` | 数据并行度 (官方推荐 dp4tp4) |
+| `DATA_PARALLEL_SIZE` | `4` | 数据并行度 (官方推荐 dp4 tp4) |
 
 ### 内存与量化
 
@@ -228,6 +227,7 @@ TASK_QUEUE_ENABLE=1              # Kimi 性能优化
 - 增大 `NUM_SCHEDULER_STEPS` (如 8-16)
 
 ### 多模态场景
+
 - Kimi-K2.6 支持视觉输入 (Vision Transformer)
 - 视觉 token 会额外占用上下文窗口
 - 建议预留 20-30% 上下文给视觉 token
@@ -284,7 +284,6 @@ ANTHROPIC_AUTH_TOKEN=dummy \
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6 \
 ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6 \
 ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
-claude
 ```
 
 ## 常见问题
