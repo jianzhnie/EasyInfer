@@ -52,6 +52,10 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
 
+# Optional configurations for compilation and speculative decoding
+DEFAULT_SPECULATIVE_CONFIG='{"method":"mtp","num_speculative_tokens":3}'
+SPECULATIVE_CONFIG="${SPECULATIVE_CONFIG:-$DEFAULT_SPECULATIVE_CONFIG}"
+
 # NPU performance optimizations
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND=false
@@ -68,6 +72,7 @@ echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] SPECULATIVE_CONFIG=$SPECULATIVE_CONFIG"
 echo "[INFO] Prefix Caching: ENABLED (agent-optimized)"
 echo "============================================"
 
@@ -92,7 +97,6 @@ vllm serve "$MODEL_PATH" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
-    --speculative-config.method mtp \
-    --speculative-config.num_speculative_tokens 3 \
+    ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
     --seed 1024 \
     "$@"

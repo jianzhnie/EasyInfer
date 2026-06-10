@@ -26,6 +26,13 @@ PORT="${PORT:-8000}"
 TP="${TP:-8}"
 PP="${PP:-1}"
 
+# Optional configurations for compilation and speculative decoding
+DEFAULT_COMPILATION_CONFIG='{"cudagraph_mode":"FULL_AND_PIECEWISE", "custom_ops":["all"]}'
+DEFAULT_SPECULATIVE_CONFIG='{"method":"mtp","num_speculative_tokens":1}'
+
+COMPILATION_CONFIG="${COMPILATION_CONFIG:-$DEFAULT_COMPILATION_CONFIG}"
+SPECULATIVE_CONFIG="${SPECULATIVE_CONFIG:-$DEFAULT_SPECULATIVE_CONFIG}"
+
 # HCCL/NPU env
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND=false
@@ -41,6 +48,8 @@ export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
 
 echo "[INFO] Starting DeepSeek-V4-Flash W8A8 MTP"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
+echo "[INFO] COMPILATION_CONFIG=$COMPILATION_CONFIG"
+echo "[INFO] SPECULATIVE_CONFIG=$SPECULATIVE_CONFIG"
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
@@ -65,7 +74,7 @@ vllm serve "$MODEL_PATH" \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v4 \
     --reasoning-parser deepseek_v4 \
-    --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE", "custom_ops":["all"]}' \
-    --speculative_config '{"method":"mtp","num_speculative_tokens":1}' \
+    ${COMPILATION_CONFIG:+--compilation-config "$COMPILATION_CONFIG"} \
+    ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
     --seed 1024 \
     "$@"
