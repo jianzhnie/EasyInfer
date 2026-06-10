@@ -2,7 +2,7 @@
 # =============================================================================
 # GLM-5 W4A8 — Agent-Optimized vLLM Deployment with Max Context
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
-# Max Position: 202752 | Deploy: 128K context (override with MAX_MODEL_LEN)
+# Max Position: 202752 | Deploy: 202K context (override with MAX_MODEL_LEN)
 #
 # GLM-5 不支持 Pipeline Parallelism (PP)，使用大 TP 跨节点部署
 # 默认 TP=16 PP=1 (2节点 × 8 NPU); 单节点: TP=8 PP=1

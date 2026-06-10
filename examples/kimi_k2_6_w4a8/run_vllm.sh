@@ -2,7 +2,7 @@
 # =============================================================================
 # Kimi-K2.6 W4A8 — Agent-Optimized vLLM Deployment with Max Context
 # Architecture: KimiK25ForConditionalGeneration | 384 Experts | MLA | Vision
-# Max Position: 262144 | Deploy: 128K context (override with MAX_MODEL_LEN)
+# Max Position: 262144 | Deploy: 256K context (override with MAX_MODEL_LEN)
 #
 # Kimi-K2.6 支持 Pipeline Parallelism (PP)
 # 默认 TP=8 PP=2 (2节点 × 8 NPU); 单节点: TP=8 PP=1
@@ -74,6 +74,6 @@ vllm serve "$MODEL_PATH" \
     --allowed-local-media-path / \
     --mm-encoder-tp-mode data \
     --enable-auto-tool-choice \
-    --tool-call-parser deepseek_v3 \
+    --tool-call-parser kimi_k2 \
     --seed 1024 \
     "$@"
