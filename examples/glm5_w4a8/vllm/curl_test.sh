@@ -1,15 +1,24 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 vLLM 服务 API 测试脚本
+# GLM-5 / GLM-5.1 vLLM 服务 API 测试脚本
 # =============================================================================
 #
 # 用法:
-#   ./curl_test.sh                    # 默认测试 localhost:8002
-#   BASE_URL=http://10.0.0.1:9000 ./curl_test.sh
-#   MODEL_NAME=my-model ./curl_test.sh
+#   ./curl_test.sh                               # GLM-5.1 @ localhost:8002
+#   MODEL_NAME=glm-5 BASE_URL=http://localhost:8001 ./curl_test.sh
 # =============================================================================
 
 set -euo pipefail
+
+# --- Auto-detect defaults ---
+if [[ -z "${MODEL_NAME:-}" ]]; then
+    # Derive from BASE_URL port if set, else default to GLM-5.1
+    if [[ "${BASE_URL:-}" == *":8001"* ]]; then
+        MODEL_NAME="glm-5"
+    else
+        MODEL_NAME="glm-5.1"
+    fi
+fi
 
 BASE_URL="${BASE_URL:-http://localhost:8002}"
 MODEL_NAME="${MODEL_NAME:-glm-5.1}"
@@ -56,7 +65,6 @@ if [[ -n "$response" ]]; then
         [[ -n "$usage" ]] && info "Tokens: ${usage}"
     else
         fail "Empty response content"
-        echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
     fi
 else
     fail "No response from server"
@@ -74,7 +82,6 @@ stream_output=$(curl -sf --max-time 30 "${BASE_URL}/v1/chat/completions" \
 
 if [[ -n "$stream_output" ]]; then
     pass "Streaming response received"
-    echo "$stream_output"
 else
     fail "Streaming failed"
 fi
@@ -117,7 +124,7 @@ else:
     if [[ "$tool_call" != "no_tool_call" && "$tool_call" != "parse_error" ]]; then
         pass "Tool calling works: ${tool_call}"
     else
-        info "Tool calling: model did not invoke tool (may need different prompt or parser)"
+        info "Tool calling: model did not invoke tool"
     fi
 else
     fail "Tool calling test failed - no response"

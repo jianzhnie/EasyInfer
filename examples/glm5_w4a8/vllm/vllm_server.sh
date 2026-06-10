@@ -1,23 +1,23 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 部署示例 (华为 NPU 环境)
+# GLM-5 / GLM-5.1 W4A8 部署示例 (华为 NPU 环境)
 # =============================================================================
-# 调用 vllm_model_server.sh 部署 GLM-5.1 W4A8 量化模型
-# GLM-5.1 是 GLM-5 的升级版，采用相同的 MoE 架构 (256 专家) + MTP
-#
-# 与 GLM-5 的主要区别:
-#   - 改进的训练数据和后训练流程
-#   - 更强的推理和 agent 能力
-#   - 相同的模型架构和硬件需求
+# 调用 vllm_model_server.sh 部署 GLM-5/GLM-5.1 W4A8 量化模型
+# GLM-5.1 是 GLM-5 的升级版，架构相同 (GlmMoeDsaForCausalLM, 256E, MTP)
 #
 # 硬件要求:
 #   - Atlas 800 A2 (64G × 8):   单节点 W4A8 部署
 #   - Atlas 800 A3 (64G × 16):  单节点 W4A8 部署 (支持更大上下文)
 #
 # 用法:
+#   # GLM-5.1 (默认)
 #   ./vllm_server.sh
+#
+#   # GLM-5
+#   MODEL_PATH=/path/to/GLM-5-w4a8 PORT=8001 ./vllm_server.sh
+#
+#   # 多节点
 #   TENSOR_PARALLEL_SIZE=16 MAX_MODEL_LEN=200000 ./vllm_server.sh
-#   PIPELINE_PARALLEL_SIZE=8 ./vllm_server.sh
 #
 # 参考文档:
 #   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
@@ -33,13 +33,20 @@ if [[ ! -f "$VLLM_SCRIPT" ]]; then
     exit 1
 fi
 
-# ------------------------------------------------------------------------------
-# 模型路径与基础配置
-# ------------------------------------------------------------------------------
-export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
-export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.1}"
-export HOST="${HOST:-0.0.0.0}"
-export PORT="${PORT:-8002}"
+# --- Auto-detect model from MODEL_PATH ---
+: "${MODEL_PATH:=/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
+
+if [[ "$MODEL_PATH" == *"GLM-5.1"* ]]; then
+    : "${PORT:=8002}"
+    : "${SERVED_MODEL_NAME:=glm-5.1}"
+    MODEL_LABEL="GLM-5.1"
+else
+    : "${PORT:=8001}"
+    : "${SERVED_MODEL_NAME:=glm-5}"
+    MODEL_LABEL="GLM-5"
+fi
+
+export MODEL_PATH SERVED_MODEL_NAME PORT
 
 # ------------------------------------------------------------------------------
 # 华为 NPU 环境变量
@@ -52,9 +59,10 @@ export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:Tru
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
 export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-0}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
+export HOST="${HOST:-0.0.0.0}"
 
 # ------------------------------------------------------------------------------
-# 并行配置 (GLM-5.1 MoE, 256 专家)
+# 并行配置 (GLM MoE, 256 专家, 不支持 PP)
 # ------------------------------------------------------------------------------
 export TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 export PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-1}"
@@ -67,7 +75,7 @@ export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 export DTYPE="${DTYPE:-bfloat16}"
 export QUANTIZATION="${QUANTIZATION:-ascend}"
 export LOAD_FORMAT="${LOAD_FORMAT:-auto}"
-export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
 export SWAP_SPACE="${SWAP_SPACE:-16}"
 
 # ------------------------------------------------------------------------------
@@ -75,7 +83,7 @@ export SWAP_SPACE="${SWAP_SPACE:-16}"
 # ------------------------------------------------------------------------------
 if [[ -z "${MAX_MODEL_LEN:-}" ]]; then
     if [[ "${TENSOR_PARALLEL_SIZE:-8}" -ge 16 ]]; then
-        export MAX_MODEL_LEN=200000
+        export MAX_MODEL_LEN=202752
     else
         export MAX_MODEL_LEN=32768
     fi
@@ -84,11 +92,11 @@ if [[ -z "${MAX_NUM_SEQS:-}" ]]; then
     if [[ "${TENSOR_PARALLEL_SIZE:-8}" -ge 16 ]]; then
         export MAX_NUM_SEQS=8
     else
-        export MAX_NUM_SEQS=2
+        export MAX_NUM_SEQS=4
     fi
 fi
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
-export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
+export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 export MAX_TOKENS_PER_SEQUENCE="${MAX_TOKENS_PER_SEQUENCE:-40000}"
 export CHAT_TEMPLATE_CONTENT_FORMAT="${CHAT_TEMPLATE_CONTENT_FORMAT:-string}"
 
@@ -158,12 +166,12 @@ fi
 # ------------------------------------------------------------------------------
 # 启动信息
 # ------------------------------------------------------------------------------
-echo "[INFO] Starting GLM-5.1 W4A8 server"
+echo "[INFO] Starting ${MODEL_LABEL} W4A8 server"
 echo "[INFO] Model:     ${MODEL_PATH}"
 echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE"
 echo "[INFO] Quant:     W4A8 (ascend), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
-echo "[INFO] Features:  MoE (256 experts), MTP (tokens=$SPECULATIVE_NUM_TOKENS), Async Scheduling"
+echo "[INFO] Features:  MoE (256 experts), MTP (tokens=$SPECULATIVE_NUM_TOKENS)"
 echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB"
 
 exec bash "$VLLM_SCRIPT" "${EXTRA_ARGS[@]}" "$@"
