@@ -183,14 +183,14 @@ ssh $HEAD "docker exec npuslim-env ray status | grep -E 'NPU|Active'"
 # === GLM-5 (Port 8001) ===
 ssh $HEAD 'docker exec npuslim-env bash -c "
 > /tmp/vllm_glm5.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_w4a8
-MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8001 nohup bash run_vllm.sh >> /tmp/vllm_glm5.log 2>&1 &
+cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_1_w4a8/vllm
+MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8001 MODEL_PATH=/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8 nohup bash run_vllm.sh >> /tmp/vllm_glm5.log 2>&1 &
 "'
 
 # === GLM-5.1 (Port 8002) ===
 ssh $HEAD 'docker exec npuslim-env bash -c "
 > /tmp/vllm_glm51.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_1_w4a8
+cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_1_w4a8/vllm
 MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8002 nohup bash run_vllm.sh >> /tmp/vllm_glm51.log 2>&1 &
 "'
 
@@ -621,15 +621,12 @@ echo "Deployment complete!"
 
 | 文件 | 说明 | 状态 |
 |------|------|------|
-| `examples/glm5_w4a8/run_vllm.sh` | GLM-5 直接部署脚本 (Agent 优化) | ✅ |
-| `examples/glm5_w4a8/vllm_server.sh` | GLM-5 包装器部署脚本 | ✅ |
-| `examples/glm5_w4a8/curl_test.sh` | GLM-5 API 测试脚本 | ✅ |
-| `examples/glm5_w4a8/README.md` | GLM-5 部署文档 | ✅ 已更新 |
-| `examples/glm5_1_w4a8/run_vllm.sh` | GLM-5.1 直接部署脚本 (含 MTP) | ✅ |
-| `examples/glm5_1_w4a8/run_vllm_nomtp.sh` | GLM-5.1 无 MTP 脚本 (单节点用) | ✅ |
-| `examples/glm5_1_w4a8/vllm_server.sh` | GLM-5.1 包装器部署脚本 | ✅ |
-| `examples/glm5_1_w4a8/curl_test.sh` | GLM-5.1 API 测试脚本 | ✅ |
-| `examples/glm5_1_w4a8/README.md` | GLM-5.1 部署文档 | ✅ 已更新 |
+| `examples/glm5_1_w4a8/vllm/run_vllm.sh` | GLM-5/5.1 共用部署脚本 (自动检测模型) | ✅ |
+| `examples/glm5_1_w4a8/vllm/run_vllm_nomtp.sh` | GLM-5/5.1 无 MTP 脚本 (单节点) | ✅ |
+| `examples/glm5_1_w4a8/vllm/vllm_server.sh` | GLM-5/5.1 包装器部署脚本 | ✅ |
+| `examples/glm5_1_w4a8/vllm/curl_test.sh` | GLM-5/5.1 API 测试脚本 | ✅ |
+| `examples/glm5_1_w4a8/vllm/README.md` | GLM-5/5.1 合并文档 | ✅ |
+| `examples/glm5_w4a8 → glm5_1_w4a8` | Symlink (兼容旧路径) | ✅ |
 | `examples/kimi_k2_6_w4a8/run_vllm.sh` | Kimi-K2.6 直接部署脚本 (kimi_k2 parser) | ✅ 已修复 |
 | `examples/kimi_k2_6_w4a8/vllm_server.sh` | Kimi-K2.6 包装器部署脚本 | ✅ |
 | `examples/kimi_k2_6_w4a8/curl_test.sh` | Kimi-K2.6 API 测试脚本 | ✅ |
