@@ -12,14 +12,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Version info
-CANN_VER="8.5.1"
-TORCH_VER="2.9.0"
-VLLM_VER="0.18.0"
-CHIP_NAME="910c"
+# 加载共享库
+source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=./docker_env.sh
+source "${SCRIPT_DIR}/docker_env.sh"
 
-IMAGE_NAME="ascend${CHIP_NAME}-cann${CANN_VER}-torch${TORCH_VER}-vllm${VLLM_VER}"
-IMAGE_NAME=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+# Version info
+log_info "Version info"
+log_info "IMAGE_NAME: ${IMAGE_NAME}"
+log_info "IMAGE_TAR: ${IMAGE_TAR}"
+log_info "CONTAINER_NAME: ${CONTAINER_NAME}"
 
 # Parse args
 CARDS="0"
@@ -27,8 +29,6 @@ MULTI_NODE=false
 WITH_NPUSLIM=false
 NPUSLIM_SRC_PATH=""
 DAEMON=false
-CONTAINER_NAME="npuslim-env"
-
 
 while [[ $# -gt 0 ]]; do
     case $1 in

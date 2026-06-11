@@ -50,7 +50,7 @@ case "$CMD" in
 esac
 
 # 在 resolve_nodes 消费参数前，先提取 --npuslim / --no-npuslim
-WITH_NPUSLIM=true
+WITH_NPUSLIM=false
 npushift_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
