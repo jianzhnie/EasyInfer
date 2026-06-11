@@ -47,21 +47,24 @@ done
 sleep 15
 ```
 
-### Step 2: 启动 Ray 集群 (单节点模式)
+### Step2: 启动 vLLM-Ascend 容器群
 
 ```bash
-# 单节点 Ray (仅 head)
-ssh $HEAD "docker exec vllm-ascend-env bash -c '
-  ray stop
-  ray start --head --port=6379 --resources='\''{\"NPU\": 8}'\'' --num-gpus=8
-'"
-sleep 5
+bash /home/jianzhnie/llmtuner/llm/EasyInfer/scripts/docker/manage_npuslim_containers.sh start \
+    --file /home/jianzhnie/llmtuner/llm/EasyInfer/node_list.txt
+```
+
+### Step 3: 启动 Ray 集群
+
+```bash
+bash /home/jianzhnie/llmtuner/llm/EasyInfer/scripts/ray_cluster/start_npuslim_ray_cluster.sh start \
+    --file /home/jianzhnie/llmtuner/llm/EasyInfer/node_list.txt
 
 # 验证: 1 node, 8 NPU
 ssh $HEAD "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
 ```
 
-### Step 3: 直接部署脚本 `run_vllm.sh` 模板
+### Step 4: 直接部署脚本 `run_vllm.sh` 模板
 
 **必须遵循的模板:**
 
@@ -129,7 +132,7 @@ vllm serve "$MODEL_PATH" \
 - **MTP 模型**: 必须添加 `--speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"mtp\"}"`
 - **多模态模型**: 如果是 Kimi-K2.6，确保相关多模态参数开启。
 
-### Step 4: 测试脚本 `curl_test.sh` 模板
+### Step 5: 测试脚本 `curl_test.sh` 模板
 
 ```bash
 #!/bin/bash
@@ -147,23 +150,5 @@ curl http://localhost:$PORT/v1/chat/completions \
     ],
     "max_tokens": 128
   }'
-```
-
-### Step 5: `README.md` 模板
-
-```markdown
-# <ModelName> 部署文档
-
-## 模型信息
-- **路径**: `<model_relative_path>`
-- **量化**: `<W4A8/W8A8>`
-- **特性**: `<MoE/MTP/Multimodal>`
-
-## 部署步骤
-1. 运行部署脚本: `bash run_vllm.sh`
-2. 等待日志显示 `Uvicorn running on http://0.0.0.0:<PORT>`
-
-## 测试
-使用 `bash curl_test.sh` 验证接口。
 ```
 

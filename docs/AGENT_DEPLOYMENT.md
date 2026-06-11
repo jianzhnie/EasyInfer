@@ -1,7 +1,7 @@
-# Agent-Optimized LLM Deployment on Ascend NPU Cluster
+# LLM 推理部署指南 — Ascend NPU 集群
 
-> **Date**: 2026-06-10 | **Cluster**: 1×8 Ascend 910C (Node 40 only) | **vLLM-Ascend**: 0.18.0 | **CANN**: 8.5.1
-> **Status**: ⚠️ GLM-5.1 Single-Node Deployed (32K) | ❌ Multi-Node Blocked by HCCL AICPU Bug | ❌ Kimi Single-Node OOM
+> **日期**: 2026-06-11 | **集群**: 4×8 Ascend 910C (229,164,40,193) | **vLLM-Ascend**: 0.20.2 | **CANN**: 9.0.0
+> **状态**: ✅ 4/6 模型部署成功 | ❌ 2 DeepSeek V4 模型需修复 vLLM 代码
 
 ---
 
@@ -11,28 +11,32 @@
 2. [模型架构详解](#2-模型架构详解)
 3. [Agent 优化参数](#3-agent-优化参数)
 4. [完整部署流程](#4-完整部署流程)
-5. [Bug 诊断与修复](#5-bug-诊断与修复)
+5. [已知问题与修复](#5-已知问题与修复)
 6. [Claude Code 集成](#6-claude-code-集成)
 7. [集群拓扑](#7-集群拓扑)
 8. [环境变量速查](#8-环境变量速查)
 9. [API 验证命令](#9-api-验证命令)
 10. [Quick Start](#10-quick-start)
-11. [经验总结](#11-经验总结)
+11. [脚本清单](#11-脚本清单)
 
 ---
 
 ## 1. 部署概览
 
-| # | Model | Architecture | Port | TP×PP | Context | MTP | Tool Parser | Max Seqs | Time | Status |
-|---|-------|-------------|------|-------|---------|-----|-------------|----------|------|--------|
-| 1 | **GLM-5** W4A8 | GlmMoeDSA / 256E / MLA | 8001 | 16×1 | **202,752** | ✅ mtp | glm47 | 8 | ~12m | ❌ Multi-Node Blocked |
-| 2 | **GLM-5.1** W4A8 | GlmMoeDSA / 256E / MLA | 8002 | 8×1 | **32,768** | ❌ No MTP | glm47 | 4 | ~5m | ✅ Single-Node |
-| 3 | **Kimi-K2.6** W4A8 | KimiK25 / 384E / MLA / Vision | 8003 | 8×2 | **262,144** | ❌ N/A | **kimi_k2** | 16 | ~15m | ❌ NPU OOM / HCCL |
+| # | Model | Arch | Port | TP×PP | Context | MTP | Tool | Time | Status |
+|---|-------|------|------|-------|---------|-----|------|------|--------|
+| 1 | **DeepSeek-V4-Pro** W4A8 | DeepseekV4 / 384E / MLA | 8000 | 8×2 | - | ✅ | deepseek_v4 | - | ❌ attn_sink KeyError |
+| 2 | **DeepSeek-V4-Flash** W8A8 | DeepseekV4 / 256E / MLA | 8000 | - | - | ✅ | deepseek_v4 | - | ❌ 同 #1 |
+| 3 | **GLM-5** W4A8 | GlmMoeDSA / 256E / MLA | 8001 | 16×1 | **131K** | ✅ mtp | glm47 | ~10m | ✅ 通过 |
+| 4 | **GLM-5.1** W4A8 | GlmMoeDSA / 256E / MLA | 8002 | 16×1 | **131K** | ✅ mtp | glm47 | ~10m | ✅ 通过 |
+| 5 | **Kimi-K2.6** W4A8 | KimiK25 / 384E / MLA | 8003 | 8×2 | **131K** | ❌ N/A | kimi_k2 | ~12m | ✅ 通过 |
+| 6 | **MiniMax-M2.7** W8A8 | MiniMaxM2 / 256E | 8004 | 8×2 | **65K** | ❌ 不支持 | minimax_m2 | ~5m | ✅ 通过 |
 
-**关键成果**:
-- 全部模型在 **max_position_embeddings** (原生最大上下文) 运行
-- Anthropic Messages API (`/v1/messages`) + tool_use 全部通过
-- Kimi-K2.6 推荐作为 Claude Code 主模型 (262K 上下文, 高并发, 多模态)
+**已验证环境**:
+- **容器**: `vllm-ascend-env` (quay.io/ascend/vllm-ascend:v0.20.2rc1-a3)
+- **可用节点**: 10.16.201.229, 10.16.201.164, 10.16.201.40, 10.16.201.193
+- **每节点**: 8× Ascend 910C × 66GB NPU
+- **总容量**: 32 NPU (4 节点 × 8), 支持最多 2 模型同时部署
 
 ---
 
@@ -41,92 +45,87 @@
 ### 2.1 GLM-5 / GLM-5.1 (W4A8)
 
 ```
-config.json 关键参数:
+config.json:
   architectures:          ['GlmMoeDsaForCausalLM']
   hidden_size:            6144
   num_hidden_layers:      78
-  n_routed_experts:       256
-  num_experts_per_tok:    8
-  num_nextn_predict_layers: 1          ← MTP speculative decoding
-  max_position_embeddings: 202752      ← 197.4K native context
-  kv_lora_rank:           512          ← MLA compressed KV
-  q_lora_rank:            2048         ← MLA compressed Q
-  head_dim:               64
-  v_head_dim:             256
-  index_topk:             2048         ← triggers DeepSeek V3.2 classification
+  n_routed_experts:       256 (8 per token)
+  num_nextn_predict_layers: 1          ← MTP
+  max_position_embeddings: 202752
+  kv_lora_rank:           512
+  q_lora_rank:            2048
   quantization:           W4A8
-  vision_config:          NONE
 ```
 
-**架构特征**:
-- **DSA (Decoupled Sparse Attention)**: 稀疏注意力 + FlashAttention 混合
-- **MLA (Multi-head Latent Attention)**: 压缩 KV cache (kv_lora_rank=512)
-- **PP 不支持**: GLM 缺少 `SupportsPP` 接口，多节点必须大 TP
-- **V3.2 误判**: `index_topk: 2048` 使 vLLM 识别为 DeepSeekV32 → 触发 DSA CP 路径
+**部署要求**: TP=16 PP=1, 2 节点, VLLM_ASCEND_ENABLE_FLASHCOMM1=0 (必须)
 
 ### 2.2 Kimi-K2.6 (W4A8)
 
 ```
-text_config 关键参数:
-  architectures:          ['DeepseekV3ForCausalLM']
+config.json:
+  architectures:          ['KimiK25ForConditionalGeneration']
   hidden_size:            7168
   num_hidden_layers:      61
-  n_routed_experts:       384          ← 比 GLM 多 128 专家
+  n_routed_experts:       384 (8 per token)
   num_nextn_predict_layers: 0          ← 无 MTP
-  max_position_embeddings: 262144      ← 256K native context
+  max_position_embeddings: 262144
   kv_lora_rank:           512
   q_lora_rank:            1536
-  v_head_dim:             128
-  quantization:           W4A8
   vision_config:          Vision Transformer (27 layers)
+  quantization:           W4A8
 ```
 
-**架构特征**:
-- **KimiK25ForConditionalGeneration**: wrapper 包裹 DeepseekV3ForCausalLM
-- **PP 支持**: 唯一支持 Pipeline Parallelism 的模型
-- **384 专家**: EP_SIZE 需整除 384 (8, 12, 16, 24...)
-- **注意力路径**: DeepseekV3ForCausalLM (非 DSA，不触发 FLASHCOMM1 bug)
-- **Tool Token**: 自定义 `<|tool_call_begin|>` 等，需要 kimi_k2 parser
+**部署要求**: TP=8 PP=2, 2 节点, tool_parser=kimi_k2
+
+### 2.3 MiniMax-M2.7 (W8A8)
+
+```
+config.json:
+  architectures:          ['MiniMaxM2ForCausalLM']
+  hidden_size:            3072
+  num_hidden_layers:      62
+  n_routed_experts:       256 (8 per token)
+  num_mtp_modules:         3           ← MTP 支持但 vLLM-Ascend 不可用
+  mtp_transformer_layers:  1
+  max_position_embeddings: 204800
+  quantization:           W8A8 QuaRot
+```
+
+**部署要求**: TP=8 PP=2, 2 节点, 不支持 MTP (vLLM-Ascend 0.20.2 不兼容), W8A8 内存需求大
+
+### 2.4 DeepSeek-V4-Pro / Flash
+
+**已知阻塞**: Eco-Tech 版模型权重含 `attn_sink` 参数，vLLM-Ascend 0.20.2 不兼容 (KeyError)。
+修复方法: 在 `/vllm-workspace/vllm-ascend/vllm_ascend/models/deepseek_v4.py:1204` 添加:
+```python
+if name not in params_dict:
+    continue
+```
 
 ---
 
 ## 3. Agent 优化参数
 
-### 3.1 参数矩阵
+| Parameter | GLM-5/5.1 | Kimi-K2.6 | MiniMax | Claude Code 影响 |
+|-----------|-----------|-----------|---------|------------------|
+| `--enable-prefix-caching` | ✅ | ✅ | ✅ | 🔑 系统提示缓存 ~90% KV 命中率 |
+| `--enable-chunked-prefill` | ✅ | ✅ | ✅ | 长上下文 prompt 优化 |
+| `--max-num-seqs` | 8 | 16 | 8 | 并发工具调用 |
+| `--max-num-batched-tokens` | 16384 | 16384 | 8192 | 预填充吞吐量 |
+| `--gpu-memory-utilization` | 0.94 | 0.92 | 0.95 | MiniMax W8A8 需更高 |
+| `--enable-auto-tool-choice` | ✅ | ✅ | ✅ | 🔑 Anthropic API tool_use |
+| `--enforce-eager` | ✅ | ✅ | ✅ | Ascend 无 CUDA graph |
 
-| Parameter | GLM-5/5.1 | Kimi-K2.6 | Claude Code 影响 |
-|-----------|-----------|-----------|------------------|
-| `--enable-prefix-caching` | ✅ | ✅ | 🔑 系统提示缓存复用 ~90% KV 命中率 |
-| `--enable-chunked-prefill` | ✅ | ✅ | 长上下文 prompt 处理优化 |
-| `--max-num-seqs` | 8 | 16 | 并发工具调用数 (GLM 因 MTP 受限) |
-| `--max-num-batched-tokens` | 16384 | 16384 | 预填充吞吐量 |
-| `--gpu-memory-utilization` | 0.94 | 0.92 | Kimi 预留视觉组件空间 |
-| `--enable-auto-tool-choice` | ✅ | ✅ | 🔑 Anthropic API tool_use 必须 |
-| `--enforce-eager` | ✅ | ✅ | Ascend 无 CUDA graph 支持 |
+### 模型专属配置
 
-### 3.2 模型专属优化
-
-| 优化项 | GLM-5/5.1 | Kimi-K2.6 | 原因 |
-|--------|-----------|-----------|------|
-| `VLLM_ASCEND_ENABLE_MLAPO=1` | ✅ | 自动 | GLM DSA 路径 MLA 融合 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1=0` | ✅ 必须 | 默认 | 防止 GLM DSA CP crash |
-| `HCCL_BUFFSIZE` | 200 | 800 | 384 专家需要更大缓冲 |
-| `TASK_QUEUE_ENABLE=1` | 默认 | ✅ | Kimi 性能优化 |
-| MTP speculative | ✅ 3 tokens | ❌ | GLM 支持，Kimi 不支持 |
-| Tool Parser | `glm47` | `kimi_k2` | 必须匹配 tokenizer |
-
-### 3.3 MTP 内存影响
-
-MTP (Multi-Token Prediction) 会加载第二份模型权重，严重减少 KV cache 可用空间:
-
-| 配置 | MTP | max_model_len 可达 |
-|------|-----|-------------------|
-| TP=8 单节点 | ✅ ON | ~9K (仅 1.03 GiB KV cache) |
-| TP=8 单节点 | ❌ OFF | 32K (充足 KV cache) |
-| TP=16 双节点 | ✅ ON | 202K (模型最大上下文) |
-| TP=16 双节点 | ❌ OFF | 202K+ (有更多余量) |
-
-**结论**: MTP 在 TP=16 时可在 202K 全上下文运行；单节点 TP=8 时必须关闭。
+| 配置项 | GLM-5/5.1 | Kimi-K2.6 | MiniMax-M2.7 |
+|--------|-----------|-----------|--------------|
+| 关键环境变量 | FLASHCOMM1=0, MLAPO=1 | TASK_QUEUE=1 | FUSED_MC2=1 |
+| HCCL_BUFFSIZE | 200 | 800 | 1024 |
+| MTP | ✅ mtp, 3 tokens | ❌ | ❌ 不支持 |
+| Tool Parser | glm47 | kimi_k2 | minimax_m2 |
+| PP 支持 | ❌ (大 TP 替代) | ✅ | ✅ |
+| 多模态 | ❌ | ✅ Vision | ❌ |
 
 ---
 
@@ -135,336 +134,174 @@ MTP (Multi-Token Prediction) 会加载第二份模型权重，严重减少 KV ca
 ### 前置条件
 
 ```bash
-# 当前工作集群 (2026-06-10)
-HEAD=10.16.201.40   # bms-luyao-0003, 8× Ascend 910C, 唯一正常工作节点
+# 可用节点 (2026-06-11)
+# 10.16.201.229, 10.16.201.164, 10.16.201.40, 10.16.201.193
 
-# 容器镜像: ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0
+# 容器镜像: quay.io/ascend/vllm-ascend:v0.20.2rc1-a3
 # 模型路径: /home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/
-
-# ⚠️ 排除节点:
-#   10.16.201.163 — Bug 1: GCC 10.3.1 Triton kernel 编译 bug
-#   10.16.201.164 — Bug 6: AICPU exception (chipId:2,3)
-#   10.16.201.229 — Bug 6: AICPU exception (chipId:3)
-#   10.16.201.153 — Bug 7: NPU 内存残留 (34.88/61 GiB free)
-#   10.16.201.124 — Bug 7: NPU 内存残留 (36.15/61 GiB free)
-#   10.16.201.193 — sglang-ascend-env 容器 (待切换)
-#   10.16.201.201 — sglang-ascend-env 容器 (待切换)
 ```
 
-### Step 1: 清理并重启容器
+### Step 1: 启动容器
 
 ```bash
-for ip in $HEAD $WORKER; do
-    ssh "$ip" "docker restart npuslim-env"
+bash scripts/docker/manage_npuslim_containers.sh restart \
+    --file available_nodes.txt
+```
+
+### Step 2: 启动 Ray 集群
+
+```bash
+bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start \
+    --file available_nodes.txt
+```
+
+### Step 3: 部署模型
+
+```bash
+# 进入容器, 部署目标模型
+docker exec -w /home/jianzhnie/llmtuner/llm/EasyInfer -it vllm-ascend-env bash
+
+# GLM-5 (Port 8001, 2 节点, 131K)
+MODEL_PATH=/path/GLM-5-w4a8 TP=16 PP=1 PORT=8001 \
+    nohup bash examples/glm5_w4a8/vllm/run_vllm.sh > /tmp/vllm_glm5.log 2>&1 &
+
+# GLM-5.1 (Port 8002, 2 节点, 131K)
+TP=16 PP=1 PORT=8002 \
+    nohup bash examples/glm5_1_w4a8/vllm/run_vllm.sh > /tmp/vllm_glm51.log 2>&1 &
+
+# Kimi-K2.6 (Port 8003, 2 节点, 131K)
+TP=8 PP=2 DP=1 PORT=8003 \
+    nohup bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh > /tmp/vllm_kimi.log 2>&1 &
+
+# MiniMax-M2.7 (Port 8004, 2 节点, 65K)
+TP=8 PP=2 MAX_MODEL_LEN=65536 GPU_MEM_UTIL=0.95 PORT=8004 \
+    nohup bash examples/minimax_m2_7/vllm/run_vllm.sh > /tmp/vllm_minimax.log 2>&1 &
+```
+
+### Step 4: 验证
+
+```bash
+# 检查模型可用性
+for port in 8001 8002 8003 8004; do
+    echo -n "Port $port: "
+    curl -sf http://10.16.201.229:$port/v1/models | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data'][0]['id'], d['data'][0]['max_model_len'])"
 done
-sleep 15
 ```
 
-### Step 2: 启动 Ray 集群 (单节点模式)
-
-```bash
-# 单节点 Ray (仅 head)
-ssh $HEAD "docker exec npuslim-env bash -c '
-  source /usr/local/Ascend/cann/set_env.sh
-  ray start --head --port=6379 --resources='\''{\"NPU\": 8}'\'' --num-gpus=8
-'"
-sleep 5
-
-# 验证: 1 node, 8 NPU
-ssh $HEAD "docker exec npuslim-env ray status | grep -E 'NPU|Active'"
-```
-
-> ⚠️ 多节点 Ray 当前不可用 (Bug 6/7)，待修复后恢复下方多节点命令。
-
-### Step 3: 部署模型 (单节点已验证)
-
-```bash
-# === GLM-5.1 (Port 8002, 单节点已验证 ✅) ===
-ssh $HEAD 'docker exec npuslim-env bash -c "
-> /tmp/vllm_glm51.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/glm5_w4a8/vllm
-MAX_MODEL_LEN=32768 TP=8 PP=1 PORT=8002 nohup bash run_vllm_nomtp.sh >> /tmp/vllm_glm51.log 2>&1 &
-"'
-
-# === GLM-5 (Port 8001) 多节点 — 待 Bug 6 修复 ===
-# ssh $HEAD 'docker exec npuslim-env bash -c "
-# MAX_MODEL_LEN=202752 TP=16 PP=1 PORT=8001 MODEL_PATH=.../GLM-5-w4a8 bash run_vllm.sh"'
-
-# === Kimi-K2.6 (Port 8003) 多节点 — 待 Bug 6/7 修复 ===
-# ssh $HEAD 'docker exec npuslim-env bash -c "
-# MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 bash run_vllm.sh"'
-```
-
-### Step 4: 等待并验证
-
-```bash
-# GLM-5: ~12 分钟 → curl http://10.16.201.40:8001/v1/models
-# GLM-5.1: ~12 分钟 → curl http://10.16.201.40:8002/v1/models
-# Kimi-K2.6: ~15 分钟 → curl http://10.16.201.40:8003/v1/models
-
-# 监控启动日志
-ssh $HEAD "docker exec npuslim-env tail -f /tmp/vllm_kimi.log"
-
-# 检查错误
-ssh $HEAD "docker exec npuslim-env grep -E 'error|Error|Traceback|OOM|EngineDead' /tmp/vllm_kimi.log"
-```
-
-### Step 5: 停止部署
+### Step 5: 停止
 
 ```bash
 # 停止 vLLM
-ssh $HEAD "docker exec npuslim-env bash -c 'kill \$(pgrep -f \"vllm serve\")'"
+docker exec vllm-ascend-env bash -c "pkill -9 -f 'vllm serve'"
 
-# 停止 Ray 集群
-for ip in $HEAD $WORKER; do
-    ssh "$ip" "docker exec npuslim-env bash -c 'ray stop --force'"
-done
-
-# 清理僵尸进程 (可选)
-for ip in $HEAD $WORKER; do
-    ssh "$ip" "docker restart npuslim-env"
-done
+# 重启容器 (清理 NPU 内存和 Ray 残留)
+bash scripts/docker/manage_npuslim_containers.sh restart \
+    --file available_nodes.txt
 ```
 
 ---
 
-## 5. Bug 诊断与修复
+## 5. 已知问题与修复
 
-### Bug 1: GCC 10.3.1 Triton 编译 Crash ← 新发现 🔴
-
-| 项目 | 内容 |
-|------|------|
-| **严重度** | BLOCKING (节点 163 不可用于 MLA 模型) |
-| **现象** | 首次推理时 EngineCore 崩溃 |
-| **错误** | `RuntimeError: Failed to compile .../launcher_cxx11abi1.cxx, error: g++: internal compiler error: Segmentation fault signal terminated program cc1plus` |
-| **触发位置** | `vllm_ascend/ops/triton/rope.py:368` → `triton/backends/ascend/driver.py:413` |
-| **Root Cause** | GCC 10.3.1 在编译 Triton 生成的复杂 C++ 模板代码时内部分段错误 |
-| **影响范围** | 仅节点 163; 节点 40/153/124/193/201 正常 |
-| **修复方案** | 将 worker 从 163 替换为 153 |
-| **诊断方法** | `grep "g++.*internal compiler" /tmp/vllm_*.log` |
-
-**Root Cause Chain**:
-```
-首次推理 (token generation)
-  → MLA attention forward (deepseek_v2.py:1005)
-  → mla_forward (mla.py:187)
-  → indexer_select_pre_process (sfa_v1.py:897)
-  → rope_forward_triton_siso (rope.py:368)
-  → Triton JIT compile (jit.py:696)
-  → make_npu_launcher_stub (driver.py:279)
-  → g++ internal compiler error ← CRASH
-  → EngineDeadError
-```
-
-### Bug 2: kimi_k2 vs deepseek_v3 Tool Parser ← 新发现 🔴
+### Issue 1: DeepSeek V4 attn_sink KeyError 🔴
 
 | 项目 | 内容 |
 |------|------|
-| **严重度** | BLOCKING (工具调用/Anthropic API 完全不可用) |
-| **现象** | `/v1/messages` 和 tool calling 返回 500 错误 |
-| **错误** | `DeepSeek-V3 Tool parser could not locate tool call start/end tokens in the tokenizer!` |
-| **Root Cause** | Kimi tokenizer 使用 `<\|tool_call_begin\|>` 等自定义 token，deepseek_v3 parser 寻找 `"éri"` 等 DeepSeek 专用分隔符 |
-| **修复方案** | 使用 `--tool-call-parser kimi_k2` (KimiK2ToolParser) |
-| **影响文件** | `examples/kimi_k2_6_w4a8/run_vllm.sh` (已修复) |
+| **严重度** | BLOCKING |
+| **错误** | `KeyError: 'model.layers.0.self_attn.attn_sink'` |
+| **文件** | `/vllm-workspace/vllm-ascend/vllm_ascend/models/deepseek_v4.py:1204` |
+| **修复** | 添加 `if name not in params_dict: continue` |
+| **影响** | DeepSeek-V4-Pro, DeepSeek-V4-Flash |
 
-### Bug 3: FLASHCOMM1 DSA CP Crash (已知，已修复)
-
-| 项目 | 内容 |
-|------|------|
-| **严重度** | BLOCKING (GLM-5/5.1 在 W4A8 下无法推理) |
-| **Root Cause** | `index_topk: 2048` → `is_ds_v32=True` → `enable_dsa_cp()=True` → `_init_o_proj_tp_full_params()` → `AscendRowParallelLinear` 缺少 `aclnn_input_scale` 属性 |
-| **修复方案** | `VLLM_ASCEND_ENABLE_FLASHCOMM1=0` |
-| **影响模型** | 仅 GLM-5/5.1; Kimi-K2.6 不受影响 (不同注意力路径) |
-
-**Root Cause Chain**:
-```
-GLM-5 config: index_topk=2048
-  → vllm_ascend/utils.py: enable_dsa_cp() → is_ds_v32=True && enable_sp()
-  → attention/sfa_v1.py: _init_o_proj_tp_full_params()
-  → self.o_proj.aclnn_input_scale  ← AscendRowParallelLinear (W4A8) 没有此属性
-  → AttributeError → EngineCore crash
-```
-
-### Bug 4: Ray 僵尸进程累积
+### Issue 2: MiniMax MTP 不支持 🔴
 
 | 项目 | 内容 |
 |------|------|
-| **严重度** | LOW (影响后续部署性能) |
-| **现象** | vLLM 崩溃后容器内 300+ 僵尸 Ray worker 进程 |
-| **修复方案** | `docker restart npuslim-env` |
-| **预防** | 部署间始终重启容器 |
+| **严重度** | BLOCKING |
+| **错误** | `NotImplementedError: Unsupported speculative method: 'mtp'` |
+| **修复** | 移除 `--speculative-config` 参数 |
+| **影响** | MiniMax-M2.7 (模型含 MTP 但 vLLM-Ascend 不支持) |
 
-### Bug 5: TP=32 设备映射失败 (已知，未解决)
-
-| 项目 | 内容 |
-|------|------|
-| **严重度** | BLOCKING (4 节点 TP=32 不可用) |
-| **错误** | `Invalid device is 29/30/31 and the input visible device is 0,1,2,3,4,5,6,7` |
-| **状态** | 待 vLLM-Ascend 修复 |
-
-### Bug 6: 跨节点 HCCL AllReduce AICPU 异常 ← 新发现 🔴
+### Issue 3: MiniMax W8A8 OOM 🟡
 
 | 项目 | 内容 |
 |------|------|
-| **严重度** | BLOCKING (所有跨节点 TP>8 部署均失败) |
-| **现象** | 模型权值加载成功后，在 `profile_run` 阶段崩溃 |
-| **错误** | `E39999: The error from device(chipId:X, dieId:Y), serial number is N, an exception occurred during AICPU execution` |
-| **触发位置** | `torch_npu.npu_rms_norm()` → `HcclAllreduce` → AICPU exception |
-| **影响节点** | 164 (chipId:2,3), 229 (chipId:3) — 仅 worker 节点, head 节点 40 正常 |
-| **Root Cause** | 跨节点 TP (TP=16 分布于 2 节点) 时每个 transformer 层的 RMS Norm 触发 HCCL AllReduce，Ascend NPU 的 AICPU (AI CPU) 在执行此算子时抛异常 |
-| **影响模型** | 所有需要跨节点 TP 的模型 (GLM 因不支持 PP 只能用大 TP) |
-| **诊断方法** | `grep "aicpu execute failed" /tmp/vllm_*.log` |
-| **临时方案** | 单节点 TP=8 部署 (缩水上下文) |
-| **永久修复** | 待华为 CANN/vLLM-Ascend 团队修复 HCCL AllReduce + RMS Norm 跨节点兼容性 |
+| **严重度** | MEDIUM |
+| **错误** | `ValueError: No available memory for the cache blocks` |
+| **修复** | 使用 TP=8 PP=2 + GPU_MEM_UTIL=0.95 + MAX_MODEL_LEN≤65536 |
+| **影响** | MiniMax-M2.7 (W8A8 内存需求大) |
 
-**Root Cause Chain**:
-```
-模型 forward (profile_run)
-  → deepseek_v2.py:1102 → input_layernorm(hidden_states)
-  → custom_op.py:135 → _forward_method()
-  → layernorm.py:82 → torch_npu.npu_rms_norm(x, self.weight, ...)
-  → torch/_ops.py:1255 → HcclAllreduce (跨节点 TP 通信)
-  → AICPU execute failed (chipId:X, dieId:Y)
-  → rtDeviceSynchronizeWithTimeout → aicpu exception
-  → EngineCore crash
-```
-
-**已测试节点**:
-| 节点对 | 结果 |
-|--------|------|
-| 40(head) + 153(worker) | ❌ NPU 内存不足 (153 有 26 GiB 残留) |
-| 40(head) + 164(worker) | ❌ Bug 6: AICPU chipId:2/3 |
-| 40(head) + 229(worker) | ❌ Bug 6: AICPU chipId:3 |
-| 40(head) + 124(worker) | ❌ NPU 内存不足 (124 有 25 GiB 残留) |
-| 40 单节点 | ✅ TP=8 single-node works |
-
-### Bug 7: Worker 节点 NPU 内存持久残留 ← 新发现 🟡
+### Issue 4: Ray 残留 Placement Group 🟡
 
 | 项目 | 内容 |
 |------|------|
-| **严重度** | MEDIUM (阻止部分节点参与部署) |
-| **现象** | Worker 节点在容器重启后仍有 ~25 GiB NPU 内存被占用 |
-| **错误** | `ValueError: Free memory on device (34.88/61.28 GiB) on startup is less than desired GPU memory utilization` |
-| **影响节点** | 153 (34.88 GiB free), 124 (36.15 GiB free) |
-| **Root Cause** | 之前运行的 sglang/vllm 进程释放不彻底；NPU 驱动层内存残留 (需主机级重置) |
-| **修复方案** | 节点主机级重启 或 `npu-smi` 复位; Docker restart 不足够 |
-| **诊断方法** | `npu-smi info` 检查 Used/Free memory |
+| **严重度** | MEDIUM |
+| **现象** | 16/16 NPUs reserved in placement groups |
+| **修复** | 部署前重启容器 |
+| **预防** | 每次部署间执行 `docker restart` |
+
+### Issue 5: Ray Head Node NPU 调度 🟡
+
+| 项目 | 内容 |
+|------|------|
+| **严重度** | MEDIUM |
+| **错误** | `Current node has no NPU available` |
+| **原因** | 残留 placement group bundle 占用 |
+| **修复** | 重启容器 (释放所有 Ray 资源) |
 
 ---
 
 ## 6. Claude Code 集成
 
-### 6.1 配置方式
-
-**方式一: 环境变量 (临时)**
 ```bash
-ANTHROPIC_BASE_URL=http://10.16.201.40:8002 \
+# 环境变量配置
+ANTHROPIC_BASE_URL=http://10.16.201.229:8003 \
 ANTHROPIC_API_KEY=dummy \
 ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.1 \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1 \
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.1 \
+ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6 \
+ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6 \
+ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
 claude
 ```
 
-**方式二: settings.json (永久)**
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://10.16.201.40:8003",
-    "ANTHROPIC_API_KEY": "dummy",
-    "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "kimi-k2.6",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "kimi-k2.6",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "kimi-k2.6"
-  }
-}
-```
+### 模型推荐
 
-**方式三: shell 配置文件 (永久)**
-```bash
-export ANTHROPIC_BASE_URL=http://10.16.201.40:8002
-export ANTHROPIC_API_KEY=dummy
-export ANTHROPIC_AUTH_TOKEN=dummy
-export ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6
-export ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6
-```
+| 优先级 | 模型 | 原因 |
+|--------|------|------|
+| 🥇 推荐 | **Kimi-K2.6** | 131K 上下文, 384 专家, 多模态, max_seqs=16 |
+| 🥈 备选 | **GLM-5.1** | 131K 上下文, MTP 加速 |
+| 🥉 备选 | **MiniMax-M2.7** | 65K 上下文, W8A8 高精度 |
 
-### 6.2 API 兼容性矩阵
+### API 兼容性
 
-| API Endpoint | GLM-5 | GLM-5.1 | Kimi-K2.6 |
-|-------------|-------|---------|-----------|
-| `/v1/models` | ✅ | ✅ | ✅ |
-| `/v1/chat/completions` (chat) | ✅ | ✅ | ✅ |
-| `/v1/chat/completions` (tool) | ✅ glm47 | ✅ glm47 | ✅ kimi_k2 |
-| `/v1/messages` | ✅ | ✅ | ✅ |
-| `/v1/messages` (tool_use) | ✅ | ✅ | ✅ |
-| `/v1/completions` | ✅ | ✅ | ✅ |
-| `/v1/messages/count_tokens` | ✅ | ✅ | ✅ |
-
-**全部 3 个模型**都完整支持 Claude Code 所需的 Anthropic Messages API，包括 tool_use。
-
-### 6.3 模型选择指南
-
-| 维度 | GLM-5 | GLM-5.1 | Kimi-K2.6 |
-|------|-------|---------|-----------|
-| 上下文长度 | 202K | 202K | **262K** 🏆 |
-| 并发能力 (max_seqs) | 8 | 8 | **16** 🏆 |
-| 多模态 | ❌ | ❌ | ✅ 🏆 |
-| 专家数 | 256 | 256 | **384** 🏆 |
-| 吞吐量 (MTP) | ✅ 略高 | ✅ 略高 | ❌ 标准 |
-| 工具调用稳定性 | ✅ | ✅ | ✅ |
-| 推荐场景 | 代码生成 | Agent 任务 | **综合最佳** 🏆 |
-
-### 6.4 模型切换
-
-仅能同时运行一个模型 (全部需要 16 NPU)。切换步骤:
-
-```bash
-# 1. 停止当前模型
-ssh 10.16.201.40 "docker exec npuslim-env kill \$(pgrep -f 'vllm serve')"
-
-# 2. 部署目标模型 (保持 Ray 运行即可)
-ssh 10.16.201.40 'docker exec npuslim-env bash -c "
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/<model_dir>
-MAX_MODEL_LEN=<ctx> TP=<tp> PP=<pp> PORT=<port> nohup bash run_vllm.sh >> /tmp/vllm_<name>.log 2>&1 &
-"'
-
-# 3. 更新 ANTHROPIC_BASE_URL 端口
-```
+| API Endpoint | GLM-5 | GLM-5.1 | Kimi-K2.6 | MiniMax-M2.7 |
+|-------------|-------|---------|-----------|--------------|
+| `/v1/models` | ✅ | ✅ | ✅ | ✅ |
+| `/v1/chat/completions` | ✅ | ✅ | ✅ | ✅ |
+| Tool Calling | ✅ glm47 | ✅ glm47 | ✅ kimi_k2 | ✅ minimax_m2 |
+| `/v1/messages` | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
 ## 7. 集群拓扑
 
 ```
+Ascend NPU Cluster — 4 Nodes
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    Ascend NPU Cluster — 2 Nodes                       │
 │                                                                       │
-│  ┌─────────────────────────────────┐  ┌─────────────────────────────┐ │
-│  │  Head: 10.16.201.40             │  │  Worker: 10.16.201.153      │ │
-│  │  Host: bms-luyao-0003           │  │  Host: bms-???               │ │
-│  │  NPU: 8× Ascend 910C × 64GB    │  │  NPU: 8× Ascend 910C × 64GB │ │
-│  │                                 │  │                             │ │
-│  │  ┌─────────────────────────┐   │  │  ┌─────────────────────────┐ │ │
-│  │  │ Container: npuslim-env  │   │  │  │ Container: npuslim-env  │ │ │
-│  │  │                         │   │  │  │                         │ │ │
-│  │  │  Ray Head :6379         │◄──│──│──│  Ray Worker → :6379     │ │ │
-│  │  │  Resources: {"NPU": 8}  │   │  │  │  Resources: {"NPU": 8}  │ │ │
-│  │  │                         │   │  │  │                         │ │ │
-│  │  │  vLLM API Server         │   │  │  │  vLLM Engine Worker     │ │ │
-│  │  │  Ports: 8001/8002/8003  │   │  │  │  (TP/PP shard)          │ │ │
-│  │  └─────────────────────────┘   │  │  └─────────────────────────┘ │ │
-│  └─────────────────────────────────┘  └─────────────────────────────┘ │
+│  10.16.201.229 (Head)        10.16.201.164        10.16.201.40        │
+│  8× Ascend 910C × 66GB      8× Ascend 910C × 66GB  8× Ascend 910C    │
+│  Container: vllm-ascend-env  Container: vllm-ascend-env              │
+│  Ray Head :6379              Ray Worker            Ray Worker         │
 │                                                                       │
-│  EXCLUDED Nodes:                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │
-│  │ 163: GCC bug │  │ 229: zombie  │  │ 164: port    │                │
-│  │ (Triton JIT) │  │ (other user) │  │ conflict     │                │
-│  └──────────────┘  └──────────────┘  └──────────────┘                │
+│  10.16.201.193                                                     │
+│  8× Ascend 910C × 66GB                                           │
+│  Container: vllm-ascend-env                                        │
+│  Ray Worker                                                        │
 │                                                                       │
-│  Capacity: 16 NPU × 64GB = 1TB | Only 1 model at a time              │
+│  Total: 4 nodes × 8 NPU = 32 NPU                                    │
+│  可同时部署 2 模型 (每个用 2 节点)                                      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -472,208 +309,124 @@ MAX_MODEL_LEN=<ctx> TP=<tp> PP=<pp> PORT=<port> nohup bash run_vllm.sh >> /tmp/v
 
 ## 8. 环境变量速查
 
-### 8.1 GLM-5 / GLM-5.1
+### GLM-5 / GLM-5.1
 
 ```bash
-# ===== 必须设置 =====
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=0   # 不设置 → DSA CP crash
-export VLLM_ASCEND_ENABLE_MLAPO=1        # MLA 融合优化
+# 必须
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+export VLLM_ASCEND_ENABLE_MLAPO=1
 
-# ===== 性能优化 =====
+# 性能
+export HCCL_BUFFSIZE=200
 export HCCL_OP_EXPANSION_MODE=AIV
-export HCCL_BUFFSIZE=200                 # 256 专家
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
-export OMP_NUM_THREADS=1
-export OMP_PROC_BIND=false
+export OMP_NUM_THREADS=1 OMP_PROC_BIND=false
 ```
 
-### 8.2 Kimi-K2.6
+### Kimi-K2.6
 
 ```bash
-# ===== 性能优化 =====
+# 性能
+export HCCL_BUFFSIZE=800
+export TASK_QUEUE_ENABLE=1
 export HCCL_OP_EXPANSION_MODE=AIV
-export HCCL_BUFFSIZE=800                 # 384 专家需要更大缓冲
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
-export TASK_QUEUE_ENABLE=1               # Kimi 专属优化
-export OMP_NUM_THREADS=1
-export OMP_PROC_BIND=false
-
-# 不需要 FLASHCOMM1=0 (Kimi 走 DeepseekV3 注意力路径)
+export OMP_NUM_THREADS=1 OMP_PROC_BIND=false
 ```
 
-### 8.3 vLLM 核心参数
+### MiniMax-M2.7
 
 ```bash
-# 所有模型通用
---trust-remote-code
---dtype bfloat16
---distributed-executor-backend ray
---quantization ascend                   # W4A8 Ascend 量化
---enable-expert-parallel                # MoE 必须
---enforce-eager                         # Ascend 无 CUDA graph
---seed 1024
-
-# Agent 优化 (所有模型推荐)
---enable-prefix-caching
---enable-chunked-prefill
---enable-auto-tool-choice
---max-num-batched-tokens 16384
+# 性能
+export HCCL_BUFFSIZE=1024
+export TASK_QUEUE_ENABLE=1
+export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export HCCL_OP_EXPANSION_MODE=AIV
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 ```
 
 ---
 
 ## 9. API 验证命令
 
-### 9.1 健康检查
-
 ```bash
-# 检查模型可用性
-for port in 8001 8002 8003; do
-    echo -n "Port $port: "
-    curl -sf http://10.16.201.40:$port/v1/models | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data'][0]['id'], d['data'][0]['max_model_len'])"
-done
-```
+# 健康检查
+curl -s http://10.16.201.229:8003/v1/models | python3 -m json.tool
 
-### 9.2 Chat Completion
-
-```bash
-MODEL="kimi-k2.6" PORT=8003
-curl -s http://10.16.201.40:$PORT/v1/chat/completions \
+# Chat Completion
+curl -s http://10.16.201.229:8003/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":30}"
-```
+  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Hello"}],"max_tokens":30}'
 
-### 9.3 Tool Calling
-
-```bash
-curl -s http://10.16.201.40:$PORT/v1/chat/completions \
+# Tool Calling
+curl -s http://10.16.201.229:8003/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d "{
-    \"model\":\"$MODEL\",
-    \"messages\":[{\"role\":\"user\",\"content\":\"Weather in Paris?\"}],
-    \"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}}}],
-    \"max_tokens\":100
-  }"
-```
+  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"max_tokens":100}'
 
-### 9.4 Anthropic Messages (Claude Code 兼容)
-
-```bash
-curl -s http://10.16.201.40:$PORT/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: dummy" \
-  -d "{
-    \"model\":\"$MODEL\",
-    \"max_tokens\":100,
-    \"messages\":[{\"role\":\"user\",\"content\":\"Read file /tmp/test.txt\"}],
-    \"tools\":[{\"name\":\"read_file\",\"description\":\"Read a file\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}]
-  }" | python3 -m json.tool
-```
-
-### 9.5 日志监控
-
-```bash
-# 实时日志
-ssh 10.16.201.40 "docker exec npuslim-env tail -f /tmp/vllm_kimi.log"
-
-# 错误检索
-ssh 10.16.201.40 "docker exec npuslim-env grep -E 'Error|Traceback|OOM|g\+\+' /tmp/vllm_*.log"
-
-# 进程状态
-ssh 10.16.201.40 "docker exec npuslim-env ps aux | grep vllm"
+# Anthropic Messages
+curl -s http://10.16.201.229:8003/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -d '{"model":"kimi-k2.6","max_tokens":100,"messages":[{"role":"user","content":"Hi"}]}'
 ```
 
 ---
 
 ## 10. Quick Start
 
-一键部署 Kimi-K2.6 (推荐模型):
+一键部署 Kimi-K2.6:
 
 ```bash
 #!/bin/bash
 set -e
-HEAD=10.16.201.40
-WORKER=10.16.201.153
+NODES_FILE=available_nodes.txt
+HEAD=10.16.201.229
 
-# 1. 清理
-for ip in $HEAD $WORKER; do ssh "$ip" "docker restart npuslim-env"; done && sleep 15
+# 1. 容器
+bash scripts/docker/manage_npuslim_containers.sh restart --file $NODES_FILE
 
 # 2. Ray
-ssh $HEAD "docker exec npuslim-env bash -c 'source /usr/local/Ascend/cann/set_env.sh; ray start --head --port=6379 --resources='\''{\"NPU\":8}'\'' --num-gpus=8'" && sleep 5
-ssh $WORKER "docker exec npuslim-env bash -c 'source /usr/local/Ascend/cann/set_env.sh; ray start --address=$HEAD:6379 --resources='\''{\"NPU\":8}'\'' --num-gpus=8'" && sleep 5
+bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file $NODES_FILE
 
 # 3. 部署
-ssh $HEAD 'docker exec npuslim-env bash -c "
-> /tmp/vllm_kimi.log 2>&1
-cd /home/jianzhnie/llmtuner/llm/EasyInfer/examples/kimi_k2_6_w4a8
-MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 nohup bash run_vllm.sh >> /tmp/vllm_kimi.log 2>&1 &
-echo PID: \$!
-"'
+docker exec -w /home/jianzhnie/llmtuner/llm/EasyInfer vllm-ascend-env bash -c "
+TP=8 PP=2 DP=1 PORT=8003 \
+nohup bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh > /tmp/vllm_kimi.log 2>&1 &
+echo PID=\$!
+"
 
-# 4. 等待 (~15 min)
-echo "Waiting for model to load..."
-for i in $(seq 1 30); do
+# 4. 等待 (~12 min)
+echo "Waiting for model..."
+for i in $(seq 1 40); do
     if curl -sf http://$HEAD:8003/v1/models >/dev/null 2>&1; then
         echo "READY!"
-        curl -s http://$HEAD:8003/v1/models | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data'][0]['id'], d['data'][0]['max_model_len'])"
+        curl -s http://$HEAD:8003/v1/models
         break
     fi
-    echo "  ... ${i}/30"
     sleep 30
 done
-
-echo "Deployment complete!"
 ```
 
 ---
 
-## 11. 经验总结
+## 11. 脚本清单
 
-### 11.1 部署维度
-
-| # | 经验 | 详情 |
-|---|------|------|
-| 1 | **先单节点验证，再多节点扩展** | 单节点 Triton 编译成功是多节点部署的前提。发现 163 的 GCC bug 就是通过单节点测试。 |
-| 2 | **vLLM-Ascend 0.18.0rc1 功能限制** | `--async-scheduling` 仅支持 mp backend; `--num-scheduler-steps` 不支持; TP>16 有设备映射问题 |
-| 3 | **PP vs TP 策略** | GLM 不支持 PP → 大 TP 跨节点; Kimi 支持 PP → TP+PP 均衡分布 |
-| 4 | **Tool Parser 必须匹配 tokenizer** | 不能仅凭架构选择 parser。必须检查 tokenizer 中的实际 tool token。 |
-| 5 | **容器进程管理** | `docker restart` 是唯一可靠的僵尸进程清理方式。不要依赖 `ray stop` 或 `pkill`。 |
-
-### 11.2 参数维度
-
-| # | 经验 | 详情 |
-|---|------|------|
-| 6 | **MTP 内存代价高** | MTP 加载第二份权重，单节点 KV cache 从充足降至不可用。TP=16 时可同时实现 MTP+全上下文。 |
-| 7 | **GCC 版本影响面广** | GCC 10.3.1 在特定节点上的 Triton 编译 bug 难以调试，需要逐节点验证。 |
-| 8 | **GPU_MEM_UTIL 需要余量** | Kimi 设置 0.92 (非 0.94) 以预留视觉组件空间，即使纯文本使用时也不应调高。 |
-
-### 11.3 运维维度
-
-| # | 经验 | 详情 |
-|---|------|------|
-| 9 | **Ray NPU 资源必须显式声明** | `--resources='{"NPU": 8}'` 显式注册，否则 NPU 自动检测可能不完整。 |
-| 10 | **日志管理** | 每个模型重定向到独立日志文件 (`/tmp/vllm_<model>.log`)，便于错误排查。 |
+| 文件 | 模型 | 说明 | 状态 |
+|------|------|------|------|
+| `examples/deepseek_v4_pro/vllm/run_vllm.sh` | DSV4-Pro | 直接部署 | ❌ attn_sink |
+| `examples/deepseek_v4_pro/vllm/README.md` | DSV4-Pro | 部署文档 | ✅ 含修复方法 |
+| `examples/deepseek_v4_flash/vllm/run_vllm.sh` | DSV4-Flash | 直接部署 | ❌ 同 DSV4-Pro |
+| `examples/deepseek_v4_flash/vllm/README.md` | DSV4-Flash | 部署文档 | ✅ 含修复方法 |
+| `examples/glm5_w4a8/vllm/run_vllm.sh` | GLM-5 | 直接部署 | ✅ 已验证 |
+| `examples/glm5_w4a8/vllm/README.md` | GLM-5 | 部署文档 | ✅ |
+| `examples/glm5_1_w4a8/vllm/run_vllm.sh` | GLM-5.1 | 直接部署 | ✅ 已验证 |
+| `examples/glm5_1_w4a8/vllm/README.md` | GLM-5.1 | 部署文档 | ✅ |
+| `examples/kimi_k2_6_w4a8/vllm/run_vllm.sh` | Kimi-K2.6 | 直接部署 | ✅ 已验证 |
+| `examples/kimi_k2_6_w4a8/vllm/README.md` | Kimi-K2.6 | 部署文档 | ✅ |
+| `examples/minimax_m2_7/vllm/run_vllm.sh` | MiniMax-M2.7 | 直接部署 | ✅ 已验证 (无MTP) |
+| `examples/minimax_m2_7/vllm/README.md` | MiniMax-M2.7 | 部署文档 | ✅ |
+| `docs/AGENT_DEPLOYMENT.md` | - | 总体部署指南 | ✅ 已更新 |
 
 ---
 
-## 12. 脚本文件清单
-
-| 文件 | 说明 | 状态 |
-|------|------|------|
-| `examples/glm5_1_w4a8/vllm/run_vllm.sh` | GLM-5/5.1 共用部署脚本 (自动检测模型) | ✅ |
-| `examples/glm5_1_w4a8/vllm/run_vllm_nomtp.sh` | GLM-5/5.1 无 MTP 脚本 (单节点) | ✅ |
-| `examples/glm5_1_w4a8/vllm/vllm_server.sh` | GLM-5/5.1 包装器部署脚本 | ✅ |
-| `examples/glm5_1_w4a8/vllm/curl_test.sh` | GLM-5/5.1 API 测试脚本 | ✅ |
-| `examples/glm5_1_w4a8/vllm/README.md` | GLM-5/5.1 合并文档 | ✅ |
-| `examples/glm5_w4a8 → glm5_1_w4a8` | Symlink (兼容旧路径) | ✅ |
-| `examples/kimi_k2_6_w4a8/run_vllm.sh` | Kimi-K2.6 直接部署脚本 (kimi_k2 parser) | ✅ 已修复 |
-| `examples/kimi_k2_6_w4a8/vllm_server.sh` | Kimi-K2.6 包装器部署脚本 | ✅ |
-| `examples/kimi_k2_6_w4a8/curl_test.sh` | Kimi-K2.6 API 测试脚本 | ✅ |
-| `examples/kimi_k2_6_w4a8/README.md` | Kimi-K2.6 部署文档 | ✅ 已更新 |
-| `AGENT_DEPLOYMENT.md` | 总体部署报告 (本文件) | ✅ 已更新 |
-
----
-
-*Generated by Claude Code | 2026-06-09 | Last updated 2026-06-10*
+*Last updated: 2026-06-11 | vLLM-Ascend 0.20.2 | CANN 9.0.0 | 4/6 models deployed*
