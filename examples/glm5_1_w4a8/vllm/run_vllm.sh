@@ -1,27 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — Agent-Optimized vLLM Deployment with Max Context
+# GLM-5.1 W4A8 — Agent-optimized vLLM deployment with max context
+# =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
 # Max Position: 202752 | Deploy: 202K context (override with MAX_MODEL_LEN)
+# Note: GLM-5.1 does not support Pipeline Parallelism; use large TP across nodes.
+# This script shares the same config as GLM-5 W4A8 except MODEL_PATH and port.
 #
-# GLM-5.1 不支持 Pipeline Parallelism (PP)，使用大 TP 跨节点部署
-# 默认 TP=16 PP=1 (2节点 × 8 NPU); 单节点: TP=8 PP=1
-#
-# 与 GLM-5 W4A8 使用完全相同的配置，仅模型路径和端口不同
-#
-# 用法:
-#   # 2 节点全量部署 (202K)
-#   MAX_MODEL_LEN=202752 TP=16 bash run_vllm.sh
-#
-#   # 单节点
+# Usage:
+#   bash run_vllm.sh
+#   TP=16 MAX_MODEL_LEN=202752 bash run_vllm.sh
 #   TP=8 MAX_MODEL_LEN=32768 bash run_vllm.sh
 #
-# Agent Optimization:
-#   - Prefix caching ENABLED (critical for Claude Code system prompt reuse)
-#   - max-num-seqs=8 (parallel tool calls)
-#   - max-num-batched-tokens=16384 (prefill throughput)
+# Reference:
+#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
 # Load Ascend CANN environment
 set +u
@@ -33,18 +27,18 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# 基础路径配置
-BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8002}"
-TP="${TP:-8}"
-PP="${PP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
+# Base configuration
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly HOST="${HOST:-0.0.0.0}"
+readonly PORT="${PORT:-8002}"
+readonly TP="${TP:-8}"
+readonly PP="${PP:-1}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
 
-# 环境变量优化 (v0.20.2: balance_scheduling/flashcomm1/mlapo 已迁移至 --additional-config)
+# NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
@@ -52,13 +46,13 @@ export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 
-# 兼容旧版本的回退变量
+# Fallback variables for older versions
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
 
-# v0.20.2 新格式 additional_config
-ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": false, "enable_mlapo": true}'
+# v0.20.2 additional_config format
+readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": false, "enable_mlapo": true}'
 
 echo "============================================"
 echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment"
@@ -66,9 +60,8 @@ echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
-echo "[INFO] Prefix Caching: ENABLED (agent-optimized)"
+echo "[INFO] Prefix Caching: ENABLED"
 echo "[INFO] MTP: enabled (3 tokens, method=mtp)"
-echo "[INFO] Note: Same config as GLM-5 W4A8"
 echo "============================================"
 
 vllm serve "$MODEL_PATH" \

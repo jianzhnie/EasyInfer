@@ -1,18 +1,28 @@
 #!/bin/bash
-# MiniMax-M2.7 W8A8 QuaRot — 预填充-解码分离部署 (PD Disaggregation)
-# 功能: 将 Prefill 和 Decode 分离到不同节点，通过 Mooncake 传输 KV Cache
-# 架构: MiniMaxM2ForCausalLM | MoE 256E | 支持 PP
-# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/pd_disaggregation_mooncake_multi_node.html
+# =============================================================================
+# MiniMax-M2.7 W8A8 QuaRot — PD Disaggregation with Mooncake
+# =============================================================================
+# Purpose: Separate Prefill and Decode onto different nodes and transfer KV
+#          Cache via Mooncake.
+# Architecture: MiniMaxM2ForCausalLM | 256 Experts | supports PP
 #
-# 前置条件:
-#   1. 至少 2 节点，RoCE 网络互通
-#   2. Mooncake 已安装并配置
+# Prerequisites:
+#   1. At least 2 nodes with RoCE interconnect
+#   2. Mooncake installed and configured
 #
-# 用法:
-#   # Prefill 节点: KV_ROLE=kv_producer KV_PORT=30000 ENGINE_ID=0 bash run_pd_disaggregated.sh
-#   # Decode 节点:  KV_ROLE=kv_consumer KV_PORT=30001 ENGINE_ID=1 PORT=8104 bash run_pd_disaggregated.sh
-set -eo pipefail
+# Usage:
+#   # Prefill node
+#   KV_ROLE=kv_producer KV_PORT=30000 ENGINE_ID=0 bash run_pd_disaggregated.sh
+#
+#   # Decode node
+#   KV_ROLE=kv_consumer KV_PORT=30001 ENGINE_ID=1 PORT=8104 bash run_pd_disaggregated.sh
+#
+# Reference:
+#   https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/pd_disaggregation_mooncake_multi_node.html
+# =============================================================================
+set -euo pipefail
 
+# Load Ascend CANN environment
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -22,20 +32,24 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8004}"
-TP="${TP:-4}"
-PP="${PP:-1}"
-KV_ROLE="${KV_ROLE:-kv_producer}"
-KV_PORT="${KV_PORT:-30000}"
-ENGINE_ID="${ENGINE_ID:-0}"
-DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-2}"
-DATA_PARALLEL_ADDRESS="${DATA_PARALLEL_ADDRESS:-}"
+# Base configuration
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
+readonly HOST="${HOST:-0.0.0.0}"
+readonly PORT="${PORT:-8004}"
+readonly TP="${TP:-4}"
+readonly PP="${PP:-1}"
+readonly KV_ROLE="${KV_ROLE:-kv_producer}"
+readonly KV_PORT="${KV_PORT:-30000}"
+readonly ENGINE_ID="${ENGINE_ID:-0}"
+readonly DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-2}"
+readonly DATA_PARALLEL_ADDRESS="${DATA_PARALLEL_ADDRESS:-}"
 
+# Mooncake configuration
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-./mooncake.json}"
 export ASCEND_BUFFER_POOL="${ASCEND_BUFFER_POOL:-4:8}"
+
+# NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
 export HCCL_BUFFSIZE=1024
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True

@@ -1,19 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# Kimi-K2.6 W4A8 — Agent-Optimized vLLM Deployment with Max Context
+# Kimi-K2.6 W4A8 — Agent-optimized vLLM deployment with max context
+# =============================================================================
 # Architecture: KimiK25ForConditionalGeneration | 384 Experts | MLA | Vision
 # Max Position: 262144 | Deploy: 256K context (override with MAX_MODEL_LEN)
+# Note: Kimi-K2.6 supports Pipeline Parallelism and multimodal (Vision).
 #
-# Kimi-K2.6 支持 Pipeline Parallelism (PP)
-# 默认 TP=8 PP=2 (2节点 × 8 NPU); 单节点: TP=8 PP=1
+# Usage:
+#   bash run_vllm.sh
+#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh
+#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh
 #
-# Agent Optimization:
-#   - Prefix caching ENABLED (no MTP, works well with prefix cache)
-#   - max-num-seqs=16 (high concurrency, no MTP overhead)
-#   - max-num-batched-tokens=16384 (prefill throughput)
-#   - Vision: mm-encoder-tp-mode=data (text-only agent use optimized)
+# Reference:
+#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
 # Load Ascend CANN environment
 set +u
@@ -25,19 +26,19 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# 基础路径配置
-BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Kimi-K2.6-w4a8}"
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8003}"
-TP="${TP:-8}"
-PP="${PP:-1}"
-DP="${DP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
+# Base configuration
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Kimi-K2.6-w4a8}"
+readonly HOST="${HOST:-0.0.0.0}"
+readonly PORT="${PORT:-8003}"
+readonly TP="${TP:-8}"
+readonly PP="${PP:-1}"
+readonly DP="${DP:-1}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 
-# 环境变量优化 (v0.20.2: balance_scheduling/flashcomm1/mlapo 已迁移至 --additional-config)
+# NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
@@ -45,23 +46,22 @@ export HCCL_BUFFSIZE=800
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
-# 兼容旧版本的回退变量
+
+# Fallback variables for older versions
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 
-# v0.20.2 新格式 additional_config
-ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true, "enable_mlapo": true}'
+# v0.20.2 additional_config format
+readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true, "enable_mlapo": true}'
 
 echo "============================================"
 echo "[INFO] Kimi-K2.6 W4A8 — Agent-Optimized Deployment"
+echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
-echo "[INFO] COMPILATION_CONFIG=$COMPILATION_CONFIG"
-echo "[INFO] SPECULATIVE_CONFIG=$SPECULATIVE_CONFIG"
-echo "[INFO] LANGUAGE_MODEL_ONLY=$LANGUAGE_MODEL_ONLY"
-echo "[INFO] Prefix Caching: ENABLED (agent-optimized)"
+echo "[INFO] Prefix Caching: ENABLED"
 echo "============================================"
 
 vllm serve "$MODEL_PATH" \

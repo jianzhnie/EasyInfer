@@ -1,18 +1,25 @@
 #!/bin/bash
-# GLM-5.1 W4A8 — PD 共置与 Mooncake 多实例部署
-# 功能: 基于 Mooncake 分布式 KV Cache 实现预填充-解码共置
-# 配置与 GLM-5 W4A8 完全相同
-# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/pd_colocated_mooncake_multi_instance.html
+# =============================================================================
+# GLM-5.1 W4A8 — PD Colocated with Mooncake (multi-instance)
+# =============================================================================
+# Purpose: Prefill-decode colocation via Mooncake distributed KV Cache.
+# Architecture: GlmMoeDsaForCausalLM | 256 Experts | MoE | MTP
+# Same config as GLM-5 W4A8.
 #
-# 前置条件:
-#   1. 安装 Mooncake: https://github.com/kvcache-ai/Mooncake
-#   2. 启动 Mooncake Master: mooncake_master --port 50088
-#   3. 配置 mooncake.json
+# Prerequisites:
+#   1. Mooncake installed: https://github.com/kvcache-ai/Mooncake
+#   2. Mooncake Master started: mooncake_master --port 50088
+#   3. mooncake.json configured and MOONCAKE_CONFIG_PATH set
 #
-# 用法:
+# Usage:
 #   MOONCAKE_CONFIG_PATH=/path/to/mooncake.json bash run_pd_colocated.sh
-set -eo pipefail
+#
+# Reference:
+#   https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/pd_colocated_mooncake_multi_instance.html
+# =============================================================================
+set -euo pipefail
 
+# Load Ascend CANN environment
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -22,15 +29,19 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8002}"
-TP="${TP:-8}"
-PP="${PP:-1}"
+# Base configuration
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly HOST="${HOST:-0.0.0.0}"
+readonly PORT="${PORT:-8002}"
+readonly TP="${TP:-8}"
+readonly PP="${PP:-1}"
 
+# Mooncake configuration
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-./mooncake.json}"
 export ASCEND_BUFFER_POOL="${ASCEND_BUFFER_POOL:-4:8}"
+
+# NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
@@ -43,7 +54,9 @@ export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
 echo "[INFO] GLM-5.1 W4A8 — PD Colocated (Mooncake)"
+echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
+echo "[INFO] Mooncake Config: $MOONCAKE_CONFIG_PATH"
 echo "[INFO] KV Role: kv_both"
 echo "============================================"
 

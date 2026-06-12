@@ -1,21 +1,30 @@
 #!/bin/bash
-# GLM-5.1 W4A8 — API 功能测试脚本
-# 默认使用 localhost:8002
-# 部署配置与 GLM-5 W4A8 完全相同
+# =============================================================================
+# GLM-5.1 W4A8 — API functional test script
+# =============================================================================
+# Targets localhost:8002 by default.
+# Same test logic as GLM-5 W4A8; only the default port/model differ.
 #
-# 用法:
-#   ./curl_test.sh                               # 默认测试 localhost:8002
-#   BASE_URL=http://10.0.0.1:9000 ./curl_test.sh  # 指定地址
-#   MODEL_NAME=my-model ./curl_test.sh             # 指定模型名
+# Usage:
+#   ./curl_test.sh
+#   HOST=10.0.0.1 PORT=9000 ./curl_test.sh
+#   MODEL_NAME=my-model ./curl_test.sh
+# =============================================================================
+set -euo pipefail
 
-# ================ 配置区域 ================
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
 HOST="${HOST:-localhost}"
 PORT="${PORT:-8002}"
 MODEL_NAME="${MODEL_NAME:-glm-5.1}"
-TIMEOUT=300
-WAIT_INTERVAL=5
+readonly TIMEOUT=300
+readonly WAIT_INTERVAL=5
+readonly BASE_URL="http://${HOST}:${PORT}"
 
-# ================ 颜色输出 ================
+# ------------------------------------------------------------------------------
+# Logging helpers
+# ------------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -27,23 +36,24 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# ================ 工具函数 ================
+# ------------------------------------------------------------------------------
+# Wait for the service to become ready
+# ------------------------------------------------------------------------------
 wait_for_service() {
-    log_info "等待服务启动: http://$HOST:$PORT ..."
-    local start_time
+    log_info "等待服务启动: ${BASE_URL} ..."
+    local start_time elapsed
     start_time=$(date +%s)
 
     while true; do
-        if curl -s "http://$HOST:$PORT/health" > /dev/null 2>&1 || \
-           curl -s "http://$HOST:$PORT/v1/models" > /dev/null 2>&1; then
+        if curl -s "${BASE_URL}/health" >/dev/null 2>&1 || \
+           curl -s "${BASE_URL}/v1/models" >/dev/null 2>&1; then
             log_success "服务已就绪!"
             return 0
         fi
 
-        local elapsed
         elapsed=$(( $(date +%s) - start_time ))
-        if [[ $elapsed -ge $TIMEOUT ]]; then
-            log_error "等待服务超时 ($TIMEOUT 秒)!"
+        if [[ "$elapsed" -ge "$TIMEOUT" ]]; then
+            log_error "等待服务超时 (${TIMEOUT} 秒)!"
             return 1
         fi
 
@@ -52,128 +62,101 @@ wait_for_service() {
     done
 }
 
+# ------------------------------------------------------------------------------
+# Run a single JSON API test
+# Args:
+#   $1: test name
+#   $2: endpoint URL
+#   $3: JSON payload
+#   $4: optional extra header
+#   $5: optional "quiet" flag
+# ------------------------------------------------------------------------------
 run_test() {
     local test_name="$1"
-    local curl_cmd="$2"
-    local expected="${3:-}"
+    local endpoint="$2"
+    local payload="$3"
+    local header="${4:-}"
+    local quiet="${5:-}"
+    local response status=0
+    local curl_opts=(-s "$endpoint" -H "Content-Type: application/json")
+
+    [[ -n "$header" ]] && curl_opts+=(-H "$header")
+    [[ -n "$payload" ]] && curl_opts+=(-d "$payload")
 
     echo ""
-    log_info "测试: $test_name"
-    log_info "执行命令: $curl_cmd"
+    log_info "测试: ${test_name}"
+    log_info "Endpoint: ${endpoint}"
 
-    if [[ "$expected" == "quiet" ]]; then
-        eval "$curl_cmd" > /dev/null 2>&1
+    if [[ "$quiet" == "quiet" ]]; then
+        curl "${curl_opts[@]}" -d "$payload" >/dev/null 2>&1 || status=$?
     else
-        eval "$curl_cmd" | python3 -m json.tool 2>/dev/null || eval "$curl_cmd"
+        response=$(curl "${curl_opts[@]}" -d "$payload") || status=$?
+        echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
     fi
 
-    local exit_code=$?
-    if [[ $exit_code -eq 0 ]]; then
-        log_success "$test_name 完成 (退出码: $exit_code)"
+    if [[ "$status" -eq 0 ]]; then
+        log_success "${test_name} 完成 (退出码: ${status})"
     else
-        log_warning "$test_name 可能存在问题 (退出码: $exit_code)"
+        log_warning "${test_name} 可能存在问题 (退出码: ${status})"
     fi
-    return $exit_code
+    return "$status"
 }
 
-# ================ 主程序 ================
+# ------------------------------------------------------------------------------
+# Run a streaming chat completion test
+# ------------------------------------------------------------------------------
+run_stream_test() {
+    local test_name="$1"
+    local payload="$2"
+
+    echo ""
+    log_info "测试: ${test_name}"
+    curl -s "${BASE_URL}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>&1 | head -10 || true
+    log_success "${test_name} 完成"
+}
+
+# ------------------------------------------------------------------------------
+# Main test sequence
+# ------------------------------------------------------------------------------
 echo "=========================================="
 echo "  GLM-5.1 W4A8 API 功能测试"
-echo "  目标地址: http://$HOST:$PORT"
-echo "  模型名称: $MODEL_NAME"
+echo "  目标地址: ${BASE_URL}"
+echo "  模型名称: ${MODEL_NAME}"
 echo "=========================================="
 
-# 0. 等待服务就绪
 wait_for_service || exit 1
 
-# 1. 健康检查 / 模型列表
+# 1. Model list (GET)
 run_test "模型列表查询" \
-    "curl -s http://$HOST:$PORT/v1/models"
+    "${BASE_URL}/v1/models" \
+    ""
 
-# 2. 简单 Chat Completion (英文)
+# 2. Chat completion (English)
 run_test "Chat Completion (英文)" \
-    "curl -s http://$HOST:$PORT/v1/chat/completions \
-      -H \"Content-Type: application/json\" \
-      -d '{
-        \"model\": \"$MODEL_NAME\",
-        \"messages\": [
-          {\"role\": \"user\", \"content\": \"Hello, who are you?\"}
-        ],
-        \"max_tokens\": 128,
-        \"temperature\": 0.7
-      }'"
+    "${BASE_URL}/v1/chat/completions" \
+    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"Hello, who are you?"}],"max_tokens":128,"temperature":0.7}'
 
-# 3. 简单 Chat Completion (中文)
+# 3. Chat completion (Chinese)
 run_test "Chat Completion (中文)" \
-    "curl -s http://$HOST:$PORT/v1/chat/completions \
-      -H \"Content-Type: application/json\" \
-      -d '{
-        \"model\": \"$MODEL_NAME\",
-        \"messages\": [
-          {\"role\": \"system\", \"content\": \"You are a helpful assistant.\"},
-          {\"role\": \"user\", \"content\": \"你好，请简单介绍一下你自己。\"}
-        ],
-        \"max_tokens\": 128,
-        \"temperature\": 0.7
-      }'"
+    "${BASE_URL}/v1/chat/completions" \
+    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"你好，请简单介绍一下你自己。"}],"max_tokens":128,"temperature":0.7}'
 
-# 4. Tool Calling 测试
+# 4. Tool calling
 run_test "Tool Calling" \
-    "curl -s http://$HOST:$PORT/v1/chat/completions \
-      -H \"Content-Type: application/json\" \
-      -d '{
-        \"model\": \"$MODEL_NAME\",
-        \"messages\": [
-          {\"role\": \"user\", \"content\": \"What is the weather like in Beijing?\"}
-        ],
-        \"tools\": [
-          {
-            \"type\": \"function\",
-            \"function\": {
-              \"name\": \"get_weather\",
-              \"description\": \"Get the current weather\",
-              \"parameters\": {
-                \"type\": \"object\",
-                \"properties\": {
-                  \"city\": {
-                    \"type\": \"string\",
-                    \"description\": \"The city to get weather for\"
-                  }
-                },
-                \"required\": [\"city\"]
-              }
-            }
-          }
-        ],
-        \"tool_choice\": \"auto\",
-        \"max_tokens\": 100
-      }'"
+    "${BASE_URL}/v1/chat/completions" \
+    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"What is the weather like in Beijing?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"city":{"type":"string","description":"The city to get weather for"}},"required":["city"]}}}],"tool_choice":"auto","max_tokens":100}'
 
 # 5. Anthropic Messages API
 run_test "Anthropic Messages API" \
-    "curl -s http://$HOST:$PORT/v1/messages \
-      -H \"Content-Type: application/json\" \
-      -H \"x-api-key: dummy\" \
-      -d '{
-        \"model\": \"$MODEL_NAME\",
-        \"max_tokens\": 100,
-        \"messages\": [
-          {\"role\": \"user\", \"content\": \"Hi there!\"}
-        ]
-      }'"
+    "${BASE_URL}/v1/messages" \
+    '{"model":"'"$MODEL_NAME"'","max_tokens":100,"messages":[{"role":"user","content":"Hi there!"}]}' \
+    "x-api-key: dummy"
 
-# 6. 流式 Chat Completion
-run_test "流式 Chat Completion" \
-    "curl -s http://$HOST:$PORT/v1/chat/completions \
-      -H \"Content-Type: application/json\" \
-      -d '{
-        \"model\": \"$MODEL_NAME\",
-        \"messages\": [
-          {\"role\": \"user\", \"content\": \"从1数到5\"}
-        ],
-        \"max_tokens\": 100,
-        \"stream\": true
-      }' 2>&1 | head -10" "quiet"
+# 6. Streaming chat completion
+run_stream_test "流式 Chat Completion" \
+    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"从1数到5"}],"max_tokens":100,"stream":true}'
 
 echo ""
 echo "=========================================="

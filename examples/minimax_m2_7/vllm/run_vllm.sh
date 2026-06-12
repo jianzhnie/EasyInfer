@@ -1,24 +1,23 @@
 #!/bin/bash
-# MiniMax-M2.7 W8A8 QuaRot — 直接 vllm serve 部署
-# 架构: MiniMaxM2ForCausalLM | 256 Experts | MoE
-# 默认 TP=4 PP=1 (单节点 A2，官方推荐)
-# 官方推荐 A2 环境 TP=4 (W8A8 量化)
-# 注意: MTP 在模型中配置 (num_mtp_modules=3)，但 vLLM-Ascend 0.20.2 暂不支持 MiniMax mtp 方法
+# =============================================================================
+# MiniMax-M2.7 W8A8 QuaRot — Direct vllm serve deployment
+# =============================================================================
+# Architecture: MiniMaxM2ForCausalLM | 256 Experts | MoE
+# Default: TP=4 PP=1 (single-node A2, official recommendation)
+# Note: MTP is configured in the model (num_mtp_modules=3) but not supported
+#       by vLLM-Ascend 0.20.2 for MiniMax architecture.
 #
-# 用法:
-#   # 单节点 (默认, A2)
+# Usage:
 #   bash run_vllm.sh
-#
-#   # A3 16 卡
 #   TP=8 MAX_MODEL_LEN=65536 bash run_vllm.sh
-#
-#   # 多节点
 #   TP=8 PP=2 bash run_vllm.sh
 #
-# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/models/MiniMax-M2.5.html
-set -eo pipefail
+# Reference:
+#   https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/models/MiniMax-M2.5.html
+# =============================================================================
+set -euo pipefail
 
-# CANN 环境加载 (必须在最前面)
+# Load Ascend CANN environment
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -28,18 +27,18 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# 基础路径配置
-BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8004}"
-TP="${TP:-4}"
-PP="${PP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
+# Base configuration
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
+readonly HOST="${HOST:-0.0.0.0}"
+readonly PORT="${PORT:-8004}"
+readonly TP="${TP:-4}"
+readonly PP="${PP:-1}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
 
-# 环境变量优化 (官方推荐配置)
+# NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
 export HCCL_BUFFSIZE=1024
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -48,21 +47,22 @@ export OMP_NUM_THREADS=1
 export TASK_QUEUE_ENABLE=1
 export VLLM_ASCEND_ENABLE_FUSED_MC2=1
 export VLLM_USE_MODELSCOPE=False
-# 兼容旧版本的回退变量
+
+# Fallback variables for older versions
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 
-# v0.20.2 新格式 additional_config
-ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
+# v0.20.2 additional_config format
+readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
 
 echo "============================================"
 echo "[INFO] MiniMax-M2.7 W8A8 QuaRot Deployment"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] Note: MTP not supported in vLLM-Ascend 0.20.2 for MiniMax"
 echo "============================================"
-
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
