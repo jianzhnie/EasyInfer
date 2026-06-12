@@ -79,7 +79,7 @@ if [[ -z "${MAX_MODEL_LEN:-}" ]]; then
     fi
 fi
 if [[ -z "${MAX_NUM_SEQS:-}" ]]; then
-    export MAX_NUM_SEQS=64
+    export MAX_NUM_SEQS=16
 fi
 export ENABLE_CHUNKED_PREFILL="${ENABLE_CHUNKED_PREFILL:-1}"
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"

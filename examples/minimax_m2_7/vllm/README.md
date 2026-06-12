@@ -2,7 +2,8 @@
 
 > **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8004**
 > 架构: MiniMaxM2ForCausalLM | 256 Experts | MoE | W8A8 QuaRot 量化
-> 官方推荐 A2 环境 TP=4 | MTP 暂不支持 (vLLM-Ascend 0.20.2 兼容性问题)
+> 已验证配置: TP=4 PP=1 (单节点 A2) | 上下文: 32K | 官方推荐 A2 环境 TP=4
+> 注意: MTP 在模型中配置 (num_mtp_modules=3)，但 vLLM-Ascend 0.20.2 暂不支持 MiniMax 架构
 
 ## 模型简介
 
@@ -10,16 +11,23 @@
 |------|-----|
 | **架构** | MiniMaxM2ForCausalLM (MoE) |
 | **路由专家** | 256 |
+| **隐藏维度** | 6144 |
+| **网络层数** | 80 |
 | **原生上下文** | 204,800 |
 | **量化方式** | W8A8 QuaRot (8-bit 权重 + 8-bit 激活) |
-| **MTP** | num_mtp_modules=3 (模型中配置，但 vLLM-Ascend 0.20.2 暂不支持) |
+| **MTP** | num_mtp_modules=3 (vLLM-Ascend 0.20.2 暂不支持) |
 | **PP 支持** | ✅ 支持 Pipeline Parallelism |
 | **工具调用解析器** | minimax_m2 |
+| **词表大小** | 100,672 |
 
-### MTP 兼容性说明
+### 架构注意事项
 
-模型 config 中包含 `num_mtp_modules=3`，但 vLLM-Ascend 0.20.2 的 `mtp` speculative method 暂不支持 MiniMax 架构。
-因此部署脚本中未启用 MTP 投机解码。待 vLLM-Ascend 更新后可添加 `--speculative-config` 参数。
+模型 config 中包含 `num_mtp_modules=3`，但 vLLM-Ascend 0.20.2 的 `mtp` speculative method 暂不支持 MiniMax 架构。因此部署脚本中未启用 MTP 投机解码。待 vLLM-Ascend 更新后可添加 `--speculative-config` 参数。
+
+### 官方文档参考
+
+- MiniMax 官方文档: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/models/MiniMax-M2.5.html
+- vLLM 官方文档: https://docs.vllm.ai/en/stable/
 
 ## 快速开始
 
@@ -69,35 +77,79 @@ curl http://localhost:8004/v1/chat/completions \
 
 ## 并行策略
 
-| 场景 | TP | PP | NPU | 上下文 |
-|------|-----|-----|-----|--------|
-| 单节点 A2 | 4 | 1 | 8 | 32K |
-| 单节点 A3 | 8 | 1 | 16 | 65K |
-| 多节点 | 8 | 2 | 16 | 65K |
+| 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
+|------|-----|-----|-----|-----|--------|------|
+| 单节点 A2 | 4 | 1 | 1 | 8 | 32K | ✅ 已验证 |
+| 单节点 A3 | 8 | 1 | 1 | 16 | 65K | ⚠️ 待验证 |
+| 多节点 | 8 | 2 | 1 | 16 | 65K | ⚠️ 待验证 |
 
 > 官方推荐 A2 环境 TP=4 (W8A8 量化下最稳定)。
 
 ## 环境变量
 
+### 基础配置
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MODEL_PATH` | `.../MiniMax-M2.7-w8a8-QuaRot` | 模型权重路径 |
+| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/MiniMax-M2.7-w8a8-QuaRot` | 模型权重路径 |
+| `SERVED_MODEL_NAME` | `minimax-m2.7` | API 中的模型名称 |
+| `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | `8004` | 监听端口 |
-| `TP` | `4` | 张量并行度 (A2 官方推荐) |
-| `PP` | `1` | 流水线并行度 |
+
+### 并行配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `TP` / `TENSOR_PARALLEL_SIZE` | `4` | 张量并行度 (A2 官方推荐) |
+| `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
+| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
+| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
+
+### 内存与量化
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `DTYPE` | `bfloat16` | 计算数据类型 |
+| `QUANTIZATION` | `ascend` | W8A8 QuaRot 量化 |
+| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.85` | NPU 显存利用率 |
+| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB) |
+
+### 序列调度
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
 | `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
 | `MAX_NUM_SEQS` | `16` | 最大并发请求数 |
-| `GPU_MEM_UTIL` | `0.85` | NPU 显存利用率 (W8A8 较低) |
+| `MAX_NUM_BATCHED_TOKENS` | `8192` | 每 step 最大 token 数 |
+| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
 
-## 关键 NPU 环境变量
+### NPU 专用
 
-```bash
-HCCL_BUFFSIZE=1024                  # 256 专家大缓冲
-HCCL_OP_EXPANSION_MODE=AIV
-VLLM_ASCEND_ENABLE_FUSED_MC2=1      # MiniMax 专用融合 MC2 算子
-VLLM_ASCEND_ENABLE_FLASHCOMM1=1     # FlashComm 通信优化
-TASK_QUEUE_ENABLE=1                 # 任务队列优化
-```
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
+| `HCCL_BUFFSIZE` | `1024` | HCCL 缓冲区大小 (MB) |
+| `VLLM_ASCEND_ENABLE_FUSED_MC2` | `1` | MiniMax 专用融合 MC2 算子 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | FlashComm 通信优化 |
+| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+
+### 加速特性
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PREFIX_CACHING` | `1` | 前缀缓存 |
+| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph |
+| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
+| `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展 |
+| `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
+| `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
+
+### 工具调用
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
+| `TOOL_CALL_PARSER` | `minimax_m2` | MiniMax 工具调用解析器 |
 
 ## Claude Code 集成
 
@@ -113,15 +165,13 @@ claude
 
 ## 功能验证清单
 
-## 功能验证清单
-
 ### 基础功能
 
 | 功能 | 状态 | 脚本 |
 |------|------|------|
-| 基础 Chat Completion | 待验证 | `run_vllm.sh` |
-| Tool Calling (minimax_m2) | 待验证 | `curl_test.sh` |
-| Anthropic Messages API | 待验证 | `curl_test.sh` |
+| 基础 Chat Completion | ⚠️ 待验证 | `run_vllm.sh` |
+| Tool Calling (minimax_m2) | ⚠️ 待验证 | `curl_test.sh` |
+| Anthropic Messages API | ⚠️ 待验证 | `curl_test.sh` |
 | MTP 投机解码 | ❌ 暂不支持 | vLLM-Ascend 0.20.2 不兼容 MiniMax mtp |
 
 ### 高级功能
@@ -136,13 +186,17 @@ claude
 ## 常见问题
 
 ### Q: 为什么 TP 默认是 4 而不是 8？
+
 A: MiniMax-M2.7 W8A8 QuaRot 在 A2 环境官方推荐 TP=4，W8A8 量化下更稳定，同时保留更多显存给 KV Cache。
 
 ### Q: MTP 什么时候能支持？
+
 A: 模型中已配置 `num_mtp_modules=3`，但 vLLM-Ascend 0.20.2 的 `mtp` speculative method 不兼容 MiniMax 架构。等待后续版本更新。
 
 ### Q: W8A8 和 W4A8 有什么区别？
+
 A: W8A8 QuaRot 使用 8-bit 权重和 8-bit 激活量化，精度更高但显存占用较大，因此 GPU_MEM_UTIL 默认 0.85。W4A8 使用 4-bit 权重更省显存。
 
 ### Q: VLLM_ASCEND_ENABLE_FUSED_MC2 是什么？
+
 A: MiniMax 架构专用的融合 MC2 算子优化，提升 MoE 专家路由效率。官方推荐启用。

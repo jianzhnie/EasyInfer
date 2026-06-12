@@ -1,12 +1,9 @@
 # Kimi-K2.6 W4A8 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** 
-
+> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8003**
 > 架构: KimiK25ForConditionalGeneration | 384 Experts | MoE | MLA | Vision (多模态) | W4A8 量化
-
-> **已验证配置**: TP=8 PP=2 (2节点: 40+153) | **上下文**: 262,144 (max_position_embeddings)
+> 已验证配置: TP=8 PP=2 (2节点) | 上下文: 262,144 (max_position_embeddings)
 > Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (kimi_k2) ✅ | Anthropic Messages API ✅
-
 
 ## 模型简介
 
@@ -23,23 +20,25 @@
 | **PP 支持** | ✅ **支持 Pipeline Parallelism** |
 | **多模态** | ✅ Vision Transformer (27 层) |
 | **词表大小** | 163,840 |
+| **工具调用解析器** | kimi_k2 |
 
-> **与 Kimi-K2 的区别**: Kimi-K2.6 增加视觉多模态能力 (Vision Transformer + unified vision chunk)，文本骨干基于 DeepSeek V3 架构 (384 专家)。
+### 架构注意事项
 
-### 注意事项
+Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。因此**不需要** `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`，也**需要不同**的 HCCL 配置。
 
-Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。
-因此**不需要** `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`，也**需要不同**的 HCCL 配置。
+### 工具调用解析器
 
-### ⚠️ 重要: 工具调用解析器
-
-Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`, `<|tool_call_end|>` 等)，
-**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
+Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`, `<|tool_call_end|>` 等)，**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
 
 | Parser | 状态 | 说明 |
 |--------|------|------|
 | `deepseek_v3` | ❌ 不兼容 | 报错: "could not locate tool call start/end tokens" |
 | `kimi_k2` | ✅ 正确 | `KimiK2ToolParser`, 适配 Kimi 的 token 格式 |
+
+### 官方文档参考
+
+- vLLM 官方文档: https://docs.vllm.ai/en/stable/
+- vLLM-Ascend 模型文档: https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
 
 ## 快速开始
 
@@ -84,24 +83,23 @@ curl http://localhost:8003/v1/chat/completions \
   -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
 
-### 并行策略
+## 并行策略
 
-| 场景 | TP | PP | DP | NPU | 上下文 |
-|------|-----|-----|-----|-----|--------|
-| 单节点 | 8 | 1 | 1 | 8 | 32K |
-| 2 节点 PP | 8 | 2 | 1 | 16 | 131K |
-| 多节点扩展 | 8 | 4 | 2 | 64 | 131K |
+| 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
+|------|-----|-----|-----|-----|--------|------|
+| 单节点 | 8 | 1 | 1 | 8 | 32K | ✅ |
+| 2 节点 PP | 8 | 2 | 1 | 16 | 131K | ✅ 已验证 |
+| 多节点扩展 | 8 | 4 | 2 | 64 | 131K | ⚠️ 待验证 |
 
 > Kimi-K2.6 **支持 Pipeline Parallelism**，适合多节点扩展。
 
-
-## vLLM 参数配置
+## 环境变量
 
 ### 基础配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MODEL_PATH` | `Eco-Tech/Kimi-K2.6-w4a8` | 模型权重路径 |
+| `MODEL_PATH` | `.../Kimi-K2.6-w4a8` | 模型权重路径 |
 | `SERVED_MODEL_NAME` | `kimi-k2.6` | API 中的模型名称 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | `8003` | 监听端口 |
@@ -110,10 +108,10 @@ curl http://localhost:8003/v1/chat/completions \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (A2=8, A3=16) |
-| `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
+| `TP` / `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (A2=8, A3=16) |
+| `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
 | `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (384 专家 MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `4` | 数据并行度 (官方推荐 dp4 tp4) |
+| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
 
 ### 内存与量化
 
@@ -121,7 +119,7 @@ curl http://localhost:8003/v1/chat/completions \
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
 | `QUANTIZATION` | `ascend` | W4A8 Ascend 量化 |
-| `GPU_MEMORY_UTILIZATION` | `0.9` | NPU 显存利用率 |
+| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.92` | NPU 显存利用率 |
 | `SWAP_SPACE` | `32` | CPU 交换空间 (GiB, 384 专家需较大空间) |
 
 ### 序列调度
@@ -129,10 +127,24 @@ curl http://localhost:8003/v1/chat/completions \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `64` | 最大并发请求数 |
+| `MAX_NUM_SEQS` | `16` | 最大并发请求数 |
 | `MAX_NUM_BATCHED_TOKENS` | `16384` | 每 step 最大 token 数 |
 | `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
+| `CHAT_TEMPLATE_CONTENT_FORMAT` | `string` | Chat Template 内容格式 |
 
+### NPU 专用
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
+| `HCCL_BUFFSIZE` | `800` | HCCL 缓冲区大小 (MB) |
+| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
+| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
+| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
+| `TASK_QUEUE_ENABLE` | `1` | 任务队列优化 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | FlashComm 通信优化 |
+| `VLLM_ASCEND_ENABLE_MLAPO` | `1` | MLA 算子融合优化 |
+| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
 
 ### 加速特性
 
@@ -140,37 +152,38 @@ curl http://localhost:8003/v1/chat/completions \
 |------|--------|------|
 | `PREFIX_CACHING` | `1` | 前缀缓存 (Agent 优化) |
 | `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph (NPU 推荐) |
-| `NUM_SCHEDULER_STEPS` | `8` | 多步调度步数 |
-| `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 (W4A8 推荐) |
 | `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
 | `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展 |
 | `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
 | `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
+| `NUM_SCHEDULER_STEPS` | `8` | 多步调度步数 |
+| `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 (W4A8 推荐) |
 
 ### 工具调用
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `kimi_k2` | Kimi 工具调用解析器 (基于 DeepSeek V3 但适配 Kimi tokenizer) |
+| `TOOL_CALL_PARSER` | `kimi_k2` | Kimi 工具调用解析器 |
 
+### 多模态
 
-### Agent 优化
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `--allowed-local-media-path` | `/home/jianzhnie/llmtuner/` | 本地媒体文件路径 |
+| `--mm-encoder-tp-mode` | `data` | 视觉编码器 TP 模式 |
+| `--language-model-only` | 脚本中显式启用 | 纯文本 Agent 场景跳过 Vision Encoder，节省显存 |
+
+### Agent 优化参数
+
 ```bash
 --enable-prefix-caching          # 前缀缓存 (无 MTP 开销，效果更好)
 --enable-chunked-prefill         # 长上下文分块预填充
 --enable-auto-tool-choice        # Anthropic API tool_use 必需
---tool-call-parser kimi_k2       # ⚠️ 必须是 kimi_k2，不是 deepseek_v3
+--tool-call-parser kimi_k2       # 必须是 kimi_k2，不是 deepseek_v3
 --max-num-seqs 16                # 高并发 (无 MTP 内存开销)
 --max-num-batched-tokens 16384
 ```
-
-### 多模态
-```bash
---allowed-local-media-path /     # 本地媒体文件路径
---mm-encoder-tp-mode data        # 视觉编码器 TP 模式
-```
-
 
 ## Claude Code 集成
 
@@ -184,22 +197,48 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
 claude
 ```
 
+## 功能验证清单
+
+### 基础功能
+
+| 功能 | 状态 | 脚本 |
+|------|------|------|
+| 基础 Chat Completion | ✅ | `run_vllm.sh` |
+| Tool Calling (kimi_k2) | ✅ | `curl_test.sh` |
+| Anthropic Messages API | ✅ | `curl_test.sh` |
+| MTP 投机解码 | ❌ 不支持 | 模型无 MTP 模块 |
+
+### 高级功能
+
+| 功能 | 状态 | 脚本 | 硬件要求 |
+|------|------|------|----------|
+| 基于 Mooncake 多实例 PD 共置部署 | 📋 已配置 | `run_pd_colocated.sh` | 多节点 + Mooncake + RoCE |
+| 预填充-解码分离部署 | 📋 已配置 | `run_pd_disaggregated.sh` | 2P1D 多节点 + Mooncake |
+| 长序列上下文并行 | 📋 已配置 | `run_long_seq_cp.sh` | Atlas A3 (A2 不支持 CP) |
+| 动态分块流水线并行 | 📋 已配置 | `run_dynamic_chunked_pp.sh` | PP ≥ 2 (支持 PP) |
+
 ## 常见问题
 
 ### Q: Kimi-K2.6 和 Kimi-K2 有什么区别？
+
 A: Kimi-K2.6 增加了多模态 (Vision) 能力，包含 Vision Transformer (27 层)。文本骨干基于 DeepSeek V3 架构 (384 专家)。纯文本推理性能与 Kimi-K2 类似。
 
 ### Q: Kimi-K2.6 支持 MTP 投机解码吗？
+
 A: 不支持。模型 config 中 `num_nextn_predict_layers=0`，无 MTP 模块。
 
 ### Q: --language-model-only 是什么？
+
 A: 仅加载语言模型部分，跳过 Vision Encoder，适合纯文本场景和 Agent 使用，节省显存。
 
 ### Q: 多模态如何使用？
+
 A: 通过 `/v1/chat/completions` 传入 image 类型的 content。视觉 token 占用上下文窗口，建议预留 20-30%。纯文本 Agent 使用时视觉组件不激活。
 
 ### Q: PP 如何工作？
+
 A: Kimi-K2.6 支持 Pipeline Parallelism，每层分配到不同节点。TP=8 PP=2 表示 2 个 PP stage，每个 stage 在 8 张 NPU 上运行 TP。
 
 ### Q: 384 专家对部署有什么影响？
+
 A: 专家数更多 (384 vs 256)，EP_SIZE 需能整除 384 (推荐 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 384)。384 专家的 MoE 层参数量更大，需要更大的 SWAP_SPACE。
