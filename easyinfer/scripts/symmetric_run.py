@@ -4,17 +4,14 @@ import socket
 import subprocess
 import sys
 import time
-from typing import List
 
 import click
-
+import psutil
 import ray
 from ray._common.network_utils import is_localhost
 from ray._private.ray_constants import env_integer
 from ray._raylet import GcsClient
 from ray.exceptions import RpcError
-
-import psutil
 
 CLUSTER_WAIT_TIMEOUT = env_integer("RAY_SYMMETRIC_RUN_CLUSTER_WAIT_TIMEOUT", 30)
 
@@ -62,7 +59,7 @@ def check_head_node_ready(address: str, timeout=CLUSTER_WAIT_TIMEOUT):
     return False
 
 
-def curate_and_validate_ray_start_args(run_and_start_args: List[str]) -> List[str]:
+def curate_and_validate_ray_start_args(run_and_start_args: list[str]) -> list[str]:
     # Reparse the arguments to remove symmetric_run arguments.
     ctx = symmetric_run.make_context("_", run_and_start_args, resilient_parsing=True)
     cleaned_args = list(ctx.params["ray_args_and_entrypoint"])
@@ -148,7 +145,7 @@ def symmetric_run(address, min_nodes, ray_args_and_entrypoint):
         raise click.ClickException(
             "No separator '--' found in arguments. Please use '--' to "
             "separate Ray start arguments and the entrypoint command."
-        )
+        ) from None
 
     run_and_start_args, entrypoint_on_head = (
         all_args[:separator],
@@ -180,10 +177,10 @@ def symmetric_run(address, min_nodes, ray_args_and_entrypoint):
         )
         resolved_gcs_host = addrinfo[0][4][0]
     except socket.gaierror:
-        raise click.ClickException(f"Could not resolve hostname: {gcs_host}")
+        raise click.ClickException(f"Could not resolve hostname: {gcs_host}") from None
 
     my_ips = []
-    for iface, addrs in psutil.net_if_addrs().items():
+    for _iface, addrs in psutil.net_if_addrs().items():
         for addr in addrs:
             # Look for AF_INET (IPv4) or AF_INET6 (IPv6)
             if addr.family in [

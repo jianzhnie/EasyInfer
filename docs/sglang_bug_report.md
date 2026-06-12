@@ -96,7 +96,7 @@ docker exec sglang-ascend sglang serve \
 ### Observed Behavior
 
 - Model config parsing: ✅ (architectures, model_type recognized)
-- Weight loading: ✅ (100/100 shards loaded, ~2 min)  
+- Weight loading: ✅ (100/100 shards loaded, ~2 min)
 - Quantization detection: ✅ (`Using ModelSlimW4A8Int8MoE`)
 - Server startup: ✅ (`/health`, `/v1/models` respond correctly)
 - Tokenizer: ✅ (encode/decode round-trips correctly)
@@ -186,7 +186,7 @@ docker exec sglang-ascend sglang serve \
 ### Confirmed
 
 - `DeepseekV4Config` exists in transformers: ✅
-- `_DeepseekV4ConfigAlias` registered in sglang's mapping: ✅  
+- `_DeepseekV4ConfigAlias` registered in sglang's mapping: ✅
 - `AutoModel.from_config(DeepseekV4Config())` works: ✅ (with native config)
 - `AutoModel.from_config(_DeepseekV4ConfigAlias())` fails: ❌
 - Both with and without custom `configuration_deepseek_v4.py` in model dir: ❌

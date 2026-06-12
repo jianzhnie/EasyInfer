@@ -151,4 +151,3 @@ curl http://localhost:$PORT/v1/chat/completions \
     "max_tokens": 128
   }'
 ```
-
