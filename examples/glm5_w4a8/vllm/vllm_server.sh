@@ -1,16 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5 / GLM-5.1 W4A8 部署示例 (华为 NPU 环境)
+# GLM-5 W4A8 传统包装器部署 (华为 NPU 环境)
 # =============================================================================
-# 调用 vllm_model_server.sh 部署 GLM-5/GLM-5.1 W4A8 量化模型
-# GLM-5.1 是 GLM-5 的升级版，架构相同 (GlmMoeDsaForCausalLM, 256E, MTP)
+# 调用 vllm_model_server.sh 部署 GLM-5 W4A8 量化模型
+# GLM-5.1 与 GLM-5 架构相同 (GlmMoeDsaForCausalLM, 256E, MTP)，配置通用
 #
 # 硬件要求:
 #   - Atlas 800 A2 (64G × 8):   单节点 W4A8 部署
 #   - Atlas 800 A3 (64G × 16):  单节点 W4A8 部署 (支持更大上下文)
 #
 # 用法:
-#   # GLM-5.1 (默认)
+#   # GLM-5 (默认)
 #   ./vllm_server.sh
 #
 #   # GLM-5
@@ -26,27 +26,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
+VLLM_SCRIPT="${SCRIPT_DIR}/../../../scripts/vllm/vllm_model_server.sh"
 
 if [[ ! -f "$VLLM_SCRIPT" ]]; then
     echo "[ERROR] vLLM startup script not found: $VLLM_SCRIPT" >&2
     exit 1
 fi
 
-# --- Auto-detect model from MODEL_PATH ---
-: "${MODEL_PATH:=/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
-
-if [[ "$MODEL_PATH" == *"GLM-5.1"* ]]; then
-    : "${PORT:=8002}"
-    : "${SERVED_MODEL_NAME:=glm-5.1}"
-    MODEL_LABEL="GLM-5.1"
-else
-    : "${PORT:=8001}"
-    : "${SERVED_MODEL_NAME:=glm-5}"
-    MODEL_LABEL="GLM-5"
-fi
-
-export MODEL_PATH SERVED_MODEL_NAME PORT
+# ------------------------------------------------------------------------------
+# 模型路径与基础配置
+# ------------------------------------------------------------------------------
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8}"
+export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5}"
+export HOST="${HOST:-0.0.0.0}"
+export PORT="${PORT:-8001}"
 
 # ------------------------------------------------------------------------------
 # 华为 NPU 环境变量
@@ -59,7 +52,6 @@ export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:Tru
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
 export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-0}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
-export HOST="${HOST:-0.0.0.0}"
 
 # ------------------------------------------------------------------------------
 # 并行配置 (GLM MoE, 256 专家, 不支持 PP)
@@ -105,8 +97,6 @@ export CHAT_TEMPLATE_CONTENT_FORMAT="${CHAT_TEMPLATE_CONTENT_FORMAT:-string}"
 # ------------------------------------------------------------------------------
 export PREFIX_CACHING="${PREFIX_CACHING:-1}"
 export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
-# 注意: --num-scheduler-steps 在 vLLM-Ascend 0.18.0rc1 不支持
-# export NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-4}"
 
 # ------------------------------------------------------------------------------
 # 投机解码 (MTP)
@@ -121,12 +111,6 @@ export CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-FULL_DECODE_ONLY}"
 export ENABLE_NPUGRAPH_EX="${ENABLE_NPUGRAPH_EX:-true}"
 export FUSE_MULS_ADD="${FUSE_MULS_ADD:-true}"
 export MULTISTREAM_OVERLAP_SHARED_EXPERT="${MULTISTREAM_OVERLAP_SHARED_EXPERT:-true}"
-
-# ------------------------------------------------------------------------------
-# 异步调度
-# ------------------------------------------------------------------------------
-# 注意: --async-scheduling 不支持 Ray backend (仅 mp/external_launcher)
-# export ENABLE_ASYNC_SCHEDULING="${ENABLE_ASYNC_SCHEDULING:-1}"  # Ray 不支持
 
 # ------------------------------------------------------------------------------
 # 工具调用
@@ -166,7 +150,7 @@ fi
 # ------------------------------------------------------------------------------
 # 启动信息
 # ------------------------------------------------------------------------------
-echo "[INFO] Starting ${MODEL_LABEL} W4A8 server"
+echo "[INFO] Starting GLM-5 W4A8 server"
 echo "[INFO] Model:     ${MODEL_PATH}"
 echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE"
 echo "[INFO] Quant:     W4A8 (ascend), dtype=$DTYPE"
