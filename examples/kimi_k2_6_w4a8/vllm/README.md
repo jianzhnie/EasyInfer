@@ -1,11 +1,12 @@
 # Kimi-K2.6 W4A8 部署指南
 
-> ✅ **部署验证通过** | 2026-06-09 | vLLM-Ascend 0.18.0rc1 + CANN 8.5.1
+> **vLLM-Ascend 0.20.2 + CANN 9.0.0** 
+
+> 架构: KimiK25ForConditionalGeneration | 384 Experts | MoE | MLA | Vision (多模态) | W4A8 量化
+
 > **已验证配置**: TP=8 PP=2 (2节点: 40+153) | **上下文**: 262,144 (max_position_embeddings)
 > Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (kimi_k2) ✅ | Anthropic Messages API ✅
 
-Kimi-K2.6 是部署的三个模型中**唯一支持 Pipeline Parallelism** 且**上下文最大 (262K)** 的模型，
-同时支持多模态 (Vision Transformer)，推荐作为 Claude Code 的主模型。
 
 ## 模型简介
 
@@ -25,7 +26,7 @@ Kimi-K2.6 是部署的三个模型中**唯一支持 Pipeline Parallelism** 且**
 
 > **与 Kimi-K2 的区别**: Kimi-K2.6 增加视觉多模态能力 (Vision Transformer + unified vision chunk)，文本骨干基于 DeepSeek V3 架构 (384 专家)。
 
-### 注意力路径
+### 注意事项
 
 Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。
 因此**不需要** `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`，也**需要不同**的 HCCL 配置。
@@ -40,56 +41,11 @@ Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`
 | `deepseek_v3` | ❌ 不兼容 | 报错: "could not locate tool call start/end tokens" |
 | `kimi_k2` | ✅ 正确 | `KimiK2ToolParser`, 适配 Kimi 的 token 格式 |
 
-
-## 部署
-
-### 官方文档参考
-
-- vLLM-Ascend 模型列表: https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
-- vLLM 官方文档: https://docs.vllm.ai/en/stable/
-
-### 硬件要求
-
-#### 单节点部署
-
-| 硬件 | 配置 | 推荐上下文 |
-|------|------|-----------|
-| Atlas 800 A2 (64G × 8) | TP=8  | 32k |
-| Atlas 800 A3 (64G × 16) | TP=16 | 131k |
-
-#### 多节点部署
-
-| 节点数 | 配置 | 推荐上下文 |
-|--------|------|-----------|
-| 2 节点 × 8 NPU | TP=8, PP=2 | 64k |
-| 4 节点 × 8 NPU | TP=8, PP=4 | 131k |
-| 8 节点 × 8 NPU | TP=8, PP=8 | 262k |
-
-### 已验证部署方案
-
-#### 推荐: 2 节点 × 8 NPU (已验证)
-
-```bash
-MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 bash run_vllm.sh
-```
-
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| TP × PP | 8 × 2 | 均衡跨 2 节点 |
-| max_model_len | **262,144** | 模型原生最大上下文 |
-| max_num_seqs | 16 | 无 MTP 开销，高并发 |
-| GPU 利用率 | 0.92 | 预留视觉组件空间 |
-| 加载时间 | ~15 分钟 | 126 shards , 含 warmup |
-
 ## 快速开始
 
 ### 前置条件
 
-模型路径: `Eco-Tech/Kimi-K2.6-w4a8`
-
-> **注意**: 模型包含自定义代码 (`configuration_kimi_k25.py`, `modeling_kimi_k25.py`)，必须启用 `--trust-remote-code`。
-
-基于下面的脚本启动 NPU 容器和 Ray 集群：
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8`
 
 ```bash
 # 1. 启动 NPU Docker 容器
@@ -99,39 +55,44 @@ bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
 bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ```
 
-### 部署 (2 节点, 256 K 全上下文)
-
-
-```bash
-# 部署 (2 节点, 262K)
-# 1. 确保在 NPU 容器中执行以下命令
-docker exec npuslim-env bash
-
-# 2. 进入项目目录
-cd EasyInfer/examples/vllm/kimi_k2_6_w4a8
-
-# 3. 部署模型
-MAX_MODEL_LEN=262144 TP=8 PP=2 DP=1 PORT=8003 nohup bash run_vllm.sh >> vllm_kimi.log 2>&1 &
-
-# 4. 验证模型部署 (~15 分钟后)
-curl http://10.16.201.40:8003/v1/models
-# 预期: model=kimi-k2.6, max_model_len=262144
-```
-
-## NPU 环境变量
+### 部署
 
 ```bash
-export HCCL_OP_EXPANSION_MODE="AIV"
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export OMP_PROC_BIND=false
-export OMP_NUM_THREADS=1
-export TASK_QUEUE_ENABLE=1
+# 单节点 (32K 上下文, TP=8)
+bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh
 
-export HCCL_BUFFSIZE=800
-export VLLM_ASCEND_ENABLE_MLAPO=1
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
+# 2 节点 PP (大上下文)
+TP=8 PP=2 MAX_MODEL_LEN=131072 bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh
+
+# 后台运行
+nohup bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh > kimi_k26_vllm.log 2>&1 &
+
+# 使用传统包装器部署
+bash examples/kimi_k2_6_w4a8/vllm/vllm_server.sh
 ```
+
+### 验证
+
+```bash
+# 运行测试脚本
+bash examples/kimi_k2_6_w4a8/vllm/curl_test.sh
+
+# 手动验证
+curl http://localhost:8003/v1/models
+curl http://localhost:8003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
+```
+
+### 并行策略
+
+| 场景 | TP | PP | DP | NPU | 上下文 |
+|------|-----|-----|-----|-----|--------|
+| 单节点 | 8 | 1 | 1 | 8 | 32K |
+| 2 节点 PP | 8 | 2 | 1 | 16 | 131K |
+| 多节点扩展 | 8 | 4 | 2 | 64 | 131K |
+
+> Kimi-K2.6 **支持 Pipeline Parallelism**，适合多节点扩展。
 
 
 ## vLLM 参数配置
@@ -211,79 +172,16 @@ export VLLM_ASCEND_BALANCE_SCHEDULING=1
 ```
 
 
-## 性能调优
-
-### 低延迟场景
-- 单节点 A3 部署 (TP=16)
-- 减小 `MAX_NUM_SEQS` (如 4-8)
-- 减小 `NUM_SCHEDULER_STEPS` (如 4)
-- 启用 Prefix Caching
-
-### 高吞吐场景
-- 多节点 + 数据并行
-- 增大 `MAX_NUM_SEQS` (如 16-32)
-- 启用 Chunked Prefill + Prefix Caching
-- 启用异步调度
-- 增大 `NUM_SCHEDULER_STEPS` (如 8-16)
-
-### 多模态场景
-
-- Kimi-K2.6 支持视觉输入 (Vision Transformer)
-- 视觉 token 会额外占用上下文窗口
-- 建议预留 20-30% 上下文给视觉 token
-
-### 长上下文场景
-- 多节点扩展 PP (流水线并行)
-- 增大 `MAX_MODEL_LEN`
-- 提高 `GPU_MEMORY_UTILIZATION`
-- 增大 `SWAP_SPACE`
-
-
-## API 验证
-
-### Chat Completion
-```bash
-curl http://10.16.201.40:8003/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
-```
-
-### Tool Calling
-```bash
-curl http://10.16.201.40:8003/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"kimi-k2.6","messages":[{"role":"user","content":"Weather in Beijing?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"max_tokens":100}'
-```
-
-### Anthropic Messages (Claude Code 兼容 + tool_use)
-```bash
-curl http://10.16.201.40:8003/v1/messages \
-  -H "Content-Type: application/json" -H "x-api-key: dummy" \
-  -d '{
-    "model":"kimi-k2.6",
-    "max_tokens":100,
-    "messages":[{"role":"user","content":"Read /tmp/test.txt"}],
-    "tools":[{"name":"read_file","description":"Read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]
-  }'
-# 预期返回: type=message, stop_reason=tool_use, tool_use name=read_file
-```
-
-## Claude Code 集成 (推荐)
-
-Kimi-K2.6 是 Claude Code 推荐的模型，原因:
-- **最大上下文 (262K)**: 比其他模型多 60K
-- **无 MTP 开销**: max_num_seqs=16 (vs GLM 的 8)
-- **多模态支持**: 可处理图像文件
-- **更多专家 (384)**: 推理能力更强
-- **kimi_k2 parser**: 工具调用 token 格式更清晰
+## Claude Code 集成
 
 ```bash
-ANTHROPIC_BASE_URL=http://10.16.201.40:8003 \
+ANTHROPIC_BASE_URL=http://localhost:8003 \
 ANTHROPIC_API_KEY=dummy \
 ANTHROPIC_AUTH_TOKEN=dummy \
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6 \
 ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6 \
 ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
+claude
 ```
 
 ## 常见问题
@@ -291,11 +189,11 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6 \
 ### Q: Kimi-K2.6 和 Kimi-K2 有什么区别？
 A: Kimi-K2.6 增加了多模态 (Vision) 能力，包含 Vision Transformer (27 层)。文本骨干基于 DeepSeek V3 架构 (384 专家)。纯文本推理性能与 Kimi-K2 类似。
 
-### Q: 为什么用 kimi_k2 而不是 deepseek_v3 parser？
-A: Kimi-K2.6 tokenizer 使用自定义工具 token (`<|tool_call_begin|>` 等)，`deepseek_v3` parser 寻找 DeepSeek 专用分隔符 (`"éri"`)，不兼容。`kimi_k2` parser 专为 Kimi tokenizer 设计。这是一个已验证的 bug (Bug 2)。
+### Q: Kimi-K2.6 支持 MTP 投机解码吗？
+A: 不支持。模型 config 中 `num_nextn_predict_layers=0`，无 MTP 模块。
 
-### Q: 为什么没有 MTP？
-A: config 中 `num_nextn_predict_layers=0`，表示模型不支持 Multi-Token Prediction，不需要配置投机解码参数。这也意味着没有 MTP 的内存开销，可以设置更高的 max_num_seqs。
+### Q: --language-model-only 是什么？
+A: 仅加载语言模型部分，跳过 Vision Encoder，适合纯文本场景和 Agent 使用，节省显存。
 
 ### Q: 多模态如何使用？
 A: 通过 `/v1/chat/completions` 传入 image 类型的 content。视觉 token 占用上下文窗口，建议预留 20-30%。纯文本 Agent 使用时视觉组件不激活。

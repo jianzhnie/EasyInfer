@@ -25,36 +25,33 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8}"
-SPECULATIVE_MODEL_PATH="${SPECULATIVE_MODEL_PATH:-$MODEL_PATH/speculative-model}"
+# 基础路径配置
+BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Kimi-K2.6-w4a8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8003}"
 TP="${TP:-8}"
-PP="${PP:-2}"
+PP="${PP:-1}"
 DP="${DP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 
-# Optional configurations for compilation and speculative decoding
-DEFAULT_COMPILATION_CONFIG='{"cudagraph_capture_sizes":[4,8,16,32,64,128,256], "cudagraph_mode":"FULL_DECODE_ONLY"}'
-DEFAULT_SPECULATIVE_CONFIG='{"model":"lightseekorg/kimi-k2.6-eagle3-mla","method":"eagle3","num_speculative_tokens":3}'
-
-COMPILATION_CONFIG="${COMPILATION_CONFIG:-$DEFAULT_COMPILATION_CONFIG}"
-SPECULATIVE_CONFIG="${SPECULATIVE_CONFIG:-$DEFAULT_SPECULATIVE_CONFIG}"
-LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-true}"
-
-# NPU performance optimizations
-export HCCL_OP_EXPANSION_MODE="AIV"
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+# 环境变量优化 (v0.20.2: balance_scheduling/flashcomm1/mlapo 已迁移至 --additional-config)
+export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export TASK_QUEUE_ENABLE=1
-
 export HCCL_BUFFSIZE=800
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export TASK_QUEUE_ENABLE=1
+export VLLM_USE_MODELSCOPE=False
+# 兼容旧版本的回退变量
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+
+# v0.20.2 新格式 additional_config
+ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true, "enable_mlapo": true}'
 
 echo "============================================"
 echo "[INFO] Kimi-K2.6 W4A8 — Agent-Optimized Deployment"
@@ -70,14 +67,13 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name kimi-k2.6 \
+    --served-model-name "kimi-k2.6" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
     --distributed-executor-backend ray \
-    --enable-expert-parallel \
     --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
@@ -85,12 +81,12 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens 16384 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --allowed-local-media-path \
-    ${COMPILATION_CONFIG:+--compilation-config "$COMPILATION_CONFIG"} \
-    ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
-    $([[ "$LANGUAGE_MODEL_ONLY" == "true" ]] && echo "--language-model-only") \
-    --mm-encoder-tp-mode data \
+    --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser kimi_k2 \
+    --language-model-only \
+    --mm-encoder-tp-mode data \
+    --allowed-local-media-path /home/jianzhnie/llmtuner/ \
+    --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"

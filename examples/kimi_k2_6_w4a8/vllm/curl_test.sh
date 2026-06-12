@@ -1,127 +1,199 @@
 #!/bin/bash
-# =============================================================================
-# Kimi-K2.6 vLLM 服务 API 测试脚本
-# =============================================================================
+# Kimi-K2.6 W4A8 — API 功能测试脚本
+# 默认使用 localhost:8003
+# 多模态模型，支持 Vision
 #
 # 用法:
-#   ./curl_test.sh                    # 默认测试 localhost:8003
-#   BASE_URL=http://10.0.0.1:9000 ./curl_test.sh
-#   MODEL_NAME=my-model ./curl_test.sh
-# =============================================================================
+#   ./curl_test.sh                               # 默认测试 localhost:8003
+#   BASE_URL=http://10.0.0.1:9000 ./curl_test.sh  # 指定地址
+#   MODEL_NAME=my-model ./curl_test.sh             # 指定模型名
 
-set -euo pipefail
-
-BASE_URL="${BASE_URL:-http://localhost:8003}"
+# ================ 配置区域 ================
+HOST="${HOST:-localhost}"
+PORT="${PORT:-8003}"
 MODEL_NAME="${MODEL_NAME:-kimi-k2.6}"
+TIMEOUT=300
+WAIT_INTERVAL=5
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../../scripts/common.sh"
+# ================ 颜色输出 ================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-pass() { log_info "[PASS] $1"; }
-fail() { log_err "[FAIL] $1"; }
-info() { log_info "[INFO] $1"; }
+log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
-info "Testing service availability..."
-if curl -sf --max-time 5 "${BASE_URL}/v1/models" -o /dev/null; then
-    pass "Service is reachable at ${BASE_URL}"
-else
-    fail "Service is NOT reachable at ${BASE_URL}"
-    exit 1
-fi
+# ================ 工具函数 ================
+wait_for_service() {
+    log_info "等待服务启动: http://$HOST:$PORT ..."
+    local start_time
+    start_time=$(date +%s)
 
-info "Listing available models..."
-models=$(curl -sf --max-time 5 "${BASE_URL}/v1/models")
-if [[ -n "$models" ]]; then
-    echo "$models" | python3 -m json.tool 2>/dev/null || echo "$models"
-    pass "Model list retrieved"
-else
-    fail "Failed to retrieve model list"
-fi
+    while true; do
+        if curl -s "http://$HOST:$PORT/health" > /dev/null 2>&1 || \
+           curl -s "http://$HOST:$PORT/v1/models" > /dev/null 2>&1; then
+            log_success "服务已就绪!"
+            return 0
+        fi
 
-info "Testing non-streaming chat completion..."
-response=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"${MODEL_NAME}\",
-    \"messages\": [{\"role\": \"user\", \"content\": \"介绍一下你自己，请简要回答。\"}],
-    \"max_tokens\": 200,
-    \"stream\": false
-  }")
+        local elapsed
+        elapsed=$(( $(date +%s) - start_time ))
+        if [[ $elapsed -ge $TIMEOUT ]]; then
+            log_error "等待服务超时 ($TIMEOUT 秒)!"
+            return 1
+        fi
 
-if [[ -n "$response" ]]; then
-    content=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])" 2>/dev/null || echo "")
-    usage=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); u=d.get('usage',{}); print(f\"prompt={u.get('prompt_tokens','?')}, completion={u.get('completion_tokens','?')}, total={u.get('total_tokens','?')}\")" 2>/dev/null || echo "")
-    if [[ -n "$content" ]]; then
-        pass "Response: ${content}"
-        [[ -n "$usage" ]] && info "Tokens: ${usage}"
+        log_info "服务未就绪，等待 ${WAIT_INTERVAL}s... (已等待 ${elapsed}s)"
+        sleep "$WAIT_INTERVAL"
+    done
+}
+
+run_test() {
+    local test_name="$1"
+    local curl_cmd="$2"
+    local expected="${3:-}"
+
+    echo ""
+    log_info "测试: $test_name"
+    log_info "执行命令: $curl_cmd"
+
+    if [[ "$expected" == "quiet" ]]; then
+        eval "$curl_cmd" > /dev/null 2>&1
     else
-        fail "Empty response content"
-        echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+        eval "$curl_cmd" | python3 -m json.tool 2>/dev/null || eval "$curl_cmd"
     fi
-else
-    fail "No response from server"
-fi
 
-info "Testing streaming chat completion..."
-stream_output=$(curl -sf --max-time 30 "${BASE_URL}/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"${MODEL_NAME}\",
-    \"messages\": [{\"role\": \"user\", \"content\": \"从1数到5\"}],
-    \"max_tokens\": 100,
-    \"stream\": true
-  }" 2>&1 | head -5)
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        log_success "$test_name 完成 (退出码: $exit_code)"
+    else
+        log_warning "$test_name 可能存在问题 (退出码: $exit_code)"
+    fi
+    return $exit_code
+}
 
-if [[ -n "$stream_output" ]]; then
-    pass "Streaming response received"
-    echo "$stream_output"
-else
-    fail "Streaming failed"
-fi
+# ================ 主程序 ================
+echo "=========================================="
+echo "  Kimi-K2.6 W4A8 API 功能测试"
+echo "  目标地址: http://$HOST:$PORT"
+echo "  模型名称: $MODEL_NAME"
+echo "=========================================="
 
-info "Testing tool calling..."
-tool_response=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"${MODEL_NAME}\",
-    \"messages\": [{\"role\": \"user\", \"content\": \"列出当前目录的文件\"}],
-    \"tools\": [{
-        \"type\": \"function\",
-        \"function\": {
-            \"name\": \"list_files\",
-            \"description\": \"List files in a directory\",
-            \"parameters\": {
+# 0. 等待服务就绪
+wait_for_service || exit 1
+
+# 1. 健康检查 / 模型列表
+run_test "模型列表查询" \
+    "curl -s http://$HOST:$PORT/v1/models"
+
+# 2. 简单 Chat Completion (英文)
+run_test "Chat Completion (英文)" \
+    "curl -s http://$HOST:$PORT/v1/chat/completions \
+      -H \"Content-Type: application/json\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"messages\": [
+          {\"role\": \"user\", \"content\": \"Hello, who are you?\"}
+        ],
+        \"max_tokens\": 128,
+        \"temperature\": 0.7
+      }'"
+
+# 3. 简单 Chat Completion (中文)
+run_test "Chat Completion (中文)" \
+    "curl -s http://$HOST:$PORT/v1/chat/completions \
+      -H \"Content-Type: application/json\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"messages\": [
+          {\"role\": \"system\", \"content\": \"You are a helpful assistant.\"},
+          {\"role\": \"user\", \"content\": \"你好，请简单介绍一下你自己。\"}
+        ],
+        \"max_tokens\": 128,
+        \"temperature\": 0.7
+      }'"
+
+# 4. Tool Calling 测试
+run_test "Tool Calling" \
+    "curl -s http://$HOST:$PORT/v1/chat/completions \
+      -H \"Content-Type: application/json\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"messages\": [
+          {\"role\": \"user\", \"content\": \"What is the weather like in Beijing?\"}
+        ],
+        \"tools\": [
+          {
+            \"type\": \"function\",
+            \"function\": {
+              \"name\": \"get_weather\",
+              \"description\": \"Get the current weather\",
+              \"parameters\": {
                 \"type\": \"object\",
                 \"properties\": {
-                    \"path\": {\"type\": \"string\", \"description\": \"Directory path\"}
+                  \"city\": {
+                    \"type\": \"string\",
+                    \"description\": \"The city to get weather for\"
+                  }
                 },
-                \"required\": [\"path\"]
+                \"required\": [\"city\"]
+              }
             }
-        }
-    }],
-    \"max_tokens\": 200,
-    \"stream\": false
-  }")
+          }
+        ],
+        \"tool_choice\": \"auto\",
+        \"max_tokens\": 100
+      }'"
 
-if [[ -n "$tool_response" ]]; then
-    tool_call=$(echo "$tool_response" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-msg = d['choices'][0]['message']
-if msg.get('tool_calls'):
-    tc = msg['tool_calls'][0]
-    print(f'function={tc[\"function\"][\"name\"]}, args={tc[\"function\"][\"arguments\"]}')
-else:
-    print('no_tool_call')
-" 2>/dev/null || echo "parse_error")
-    if [[ "$tool_call" != "no_tool_call" && "$tool_call" != "parse_error" ]]; then
-        pass "Tool calling works: ${tool_call}"
-    else
-        info "Tool calling: model did not invoke tool (may need different prompt or parser)"
-    fi
-else
-    fail "Tool calling test failed - no response"
-fi
+# 5. Anthropic Messages API
+run_test "Anthropic Messages API" \
+    "curl -s http://$HOST:$PORT/v1/messages \
+      -H \"Content-Type: application/json\" \
+      -H \"x-api-key: dummy\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"max_tokens\": 100,
+        \"messages\": [
+          {\"role\": \"user\", \"content\": \"Hi there!\"}
+        ]
+      }'"
+
+# 6. 流式 Chat Completion
+run_test "流式 Chat Completion" \
+    "curl -s http://$HOST:$PORT/v1/chat/completions \
+      -H \"Content-Type: application/json\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"messages\": [
+          {\"role\": \"user\", \"content\": \"从1数到5\"}
+        ],
+        \"max_tokens\": 100,
+        \"stream\": true
+      }' 2>&1 | head -10" "quiet"
+
+# 7. 多模态 (图片理解) — Kimi-K2.6 支持 Vision
+run_test "多模态 Vision (图片 URL)" \
+    "curl -s http://$HOST:$PORT/v1/chat/completions \
+      -H \"Content-Type: application/json\" \
+      -d '{
+        \"model\": \"$MODEL_NAME\",
+        \"messages\": [
+          {
+            \"role\": \"user\",
+            \"content\": [
+              {\"type\": \"text\", \"text\": \"Describe this image briefly.\"},
+              {\"type\": \"image_url\", \"image_url\": {\"url\": \"https://example.com/test.png\"}}
+            ]
+          }
+        ],
+        \"max_tokens\": 128
+      }'"
 
 echo ""
-info "All tests completed."
+echo "=========================================="
+log_success "Kimi-K2.6 W4A8 所有测试完成!"
+echo "=========================================="

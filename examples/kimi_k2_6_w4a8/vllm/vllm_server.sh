@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Kimi-K2.6 W4A8 部署示例 (华为 NPU 环境)
+# Kimi-K2.6 W4A8 传统包装器部署 (华为 NPU 环境)
 # =============================================================================
 # 调用 vllm_model_server.sh 部署 Kimi-K2.6 W4A8 量化模型
 # Kimi-K2.6 基于 DeepSeek V3 架构，MoE (384 专家)，支持多模态 (Vision)
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
+VLLM_SCRIPT="${SCRIPT_DIR}/../../../scripts/vllm/vllm_model_server.sh"
 
 if [[ ! -f "$VLLM_SCRIPT" ]]; then
     echo "[ERROR] vLLM startup script not found: $VLLM_SCRIPT" >&2
