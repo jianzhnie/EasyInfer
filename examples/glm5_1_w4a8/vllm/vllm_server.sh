@@ -1,17 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 部署示例 (华为 NPU 环境)
+# GLM-5.1 W4A8 传统包装器部署 (华为 NPU 环境)
 # =============================================================================
 # 调用 vllm_model_server.sh 部署 GLM-5.1 W4A8 量化模型
-# GLM-5.1 是 GLM-5 的升级版，架构完全相同 (GlmMoeDsaForCausalLM, 256E, MTP)
-# 与 GLM-5 W4A8 使用完全相同的配置
+# GLM-5.1 与 GLM-5 架构相同 (GlmMoeDsaForCausalLM, 256E, MTP)，配置通用
 #
 # 硬件要求:
 #   - Atlas 800 A2 (64G × 8):   单节点 W4A8 部署
 #   - Atlas 800 A3 (64G × 16):  单节点 W4A8 部署 (支持更大上下文)
 #
 # 用法:
-#   # 默认 W4A8 2 节点
+#   # GLM-5.1 (默认)
 #   ./vllm_server.sh
 #
 #   # 单节点
@@ -20,6 +19,9 @@
 #   # 多节点大上下文
 #   TENSOR_PARALLEL_SIZE=16 MAX_MODEL_LEN=200000 ./vllm_server.sh
 #
+#   # 部署 GLM-5 (通过 MODEL_PATH 切换)
+#   MODEL_PATH=/path/to/GLM-5-w4a8 PORT=8001 ./vllm_server.sh
+#
 # 参考文档:
 #   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
 # =============================================================================
@@ -27,7 +29,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
+VLLM_SCRIPT="${SCRIPT_DIR}/../../../scripts/vllm/vllm_model_server.sh"
 
 if [[ ! -f "$VLLM_SCRIPT" ]]; then
     echo "[ERROR] vLLM startup script not found: $VLLM_SCRIPT" >&2
@@ -43,7 +45,7 @@ export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8002}"
 
 # ------------------------------------------------------------------------------
-# 华为 NPU 环境变量
+# 华为 NPU 环境变量 (与 GLM-5 完全相同)
 # ------------------------------------------------------------------------------
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND="${OMP_PROC_BIND:-false}"
@@ -158,6 +160,5 @@ echo "[INFO] Quant:     W4A8 (ascend), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
 echo "[INFO] Features:  MoE (256 experts), MTP (tokens=$SPECULATIVE_NUM_TOKENS)"
 echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB"
-echo "[INFO] Note:      Same config as GLM-5 W4A8"
 
 exec bash "$VLLM_SCRIPT" "${EXTRA_ARGS[@]}" "$@"

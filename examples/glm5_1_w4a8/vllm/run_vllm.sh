@@ -33,25 +33,32 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# GLM-5.1 W4A8 默认配置
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
+# 基础路径配置
+BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8002}"
-TP="${TP:-16}"
+TP="${TP:-8}"
 PP="${PP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
 
-# NPU performance optimizations
-export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
+# 环境变量优化 (v0.20.2: balance_scheduling/flashcomm1/mlapo 已迁移至 --additional-config)
+export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export VLLM_USE_MODELSCOPE=False
+
+# 兼容旧版本的回退变量
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
+
+# v0.20.2 新格式 additional_config
+ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": false, "enable_mlapo": true}'
 
 echo "============================================"
 echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment"
@@ -67,23 +74,26 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name glm-5.1 \
+    --served-model-name "glm-5.1" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
-    --enable-expert-parallel \
     --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens 16384 \
+    --chat-template-content-format string \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 3, \"method\": \"mtp\"}" \
+    --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
+    --reasoning-parser glm45 \
+    --speculative-config '{"num_speculative_tokens": 3, "method": "mtp"}' \
+    --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"
