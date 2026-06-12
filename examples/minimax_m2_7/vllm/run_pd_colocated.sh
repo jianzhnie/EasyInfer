@@ -1,24 +1,18 @@
 #!/bin/bash
-# MiniMax-M2.7 W8A8 QuaRot — 直接 vllm serve 部署
-# 架构: MiniMaxM2ForCausalLM | 256 Experts | MoE
-# 默认 TP=4 PP=1 (单节点 A2，官方推荐)
-# 官方推荐 A2 环境 TP=4 (W8A8 量化)
-# 注意: MTP 在模型中配置 (num_mtp_modules=3)，但 vLLM-Ascend 0.20.2 暂不支持 MiniMax mtp 方法
+# MiniMax-M2.7 W8A8 QuaRot — PD 共置与 Mooncake 多实例部署
+# 功能: 基于 Mooncake 分布式 KV Cache 实现预填充-解码共置
+# 架构: MiniMaxM2ForCausalLM | 256 Experts | MoE | W8A8
+# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/pd_colocated_mooncake_multi_instance.html
+#
+# 前置条件:
+#   1. 安装 Mooncake: https://github.com/kvcache-ai/Mooncake
+#   2. 启动 Mooncake Master: mooncake_master --port 50088
+#   3. 配置 mooncake.json
 #
 # 用法:
-#   # 单节点 (默认, A2)
-#   bash run_vllm.sh
-#
-#   # A3 16 卡
-#   TP=8 MAX_MODEL_LEN=65536 bash run_vllm.sh
-#
-#   # 多节点
-#   TP=8 PP=2 bash run_vllm.sh
-#
-# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/models/MiniMax-M2.5.html
+#   MOONCAKE_CONFIG_PATH=/path/to/mooncake.json bash run_pd_colocated.sh
 set -eo pipefail
 
-# CANN 环境加载 (必须在最前面)
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -28,18 +22,15 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# 基础路径配置
 BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8004}"
 TP="${TP:-4}"
 PP="${PP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
 
-# 环境变量优化 (官方推荐配置)
+export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-./mooncake.json}"
+export ASCEND_BUFFER_POOL="${ASCEND_BUFFER_POOL:-4:8}"
 export HCCL_OP_EXPANSION_MODE=AIV
 export HCCL_BUFFSIZE=1024
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -47,22 +38,17 @@ export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export TASK_QUEUE_ENABLE=1
 export VLLM_ASCEND_ENABLE_FUSED_MC2=1
-export VLLM_USE_MODELSCOPE=False
-# 兼容旧版本的回退变量
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
-
-# v0.20.2 新格式 additional_config
-ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
+export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
-echo "[INFO] MiniMax-M2.7 W8A8 QuaRot Deployment"
+echo "[INFO] MiniMax-M2.7 W8A8 — PD Colocated (Mooncake)"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] Note: MTP not supported in vLLM-Ascend 0.20.2 for MiniMax"
+echo "[INFO] Mooncake Config: $MOONCAKE_CONFIG_PATH"
+echo "[INFO] KV Role: kv_both"
 echo "============================================"
-
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
@@ -74,9 +60,9 @@ vllm serve "$MODEL_PATH" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
     --quantization ascend \
-    --gpu-memory-utilization "$GPU_MEM_UTIL" \
-    --max-model-len "$MAX_MODEL_LEN" \
-    --max-num-seqs "$MAX_NUM_SEQS" \
+    --gpu-memory-utilization 0.83 \
+    --max-model-len 32768 \
+    --max-num-seqs 16 \
     --max-num-batched-tokens 8192 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
@@ -84,6 +70,15 @@ vllm serve "$MODEL_PATH" \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser minimax_m2 \
-    --additional-config "$ADDITIONAL_CONFIG" \
+    --kv-transfer-config '{
+        "kv_connector": "MooncakeConnectorStoreV1",
+        "kv_role": "kv_both",
+        "kv_connector_extra_config": {
+            "use_layerwise": false,
+            "mooncake_rpc_port": "0",
+            "load_async": true,
+            "register_buffer": true
+        }
+    }' \
     --seed 1024 \
     "$@"

@@ -1,19 +1,14 @@
 #!/bin/bash
 # =============================================================================
-# MiniMax-M2.7 W8A8 QuaRot MTP 部署示例 (华为 NPU 环境)
+# MiniMax-M2.7 W8A8 QuaRot 传统包装器部署 (华为 NPU 环境)
 # =============================================================================
 # 调用 vllm_model_server.sh 部署 MiniMax-M2.7 W8A8 QuaRot 量化模型
-# MiniMax-M2.7 基于 MiniMaxM2ForCausalLM 架构，256 专家 MoE，支持 MTP
+# MiniMax-M2.7 基于 MiniMaxM2ForCausalLM 架构，256 专家 MoE
+# 注意: MTP 在 vLLM-Ascend 0.20.2 暂不支持 MiniMax mtp 方法
 #
 # 硬件要求:
 #   - Atlas 800 A2 (64G × 8):   单节点 W8A8 部署 (TP=4 官方推荐)
 #   - Atlas 800 A3 (64G × 16):  单节点 W8A8 部署
-#
-# 关键特性:
-#   - 256 路由专家 (MoE)
-#   - W8A8 QuaRot Ascend 量化
-#   - 204K 原生上下文窗口
-#   - 官方推荐 TP=4 (A2 环境)
 #
 # 用法:
 #   # 默认 W8A8 单节点 (A2, TP=4)
@@ -32,7 +27,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
+VLLM_SCRIPT="${SCRIPT_DIR}/../../../scripts/vllm/vllm_model_server.sh"
 
 if [[ ! -f "$VLLM_SCRIPT" ]]; then
     echo "[ERROR] vLLM startup script not found: $VLLM_SCRIPT" >&2
@@ -105,8 +100,9 @@ export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 # ------------------------------------------------------------------------------
 # 投机解码 (MTP) — MiniMax-M2.7 不支持 vLLM-Ascend 0.20.2 的 mtp 方法
 # ------------------------------------------------------------------------------
-# export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-mtp}"
-# export SPECULATIVE_NUM_TOKENS="${SPECULATIVE_NUM_TOKENS:-3}"
+# MTP 在模型中已配置 (num_mtp_modules=3)，但 vLLM-Ascend 0.20.2 暂不支持
+# export SPECULATIVE_METHOD="mtp"
+# export SPECULATIVE_NUM_TOKENS=3
 
 # ------------------------------------------------------------------------------
 # NPU 编译优化
@@ -149,13 +145,13 @@ fi
 # ------------------------------------------------------------------------------
 # 启动信息
 # ------------------------------------------------------------------------------
-echo "[INFO] Starting MiniMax-M2.7 W8A8 QuaRot MTP server"
+echo "[INFO] Starting MiniMax-M2.7 W8A8 QuaRot server"
 echo "[INFO] Model:     ${MODEL_PATH}"
 echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE"
 echo "[INFO] Quant:     W8A8 QuaRot (ascend), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
-echo "[INFO] Features:  MoE (256 experts), MTP (tokens=$SPECULATIVE_NUM_TOKENS, method=$SPECULATIVE_METHOD)"
+echo "[INFO] Features:  MoE (256 experts)"
 echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB, TASK_QUEUE=$TASK_QUEUE_ENABLE"
-echo "[INFO] Env:       FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2, FLASHCOMM1=$VLLM_ASCEND_ENABLE_FLASHCOMM1"
+echo "[INFO] Note:      MTP not supported in vLLM-Ascend 0.20.2 for MiniMax"
 
 exec bash "$VLLM_SCRIPT" "${EXTRA_ARGS[@]}" "$@"

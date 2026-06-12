@@ -1,24 +1,22 @@
 #!/bin/bash
-# MiniMax-M2.7 W8A8 QuaRot — 直接 vllm serve 部署
-# 架构: MiniMaxM2ForCausalLM | 256 Experts | MoE
-# 默认 TP=4 PP=1 (单节点 A2，官方推荐)
-# 官方推荐 A2 环境 TP=4 (W8A8 量化)
-# 注意: MTP 在模型中配置 (num_mtp_modules=3)，但 vLLM-Ascend 0.20.2 暂不支持 MiniMax mtp 方法
+# MiniMax-M2.7 W8A8 QuaRot — 动态分块流水线并行 (Dynamic Chunked Pipeline Parallel)
+# 功能: 基于 profiling 的动态分块策略优化 PP 场景下的 prefill 性能
+# 架构: MiniMaxM2ForCausalLM | 256 Experts | 支持 PP > 1
+# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/features/dynamic_chunked_pipeline_parallel.html
+#
+# 要求:
+#   - pipeline_parallel_size > 1
+#   - --enable-chunked-prefill 必须启用
+#   - 与 enable_balance_scheduling 不兼容
 #
 # 用法:
-#   # 单节点 (默认, A2)
-#   bash run_vllm.sh
+#   # A3 单节点 (TP=8 PP=2)
+#   TP=8 PP=2 MAX_MODEL_LEN=65536 bash run_dynamic_chunked_pp.sh
 #
-#   # A3 16 卡
-#   TP=8 MAX_MODEL_LEN=65536 bash run_vllm.sh
-#
-#   # 多节点
-#   TP=8 PP=2 bash run_vllm.sh
-#
-# 参考: https://docs.vllm.ai/projects/ascend/zh-cn/releases-v0.20.2rc/tutorials/models/MiniMax-M2.5.html
+#   # A2 双节点 (TP=4 PP=2)
+#   TP=4 PP=2 MAX_MODEL_LEN=32768 bash run_dynamic_chunked_pp.sh
 set -eo pipefail
 
-# CANN 环境加载 (必须在最前面)
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -28,18 +26,22 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# 基础路径配置
 BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8004}"
 TP="${TP:-4}"
-PP="${PP:-1}"
+PP="${PP:-2}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 
-# 环境变量优化 (官方推荐配置)
+# Dynamic Chunked PP 配置
+PROFILING_CHUNK_CONFIG="${PROFILING_CHUNK_CONFIG:-{\"enabled\": true, \"smooth_factor\": 1.0, \"min_chunk\": 4096, \"need_timing\": true}}"
+
+# 与 balance_scheduling 不兼容
+export VLLM_ASCEND_BALANCE_SCHEDULING=0
+
 export HCCL_OP_EXPANSION_MODE=AIV
 export HCCL_BUFFSIZE=1024
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -47,22 +49,17 @@ export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export TASK_QUEUE_ENABLE=1
 export VLLM_ASCEND_ENABLE_FUSED_MC2=1
-export VLLM_USE_MODELSCOPE=False
-# 兼容旧版本的回退变量
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
-
-# v0.20.2 新格式 additional_config
-ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
+export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
-echo "[INFO] MiniMax-M2.7 W8A8 QuaRot Deployment"
+echo "[INFO] MiniMax-M2.7 W8A8 — Dynamic Chunked Pipeline Parallel"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] Note: MTP not supported in vLLM-Ascend 0.20.2 for MiniMax"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN"
+echo "[INFO] Profiling Config: $PROFILING_CHUNK_CONFIG"
+echo "[INFO] Feature: Dynamic Chunked PP (CPP)"
 echo "============================================"
-
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
@@ -74,16 +71,16 @@ vllm serve "$MODEL_PATH" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
     --quantization ascend \
-    --gpu-memory-utilization "$GPU_MEM_UTIL" \
+    --gpu-memory-utilization 0.83 \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
-    --max-num-batched-tokens 8192 \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser minimax_m2 \
-    --additional-config "$ADDITIONAL_CONFIG" \
+    --additional-config "{\"profiling_chunk_config\": $PROFILING_CHUNK_CONFIG}" \
     --seed 1024 \
     "$@"
