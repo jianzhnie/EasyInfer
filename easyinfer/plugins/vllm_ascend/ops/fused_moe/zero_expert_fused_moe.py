@@ -36,20 +36,25 @@ from vllm.model_executor.layers.fused_moe.zero_expert_fused_moe import (
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX, MoECommType
 from vllm_ascend.ops.fused_moe.experts_selector import (
     select_experts as ascend_select_experts,
+)
+from vllm_ascend.ops.fused_moe.experts_selector import (
     zero_experts_compute as ascend_zero_experts_compute,
 )
 from vllm_ascend.ops.fused_moe.fused_moe import AscendFusedMoE, FusedMoEResult
 
-from npuslim.plugins.registry import package_version_range, register_patch
+from easyinfer.plugins.registry import package_version_range, register_patch
 
 if TYPE_CHECKING:
     pass
 
 # vllm-ascend < 0.19 uses ``global_num_experts``; >= 0.19 uses ``num_experts``.
 import importlib.metadata
+
 from packaging.version import Version
 
-_USE_GLOBAL_NUM_EXPERTS = Version(importlib.metadata.version("vllm_ascend")) < Version("0.19")
+_USE_GLOBAL_NUM_EXPERTS = Version(importlib.metadata.version("vllm_ascend")) < Version(
+    "0.19"
+)
 
 
 def _expert_count_kwarg(count: int) -> dict:
@@ -59,11 +64,13 @@ def _expert_count_kwarg(count: int) -> dict:
     return {"num_experts": count}
 
 
-_EP_COMM_TYPES = frozenset({
-    MoECommType.MC2,
-    MoECommType.FUSED_MC2,
-    MoECommType.ALLTOALL,
-})
+_EP_COMM_TYPES = frozenset(
+    {
+        MoECommType.MC2,
+        MoECommType.FUSED_MC2,
+        MoECommType.ALLTOALL,
+    }
+)
 
 
 @register_patch(
@@ -101,10 +108,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
             renormalize,
             **_ignored,
         ):
-            if (
-                self._memoized_topk_weights is None
-                or self._memoized_topk_ids is None
-            ):
+            if self._memoized_topk_weights is None or self._memoized_topk_ids is None:
                 raise RuntimeError(
                     "ZeroExpertFusedMoE: routing results not memoized. "
                     "Call select_experts first to compute routing."
@@ -198,9 +202,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
             "custom_routing_function": None,
         }
         if self._router is not None:
-            temp_attrs["e_score_correction_bias"] = (
-                self._router.e_score_correction_bias
-            )
+            temp_attrs["e_score_correction_bias"] = self._router.e_score_correction_bias
 
         with self._temporarily_set_attrs(**temp_attrs):
             topk_weights, topk_ids = self.select_experts(
@@ -255,10 +257,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
         # ---- EP + zero experts: routing AFTER prepare ----
 
         forward_context = get_forward_context()
-        if (
-            self.enable_npugraph_ex_static_kernel
-            and forward_context.all_moe_layers
-        ):
+        if self.enable_npugraph_ex_static_kernel and forward_context.all_moe_layers:
             moe_layer_index = forward_context.moe_layer_index % len(
                 forward_context.all_moe_layers
             )
@@ -268,7 +267,10 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
         # moe_layer_index between layers.  Our bypass skips that chain,
         # so we must increment it here so that each MoE layer gets a
         # unique index for MC2/All2All communication handles.
-        if hasattr(forward_context, "all_moe_layers") and forward_context.all_moe_layers:
+        if (
+            hasattr(forward_context, "all_moe_layers")
+            and forward_context.all_moe_layers
+        ):
             forward_context.moe_layer_index += 1
 
         enable_force_load_balance = _EXTRA_CTX.in_profile_run
@@ -289,9 +291,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
 
         # 2. Compute routing on PREPARED hidden_states
         e_score_bias = (
-            self._router.e_score_correction_bias
-            if self._router is not None
-            else None
+            self._router.e_score_correction_bias if self._router is not None else None
         )
         topk_weights, topk_ids = ascend_select_experts(
             hidden_states=prepared_hs,
@@ -371,9 +371,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
                 self.moe_load.index_add_(
                     dim=0,
                     index=cur_iter,
-                    source=local_load.to(
-                        torch.int32, non_blocking=True
-                    ).view(1, -1),
+                    source=local_load.to(torch.int32, non_blocking=True).view(1, -1),
                 )
                 self.load_counter.add_(1)
             else:

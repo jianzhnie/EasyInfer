@@ -1,10 +1,10 @@
-"""Shared registry utilities for NPUSlim plugins.
+"""Shared registry utilities for EasyInfer plugins.
 
 This module provides generic registration and discovery utilities
 that can be used by any plugin (vllm_ascend, transformers, etc.).
 
 Usage:
-    from npuslim.plugins.registry import (
+    from easyinfer.plugins.registry import (
         package_version_range,
         register_patch,
     )
@@ -30,12 +30,13 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, cast
 
 from packaging.version import InvalidVersion, Version
 
-from npuslim.plugins.logging import patch_logger
+from easyinfer.plugins.logging import patch_logger
 
 logger = patch_logger
 
@@ -115,7 +116,8 @@ def package_version_range(
 
     def condition(_module: Any) -> PatchConditionResult:
         import importlib
-        from importlib.metadata import PackageNotFoundError, version as dist_version
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as dist_version
 
         package = importlib.import_module(package_name)
         raw_version = getattr(package, version_attr, None)
@@ -178,7 +180,7 @@ def register_patch(
     target: str | None = None,
     registrar: Registrar | None = None,
     condition: PatchCondition | None = None,
-):
+) -> Callable[[Callable], Callable]:
     """Decorator to register a patch for a target module.
 
     Args:
@@ -210,14 +212,13 @@ def register_patch(
             should_apply, reason = _evaluate_condition(condition, obj)
             if not should_apply:
                 patch_logger.info(
-                    f"Skipped registrar: {_object_name(obj)} "
-                    f"({_skip_reason(reason)})"
+                    f"Skipped registrar: {_object_name(obj)} ({_skip_reason(reason)})"
                 )
                 return obj
 
             registered_obj = registrar(obj)
             patch_logger.success(f"Applied registrar: {_object_name(obj)}")
-            return registered_obj
+            return cast(Callable, registered_obj)
 
         assert target is not None
         if target not in _PATCH_REGISTRY:
@@ -228,13 +229,13 @@ def register_patch(
     return decorator
 
 
-def discover_modules(base_package: str, base_dir: str):
+def discover_modules(base_package: str, base_dir: str) -> None:
     """Discover and import all Python modules under a base directory.
 
     This triggers @register_patch and @register_scheme decorators.
 
     Args:
-        base_package: Base package name (e.g., "npuslim.plugins.vllm_ascend")
+        base_package: Base package name (e.g., "easyinfer.plugins.vllm_ascend")
         base_dir: Base directory path as string
     """
     cache_key = f"{base_package}:{base_dir}"
@@ -265,7 +266,7 @@ def discover_modules(base_package: str, base_dir: str):
     _DISCOVERED_MODULES.add(cache_key)
 
 
-def apply_all_patches():
+def apply_all_patches() -> int:
     """Apply all registered patches to their target modules.
 
     This function is idempotent - patches are only applied once.
@@ -278,6 +279,7 @@ def apply_all_patches():
 
         try:
             import importlib
+
             module = importlib.import_module(target)
 
             for patch_spec in patches:
@@ -311,6 +313,6 @@ def apply_all_patches():
     return applied
 
 
-def get_patch_registry():
+def get_patch_registry() -> dict[str, list[PatchSpec]]:
     """Get the global patch registry (for debugging/testing)."""
     return _PATCH_REGISTRY.copy()

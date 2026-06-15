@@ -10,13 +10,13 @@ Root Cause:
 """
 
 from collections.abc import Iterable
-from typing import Any, Callable
+from typing import Any, cast
 
 import torch
 from vllm.logger import init_logger
 
-from npuslim.plugins.logging import patch_logger
-from npuslim.plugins.registry import package_version_range, register_patch
+from easyinfer.plugins.logging import patch_logger
+from easyinfer.plugins.registry import package_version_range, register_patch
 
 target_logger = init_logger(__name__)
 
@@ -46,13 +46,13 @@ def _get_w4a16_aux_suffixes() -> list[str]:
     target="vllm.model_executor.models.qwen3_moe",
     condition=package_version_range("vllm", max_version="0.20.1"),
 )
-def patch_qwen3_moe_load_weights(module):
+def patch_qwen3_moe_load_weights(module: Any) -> None:
     """Patch Qwen3MoeModel.load_weights to handle W4A16 quantization."""
 
     original_load_weights = module.Qwen3MoeModel.load_weights
 
     def patched_load_weights(
-        self, weights: Iterable[tuple[str, torch.Tensor]]
+        self: Any, weights: Iterable[tuple[str, torch.Tensor]]
     ) -> set[str]:
         params_dict = dict(self.named_parameters())
 
@@ -61,7 +61,7 @@ def patch_qwen3_moe_load_weights(module):
 
         if not is_w4a16:
             # Use original implementation for non-W4A16 models
-            return original_load_weights(self, weights)
+            return cast(set[str], original_load_weights(self, weights))
 
         # W4A16-specific loading logic
         from vllm.model_executor.model_loader.weight_utils import (
@@ -103,12 +103,14 @@ def patch_qwen3_moe_load_weights(module):
                 scale_name = self.quant_config.get_cache_scale(name)
                 if scale_name is not None:
                     param = params_dict[scale_name]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    kv_weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     assert loaded_weight.numel() == 1, (
                         f"KV scale numel {loaded_weight.numel()} != 1"
                     )
                     loaded_weight = loaded_weight.squeeze()
-                    weight_loader(param, loaded_weight)
+                    kv_weight_loader(param, loaded_weight)
                     loaded_params.add(scale_name)
                     continue
 
@@ -122,7 +124,10 @@ def patch_qwen3_moe_load_weights(module):
 
                 name_mapped = name.replace(weight_name, param_name)
 
-                if name_mapped.endswith(ignore_suffixes) and name_mapped not in params_dict:
+                if (
+                    name_mapped.endswith(ignore_suffixes)
+                    and name_mapped not in params_dict
+                ):
                     continue
                 if is_pp_missing_parameter(name_mapped, self):
                     continue
@@ -160,7 +165,10 @@ def patch_qwen3_moe_load_weights(module):
                 if is_pp_missing_parameter(name_mapped, self):
                     continue
 
-                if name_mapped.endswith(ignore_suffixes) and name_mapped not in params_dict:
+                if (
+                    name_mapped.endswith(ignore_suffixes)
+                    and name_mapped not in params_dict
+                ):
                     continue
 
                 # W4A16: Try to find the parameter with suffixes
@@ -171,7 +179,7 @@ def patch_qwen3_moe_load_weights(module):
                     name_with_suffix = name_mapped + suffix
                     if name_with_suffix in params_dict:
                         param = params_dict[name_with_suffix]
-                        weight_loader: Callable[..., Any] = getattr(
+                        weight_loader = getattr(
                             param, "weight_loader", default_weight_loader
                         )
                         try:
@@ -259,9 +267,7 @@ def patch_qwen3_moe_load_weights(module):
                 if is_pp_missing_parameter(name, self):
                     continue
                 if name.endswith("kv_scale"):
-                    remapped_kv_scale_name = name.replace(
-                        ".kv_scale", ".attn.kv_scale"
-                    )
+                    remapped_kv_scale_name = name.replace(".kv_scale", ".attn.kv_scale")
                     if remapped_kv_scale_name not in params_dict:
                         target_logger.warning_once(
                             "Found kv scale in checkpoint (e.g. %s), "

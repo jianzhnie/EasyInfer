@@ -1,10 +1,10 @@
-"""Shared logging helpers for NPUSlim plugin lifecycle messages."""
+"""Shared logging helpers for EasyInfer plugin lifecycle messages."""
 
 from __future__ import annotations
 
 from loguru import logger as _logger
 
-PATCH_LOG_PREFIX = "[NPUSlimPatch]"
+PATCH_LOG_PREFIX = "[EasyInferPatch]"
 
 
 def _prefix_patch_log(record: dict) -> None:

@@ -38,11 +38,13 @@ kernel does not support ``custom_routing_function``.  Only the first pass
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from vllm.logger import init_logger
 
-from npuslim.plugins.logging import patch_logger
-from npuslim.plugins.registry import register_patch
+from easyinfer.plugins.logging import patch_logger
+from easyinfer.plugins.registry import register_patch
 
 target_logger = init_logger(__name__)
 
@@ -60,7 +62,7 @@ def _grouped_routing(
     expansion_factor: int,
     n_routed_experts: int,
     e_score_correction_bias: torch.Tensor | None = None,
-    **_ignored,
+    **_ignored: Any,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Grouped top-k routing matching HF ``LongcatFlashTopkRouter``.
 
@@ -100,11 +102,9 @@ def _grouped_routing(
 
     # 3. Reshape into F groups: (tokens, N+Z) → (tokens, F, total_groups)
     #    → transpose → (tokens, total_groups, F)
-    grouped_scores = (
-        scores_for_choice
-        .view(-1, expansion_factor, total_groups)
-        .transpose(-1, -2)
-    )
+    grouped_scores = scores_for_choice.view(
+        -1, expansion_factor, total_groups
+    ).transpose(-1, -2)
 
     # 4. Best expert within each group
     #    group_score_best: (tokens, total_groups)
@@ -134,7 +134,11 @@ def _grouped_routing(
 # ---------------------------------------------------------------------------
 
 
-def _patch_zero_expert_router(experts, expansion_factor: int, n_routed: int):
+def _patch_zero_expert_router(
+    experts: Any,
+    expansion_factor: int,
+    n_routed: int,
+) -> None:
     """Replace ``ZeroExpertRouter._compute_routing`` with grouped routing.
 
     The vLLM router factory prioritises ``ZeroExpertRouter`` over
@@ -196,7 +200,11 @@ def _patch_zero_expert_router(experts, expansion_factor: int, n_routed: int):
 # ---------------------------------------------------------------------------
 
 
-def _patch_ascend_select_experts(experts, expansion_factor: int, n_routed: int):
+def _patch_ascend_select_experts(
+    experts: Any,
+    expansion_factor: int,
+    n_routed: int,
+) -> None:
     """Replace ``select_experts`` on Ascend with grouped routing.
 
     ``AscendZeroExpertFusedMoE.forward()`` temporarily disables
@@ -232,7 +240,7 @@ def _patch_ascend_select_experts(experts, expansion_factor: int, n_routed: int):
 
 
 @register_patch(target="vllm.model_executor.models.longcat_flash")
-def patch_longcat_flash_grouped_routing(module):
+def patch_longcat_flash_grouped_routing(module: Any) -> None:
     """Monkey-patch vLLM ``longcat_flash`` for Grouped Routing support.
 
     Changes
@@ -256,11 +264,11 @@ def patch_longcat_flash_grouped_routing(module):
     original_config_init = module.FlashConfig.__init__
 
     def patched_config_init(
-        self,
+        self: Any,
         use_group_routing: bool = False,
         expert_expansion_factor: int = 1,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         original_config_init(self, **kwargs)
         self.use_group_routing = use_group_routing
         self.expert_expansion_factor = expert_expansion_factor
@@ -273,17 +281,17 @@ def patch_longcat_flash_grouped_routing(module):
     original_moe_init = module.LongcatMoe.__init__
 
     def patched_moe_init(
-        self,
-        config,
+        self: Any,
+        config: Any,
         num_experts: int,
         top_k: int,
         hidden_size: int,
         intermediate_size: int,
         params_dtype: torch.dtype | None = None,
-        quant_config=None,
+        quant_config: Any | None = None,
         prefix: str = "",
         enable_eplb: bool = False,
-    ):
+    ) -> None:
         original_moe_init(
             self,
             config=config,
@@ -337,9 +345,7 @@ def patch_longcat_flash_grouped_routing(module):
                         renormalize,
                         expansion_factor,
                         n_routed,
-                        e_score_correction_bias=(
-                            self.router.e_score_correction_bias
-                        ),
+                        e_score_correction_bias=(self.router.e_score_correction_bias),
                     )
                 )
             )

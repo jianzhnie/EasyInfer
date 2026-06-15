@@ -24,7 +24,7 @@ def check_ray_already_started() -> bool:
     return len(running_gcs_addresses) > 0
 
 
-def check_cluster_ready(nnodes, timeout=CLUSTER_WAIT_TIMEOUT):
+def check_cluster_ready(nnodes: int, timeout: int = CLUSTER_WAIT_TIMEOUT) -> bool:
     """Wait for all nodes to start.
 
     Raises an exception if the nodes don't start in time.
@@ -45,7 +45,7 @@ def check_cluster_ready(nnodes, timeout=CLUSTER_WAIT_TIMEOUT):
     return False
 
 
-def check_head_node_ready(address: str, timeout=CLUSTER_WAIT_TIMEOUT):
+def check_head_node_ready(address: str, timeout: int = CLUSTER_WAIT_TIMEOUT) -> bool:
     start_time = time.time()
     gcs_client = GcsClient(address=address)
     while time.time() - start_time < timeout:
@@ -133,7 +133,11 @@ SEPARATOR REQUIREMENT:
     help="If provided, wait for this number of nodes to start.",
 )
 @click.argument("ray_args_and_entrypoint", nargs=-1, type=click.UNPROCESSED)
-def symmetric_run(address, min_nodes, ray_args_and_entrypoint):
+def symmetric_run(
+    address: str,
+    min_nodes: int | None,
+    ray_args_and_entrypoint: tuple[str, ...],
+) -> None:
     all_args = sys.argv[1:]
 
     if all_args and all_args[0] == "symmetric-run":

@@ -114,3 +114,9 @@ exclude = [
     "^build/",
     "^dist/",
 ]
+
+[[tool.mypy.overrides]]
+module = [
+    "easyinfer.plugins.vllm_ascend.ops.fused_moe.zero_expert_fused_moe",
+]
+ignore_errors = true

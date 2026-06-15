@@ -209,3 +209,4 @@ output/
 .claude
 *.db
 lichcai/
+.gstack/

@@ -1,1 +1,1 @@
-"""NPUSlim vLLM model patches."""
+"""EasyInfer vLLM model patches."""

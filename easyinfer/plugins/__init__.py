@@ -1,8 +1,7 @@
-"""
-NPUSlim Plugin System.
+"""EasyInfer plugin system.
 
-Provides automatic registration of NPUSlim quantization methods
-with various deployment backends (vLLM, HuggingFace, etc.).
+Provides automatic registration of EasyInfer plugins with deployment
+backends such as vLLM and vLLM-Ascend.
 """
 
 from __future__ import annotations
@@ -17,12 +16,6 @@ def _module_available(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
-def _load_backend_name() -> str:
-    from npuslim.core.backend import bh
-
-    return bh.name
-
-
 def _register_plugin(package_name: str) -> None:
     module = importlib.import_module(package_name)
     register_fn = getattr(module, "register", None)
@@ -30,11 +23,10 @@ def _register_plugin(package_name: str) -> None:
         register_fn()
 
 
-def register():
-    """
-    Register all NPUSlim plugins with their respective frameworks.
+def register() -> None:
+    """Register all EasyInfer plugins with their respective frameworks.
 
-    Call this once after installing npuslim, or it happens automatically
+    Call this once after installing easyinfer, or it happens automatically
     via entry points. This function is idempotent - multiple calls are safe.
     """
     global _REGISTERED
@@ -42,15 +34,10 @@ def register():
         return
 
     if _module_available("vllm"):
-        _register_plugin("npuslim.plugins.vllm")
+        _register_plugin("easyinfer.plugins.vllm")
 
-    _register_plugin("npuslim.plugins.transformers")
-
-    if _load_backend_name() == "npu" and _module_available("vllm_ascend"):
-        _register_plugin("npuslim.plugins.vllm_ascend")
-
-    if _module_available("speculators"):
-        _register_plugin("npuslim.plugins.speculators")
+    if _module_available("vllm_ascend"):
+        _register_plugin("easyinfer.plugins.vllm_ascend")
 
     _REGISTERED = True
 

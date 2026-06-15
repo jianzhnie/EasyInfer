@@ -1,1 +1,1 @@
-"""NPUSlim patches for vllm.transformers_utils.* modules."""
+"""EasyInfer patches for vllm.transformers_utils.* modules."""

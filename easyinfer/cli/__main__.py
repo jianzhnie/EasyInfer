@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 
 from easyinfer import __version__
 
@@ -14,6 +15,9 @@ def _cmd_register(_args: argparse.Namespace) -> int:
 
     register()
     return 0
+
+
+_Handler = Callable[[argparse.Namespace], int]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -48,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    return args.func(args)
+    func: _Handler = args.func
+    return func(args)
 
 
 if __name__ == "__main__":
