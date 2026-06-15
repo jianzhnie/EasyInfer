@@ -1,15 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "EasyInfer"
+name = "easyinfer"
 version = "0.1.0"
-description = "Ascend NPU 集群上的大模型推理部署工具集"
+description = "Ascend NPU Large Language Model Inference Deployment Toolkit"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = [
-    "rich",
-    "loguru",
-    "datasets",
-    "accelerate",
-    "transformers<5.0.0",
+keywords = ["vllm", "ascend", "npu", "llm", "inference", "deployment"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+authors = [{ name = "jianzhnie", email = "jianzhnie@gmail.com" }]
+
+dependencies = [
+    "rich>=13.0",
+    "loguru>=0.7.0",
+    "datasets>=2.14.0",
+    "accelerate>=0.25.0",
+    "transformers>=4.35.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jianzhnie/EasyInfer"
+Repository = "https://github.com/jianzhnie/EasyInfer"
+Issues = "https://github.com/jianzhnie/EasyInfer/issues"
 
 [project.optional-dependencies]
 eval = [
@@ -28,6 +53,16 @@ all = [
     "vllm",
     "vllm-ascend",
 ]
+
+[project.scripts]
+easyinfer = "easyinfer.cli.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["easyinfer*"]
+
+[project.entry-points."vllm.general_plugins"]
+easyinfer = "easyinfer.plugins:register"
 
 [tool.ruff]
 line-length = 88
@@ -65,3 +100,17 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-v", "--tb=short", "--strict-markers"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+exclude = [
+    "^build/",
+    "^dist/",
+]
