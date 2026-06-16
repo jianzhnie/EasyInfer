@@ -32,7 +32,7 @@ fi
 # ------------------------------------------------------------------------------
 # Model path and base configuration
 # ------------------------------------------------------------------------------
-export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w4a8}"
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5}"
 export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5}"
 export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8001}"

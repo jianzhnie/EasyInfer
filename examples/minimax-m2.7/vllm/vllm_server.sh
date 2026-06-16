@@ -32,7 +32,7 @@ fi
 # ------------------------------------------------------------------------------
 # Model path and base configuration
 # ------------------------------------------------------------------------------
-export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/MiniMax-M2.7-w8a8-QuaRot}"
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/MiniMaxAI/MiniMax-M2.7}"
 export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-minimax-m2.7}"
 export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8004}"
@@ -62,7 +62,7 @@ export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 # Quantization and memory configuration (FP8)
 # ------------------------------------------------------------------------------
 export DTYPE="${DTYPE:-bfloat16}"
-export QUANTIZATION="${QUANTIZATION:-ascend}"
+export QUANTIZATION="${QUANTIZATION:-fp8}"
 export LOAD_FORMAT="${LOAD_FORMAT:-auto}"
 export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 export SWAP_SPACE="${SWAP_SPACE:-32}"
@@ -140,7 +140,7 @@ fi
 echo "[INFO] Starting MiniMax-M2.7 FP8 server"
 echo "[INFO] Model:     ${MODEL_PATH}"
 echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE"
-echo "[INFO] Quant:     FP8 (ascend), dtype=$DTYPE"
+echo "[INFO] Quant:     FP8 (native), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
 echo "[INFO] Features:  MoE (256 experts)"
 echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB, TASK_QUEUE=$TASK_QUEUE_ENABLE"

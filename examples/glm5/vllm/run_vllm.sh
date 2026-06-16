@@ -3,8 +3,9 @@
 # GLM-5 — Direct vllm serve deployment
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MoE | MLA | MTP=1
-# Max Position: 202752 | Default: TP=8 PP=1 (single-node)
-# Note: GLM-5 does not support Pipeline Parallelism; use large TP across nodes.
+# Max Position: 202752 | Default: TP=32 PP=1 (multi-node full-precision)
+# Note: GLM-5 BF16 (~1.4T) needs TP>=32; does not support Pipeline Parallelism.
+#       Add --quantization ascend for W4A8 single-node deployment.
 #
 # Usage:
 #   bash run_vllm.sh
@@ -27,15 +28,15 @@ fi
 set -u
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5-w4a8}"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8001}"
-readonly TP="${TP:-8}"
+readonly TP="${TP:-32}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
@@ -72,7 +73,6 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
-    --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \

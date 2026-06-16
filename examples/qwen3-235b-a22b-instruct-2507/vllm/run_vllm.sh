@@ -3,9 +3,9 @@
 # Qwen3-235B-A22B — Direct vllm serve deployment
 # =============================================================================
 # Architecture: Qwen3MoeForCausalLM | 128 Experts | MoE | BF16
-# Max Position: 262144 | Default: TP=8 PP=1 (single-node)
-# Note: 128-expert MoE model. Use --quantization ascend for W4A8 to fit
-#       on single node; set QUANTIZATION=none for BF16 on multi-node.
+# Max Position: 262144 | Default: TP=16 PP=1 (multi-node full-precision)
+# Note: 128-expert MoE model. BF16 full precision (~438G) needs TP>=16.
+#       Add --quantization ascend for W4A8 single-node deployment.
 #
 # Usage:
 #   bash run_vllm.sh
@@ -32,11 +32,11 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Qwen"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Qwen3-235B-A22B-Instruct-2507}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8006}"
-readonly TP="${TP:-8}"
+readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
@@ -72,7 +72,6 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
-    --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \

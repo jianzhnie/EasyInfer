@@ -18,7 +18,7 @@
 | **MTP** | num_mtp_modules=3 (vLLM-Ascend 0.20.2 暂不支持) |
 | **PP 支持** | ✅ 支持 Pipeline Parallelism |
 | **工具调用解析器** | minimax_m2 |
-| **词表大小** | 100,672 |
+| **词表大小** | 200,064 |
 
 ### 架构注意事项
 
@@ -110,7 +110,7 @@ curl http://localhost:8004/v1/chat/completions \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `ascend` | FP8 Ascend 量化 |
+| `QUANTIZATION` | `fp8` | FP8 量化 (float8_e4m3fn, 模型内置) |
 | `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.85` | NPU 显存利用率 |
 | `SWAP_SPACE` | `32` | CPU 交换空间 (GiB) |
 

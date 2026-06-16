@@ -28,11 +28,11 @@ fi
 set -u
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/MiniMaxAI"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8004}"
-readonly TP="${TP:-4}"
+readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
@@ -73,7 +73,7 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
-    --quantization ascend \
+    --quantization fp8 \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
