@@ -79,11 +79,11 @@ curl http://localhost:8004/v1/chat/completions \
 
 | 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
 |------|-----|-----|-----|-----|--------|------|
-| 单节点 A2 | 4 | 1 | 1 | 8 | 32K | ✅ 已验证 |
+| 单节点 A2 | 4 | 1 | 1 | 8 | 32K | ✅ 已验证 (需 GPU_MEM_UTIL≥0.95) |
 | 单节点 A3 | 8 | 1 | 1 | 16 | 65K | ⚠️ 待验证 |
 | 多节点 | 8 | 2 | 1 | 16 | 65K | ⚠️ 待验证 |
 
-> 官方推荐 A2 环境 TP=4 (W8A8 量化下最稳定)。
+> 官方推荐 A2 环境 TP=4 (W8A8 量化下最稳定)。注意：64GB 卡上模型权重占 54.16 GB，必须 `GPU_MEM_UTIL≥0.92` 才能加载，32K 上下文推荐 `GPU_MEM_UTIL=0.95`。
 
 ## 环境变量
 
@@ -111,8 +111,8 @@ curl http://localhost:8004/v1/chat/completions \
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
 | `QUANTIZATION` | `ascend` | W8A8 QuaRot 量化 |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.85` | NPU 显存利用率 |
-| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB) |
+| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.95` | NPU 显存利用率 (64GB 卡 TP=4 需 ≥0.92) |
+| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB)，`run_vllm.sh` 已内置 |
 
 ### 序列调度
 
@@ -169,7 +169,7 @@ claude
 
 | 功能 | 状态 | 脚本 |
 |------|------|------|
-| 基础 Chat Completion | ⚠️ 待验证 | `run_vllm.sh` |
+| 基础 Chat Completion | ✅ 已验证 (Ascend910 64GB, 16K) | `run_vllm.sh` |
 | Tool Calling (minimax_m2) | ⚠️ 待验证 | `curl_test.sh` |
 | Anthropic Messages API | ⚠️ 待验证 | `curl_test.sh` |
 | MTP 投机解码 | ❌ 暂不支持 | vLLM-Ascend 0.20.2 不兼容 MiniMax mtp |
@@ -187,7 +187,7 @@ claude
 
 ### Q: 为什么 TP 默认是 4 而不是 8？
 
-A: MiniMax-M2.7 W8A8 QuaRot 在 A2 环境官方推荐 TP=4，W8A8 量化下更稳定，同时保留更多显存给 KV Cache。
+A: MiniMax-M2.7 W8A8 QuaRot 在 A2 环境官方推荐 TP=4，W8A8 量化下更稳定。注意 TP=4 时模型权重占比高（约 54GB / 64GB），KV Cache 空间有限，需 `GPU_MEM_UTIL≥0.95`；TP=8 时单卡仅承担约 27GB 权重，KV Cache 更充裕，可使用更低的 `GPU_MEM_UTIL`。
 
 ### Q: MTP 什么时候能支持？
 
@@ -195,7 +195,7 @@ A: 模型中已配置 `num_mtp_modules=3`，但 vLLM-Ascend 0.20.2 的 `mtp` spe
 
 ### Q: W8A8 和 W4A8 有什么区别？
 
-A: W8A8 QuaRot 使用 8-bit 权重和 8-bit 激活量化，精度更高但显存占用较大，因此 GPU_MEM_UTIL 默认 0.85。W4A8 使用 4-bit 权重更省显存。
+A: W8A8 QuaRot 使用 8-bit 权重和 8-bit 激活量化，精度更高但显存占用较大（TP=4 时模型权重约 54GB），因此 GPU_MEM_UTIL 默认 0.95。W4A8 使用 4-bit 权重更省显存。
 
 ### Q: VLLM_ASCEND_ENABLE_FUSED_MC2 是什么？
 
