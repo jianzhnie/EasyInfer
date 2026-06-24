@@ -2,8 +2,8 @@
 
 > **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8007**
 > 架构: GlmMoeDsaForCausalLM | 256 Experts | MoE | MTP | W8A8 量化
-> 已验证配置: TP=16 PP=1 (2节点) | 上下文: 131,072 | Chat ✅ Tool Calling ✅
-> GLM-5.2 与 GLM-5/5.1 共享相同架构，上下文窗口扩展至 1M
+> 最低配置: TP=16 PP=1 (2节点, 16 NPU) | 上下文: 32,768 | Chat ✅ Tool Calling ✅
+> ⚠️ W8A8 模型单节点(8 NPU/64GB HBM)无法部署，至少需要 2 节点
 
 ## 模型简介
 
@@ -48,14 +48,14 @@ bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ### 部署
 
 ```bash
-# 单节点 (32K 上下文, TP=8)
-bash examples/glm5_2_w8a8/vllm/run_vllm.sh
+# 2 节点部署 (最低要求, TP=16, 32K 上下文)
+TP=16 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 
-# 2 节点大 TP (131K 上下文)
+# 2 节点大上下文 (131K)
 TP=16 MAX_MODEL_LEN=131072 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 
 # 后台运行
-nohup bash examples/glm5_2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
+nohup TP=16 bash examples/glm5_2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
 
 # 使用传统包装器部署
 bash examples/glm5_2_w8a8/vllm/vllm_server.sh
@@ -78,8 +78,8 @@ curl http://localhost:8007/v1/chat/completions \
 
 | 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
 |------|-----|-----|-----|-----|--------|------|
-| 单节点轻量 | 8 | 1 | 1 | 8 | 32K | ✅ 已验证 |
-| 2 节点全量 | 16 | 1 | 1 | 16 | **131K** | ✅ 已验证 |
+| 单节点 (A2) | 8 | 1 | 1 | 8 | — | ❌ OOM (W8A8 模型 ~60GB/卡) |
+| 2 节点最低 | 16 | 1 | 1 | 16 | **32K** | ✅ 推荐 |
 | 4 节点大规模 | 32 | 1 | 1 | 32 | 131K | ⚠️ 待验证 |
 
 > GLM-5.2 **不支持 Pipeline Parallelism**，多节点必须使用大 TP。
@@ -99,7 +99,7 @@ curl http://localhost:8007/v1/chat/completions \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `TP` / `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 |
+| `TP` / `TENSOR_PARALLEL_SIZE` | `16` | 张量并行度 (最低 16) |
 | `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
 | `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
 | `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
@@ -110,7 +110,7 @@ curl http://localhost:8007/v1/chat/completions \
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
 | `QUANTIZATION` | `ascend` | W8A8 Ascend 量化 |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.94` | NPU 显存利用率 |
+| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.95` | NPU 显存利用率 |
 | `SWAP_SPACE` | `16` | CPU 交换空间 (GiB) |
 
 ### 序列调度
