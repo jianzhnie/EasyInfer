@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — Long Sequence Context Parallel
+# GLM-5.2 W8A8 — Long Sequence Context Parallel
 # =============================================================================
 # Purpose: Break the single-card sequence length limit via Context Parallelism.
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts
 #
 # Constraints:
-#   - GLM-5.1 W4A8 DSA CP path is incompatible; requires A3 devices
+#   - GLM-5.2 W8A8 DSA CP path is incompatible; requires A3 devices
 #   - tp_size must be divisible by dcp_size
 #
 # Usage:
@@ -29,9 +29,9 @@ set -u
 
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8002}"
+readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly PCP_SIZE="${PCP_SIZE:-2}"
@@ -54,7 +54,7 @@ export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — Long Sequence Context Parallel"
+echo "[INFO] GLM-5.2 W8A8 — Long Sequence Context Parallel"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PCP=$PCP_SIZE DCP=$DCP_SIZE"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
@@ -65,7 +65,7 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name "glm-5.1" \
+    --served-model-name "glm-5.2" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \

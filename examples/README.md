@@ -16,6 +16,18 @@ Per-model deployment examples for EasyInfer.
 | `lm_eval.sh` | — | lm-evaluation-harness |
 | `check_glm5_env.sh` | — | Environment checker |
 
+## Structured Examples
+
+| Directory | Model | Quantization | Port |
+|-----------|-------|-------------|------|
+| `glm5/vllm/` | GLM-5 | BF16 | 8001 |
+| `glm5_w4a8/vllm/` | GLM-5 W4A8 | W4A8 | 8001 |
+| `glm5_1_w4a8/vllm/` | GLM-5.1 W4A8 | W4A8 | 8002 |
+| `glm5_2_w8a8/vllm/` | GLM-5.2 W8A8 | W8A8 | 8007 |
+| `minimax_m2_7_w8a8/vllm/` | MiniMax-M2.7 W8A8 | W8A8 | 8004 |
+
+Each structured example includes `run_vllm.sh`, `vllm_server.sh`, `curl_test.sh`, and advanced deployment scripts.
+
 ## Usage
 
 All examples source `../scripts/common.sh` and `../scripts/vllm/set_env.sh`.

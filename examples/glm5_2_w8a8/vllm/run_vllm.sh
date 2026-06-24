@@ -1,19 +1,19 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — Agent-optimized vLLM deployment with max context
+# GLM-5.2 W8A8 — Agent-optimized vLLM deployment with max context
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
-# Max Position: 202752 | Deploy: 202K context (override with MAX_MODEL_LEN)
-# Note: GLM-5.1 does not support Pipeline Parallelism; use large TP across nodes.
-# This script shares the same config as GLM-5 W4A8 except MODEL_PATH and port.
+# Max Position: 1048576 | Deploy: 32K context (override with MAX_MODEL_LEN)
+# Note: GLM-5.2 does not support Pipeline Parallelism; use large TP across nodes.
+# GLM-5.2 shares the same architecture as GLM-5/5.1 with extended 1M context.
 #
 # Usage:
 #   bash run_vllm.sh
-#   TP=16 MAX_MODEL_LEN=202752 bash run_vllm.sh
+#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh
 #   TP=8 MAX_MODEL_LEN=32768 bash run_vllm.sh
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
+#   https://docs.vllm.ai/projects/ascend/en/main/tutorials/models/GLM5.2.html
 # =============================================================================
 set -euo pipefail
 
@@ -29,9 +29,9 @@ set -u
 
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8002}"
+readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
@@ -55,7 +55,7 @@ export VLLM_ASCEND_ENABLE_MLAPO=1
 readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": false, "enable_mlapo": true}'
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — Agent-Optimized Deployment"
+echo "[INFO] GLM-5.2 W8A8 — Agent-Optimized Deployment"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
@@ -67,7 +67,7 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name "glm-5.1" \
+    --served-model-name "glm-5.2" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \

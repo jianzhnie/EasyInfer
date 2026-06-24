@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — PD Colocated with Mooncake (multi-instance)
+# GLM-5.2 W8A8 — PD Colocated with Mooncake (multi-instance)
 # =============================================================================
 # Purpose: Prefill-decode colocation via Mooncake distributed KV Cache.
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MoE | MTP
-# Same config as GLM-5 W4A8.
+# Same deployment config as GLM-5/5.1 W8A8.
 #
 # Prerequisites:
 #   1. Mooncake installed: https://github.com/kvcache-ai/Mooncake
@@ -31,9 +31,9 @@ set -u
 
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8002}"
+readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 
@@ -53,7 +53,7 @@ export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — PD Colocated (Mooncake)"
+echo "[INFO] GLM-5.2 W8A8 — PD Colocated (Mooncake)"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] Mooncake Config: $MOONCAKE_CONFIG_PATH"
@@ -63,7 +63,7 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name "glm-5.1" \
+    --served-model-name "glm-5.2" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
