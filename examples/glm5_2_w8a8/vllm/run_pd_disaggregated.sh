@@ -1,11 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — PD Disaggregation with Mooncake
+# GLM-5.2 W8A8 — PD Disaggregation with Mooncake
 # =============================================================================
 # Purpose: Separate Prefill and Decode onto different nodes and transfer KV
 #          Cache via Mooncake.
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts
-# Note: GLM-5.1 does not support PP; PD disaggregation uses TP across nodes.
+# Note: GLM-5.2 does not support PP; PD disaggregation uses TP across nodes.
 #
 # Prerequisites:
 #   1. At least 2 nodes with RoCE interconnect
@@ -35,9 +35,9 @@ set -u
 
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w4a8}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8002}"
+readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly KV_ROLE="${KV_ROLE:-kv_producer}"
@@ -60,17 +60,17 @@ export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_MODELSCOPE=False
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W4A8 — PD Disaggregation"
+echo "[INFO] GLM-5.2 W8A8 — PD Disaggregation"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] KV Role: $KV_ROLE (Engine ID: $ENGINE_ID)"
-echo "[WARN] GLM-5.1 does not support PP; PD disaggregation uses TP across nodes"
+echo "[WARN] GLM-5.2 does not support PP; PD disaggregation uses TP across nodes"
 echo "============================================"
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name "glm-5.1" \
+    --served-model-name "glm-5.2" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \

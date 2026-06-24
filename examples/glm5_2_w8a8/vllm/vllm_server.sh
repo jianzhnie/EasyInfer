@@ -1,23 +1,23 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — Traditional wrapper deployment
+# GLM-5.2 W8A8 — Traditional wrapper deployment
 # =============================================================================
-# Calls scripts/vllm/vllm_model_server.sh to deploy GLM-5.1 W4A8.
+# Calls scripts/vllm/vllm_model_server.sh to deploy GLM-5.2 W8A8.
 # Architecture: GlmMoeDsaForCausalLM, 256-expert MoE, MTP.
-# Note: GLM-5.1 does not support Pipeline Parallelism; use large TP across nodes.
-# GLM-5 uses the same config; switch via MODEL_PATH and SERVED_MODEL_NAME.
+# Note: GLM-5.2 does not support Pipeline Parallelism; use large TP across nodes.
+# GLM-5.2 shares the same architecture as GLM-5/5.1 with extended 1M context.
 #
 # Hardware:
-#   - Atlas 800 A2 (64G x 8):  single-node W4A8
-#   - Atlas 800 A3 (64G x 16): single-node W4A8 (larger context)
+#   - Atlas 800 A2 (64G x 8):  single-node W8A8
+#   - Atlas 800 A3 (64G x 16): single-node W8A8 (larger context)
 #
 # Usage:
 #   ./vllm_server.sh
-#   TENSOR_PARALLEL_SIZE=16 MAX_MODEL_LEN=200000 ./vllm_server.sh
-#   MODEL_PATH=/path/to/GLM-5-w4a8 PORT=8001 ./vllm_server.sh
+#   TENSOR_PARALLEL_SIZE=16 MAX_MODEL_LEN=131072 ./vllm_server.sh
+#   MODEL_PATH=/path/to/GLM-5.2-w8a8 PORT=8007 ./vllm_server.sh
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
+#   https://docs.vllm.ai/projects/ascend/en/main/tutorials/models/GLM5.2.html
 # =============================================================================
 set -euo pipefail
 
@@ -33,13 +33,13 @@ fi
 # ------------------------------------------------------------------------------
 # Model path and base configuration
 # ------------------------------------------------------------------------------
-export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.1-w4a8}"
-export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.1}"
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.2-w8a8}"
+export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.2}"
 export HOST="${HOST:-0.0.0.0}"
-export PORT="${PORT:-8002}"
+export PORT="${PORT:-8007}"
 
 # ------------------------------------------------------------------------------
-# Huawei NPU environment variables (same as GLM-5)
+# Huawei NPU environment variables (same as GLM-5/5.1)
 # ------------------------------------------------------------------------------
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
 export OMP_PROC_BIND="${OMP_PROC_BIND:-false}"
@@ -59,7 +59,7 @@ export ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
 export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 
 # ------------------------------------------------------------------------------
-# Quantization and memory configuration (W4A8)
+# Quantization and memory configuration (W8A8)
 # ------------------------------------------------------------------------------
 export DTYPE="${DTYPE:-bfloat16}"
 export QUANTIZATION="${QUANTIZATION:-ascend}"
@@ -72,7 +72,7 @@ export SWAP_SPACE="${SWAP_SPACE:-16}"
 # ------------------------------------------------------------------------------
 if [[ -z "${MAX_MODEL_LEN:-}" ]]; then
     if [[ "${TENSOR_PARALLEL_SIZE:-8}" -ge 16 ]]; then
-        export MAX_MODEL_LEN=202752
+        export MAX_MODEL_LEN=131072
     else
         export MAX_MODEL_LEN=32768
     fi
@@ -147,10 +147,10 @@ fi
 # ------------------------------------------------------------------------------
 # Startup banner
 # ------------------------------------------------------------------------------
-echo "[INFO] Starting GLM-5.1 W4A8 server"
+echo "[INFO] Starting GLM-5.2 W8A8 server"
 echo "[INFO] Model:     ${MODEL_PATH}"
 echo "[INFO] Hardware:  TP=$TENSOR_PARALLEL_SIZE, PP=$PIPELINE_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE"
-echo "[INFO] Quant:     W4A8 (ascend), dtype=$DTYPE"
+echo "[INFO] Quant:     W8A8 (ascend), dtype=$DTYPE"
 echo "[INFO] Memory:    max_len=$MAX_MODEL_LEN, max_seqs=$MAX_NUM_SEQS, gpu_util=$GPU_MEMORY_UTILIZATION"
 echo "[INFO] Features:  MoE (256 experts), MTP (tokens=$SPECULATIVE_NUM_TOKENS)"
 echo "[INFO] HCCL:      OP_EXPANSION_MODE=$HCCL_OP_EXPANSION_MODE, BUFFSIZE=${HCCL_BUFFSIZE}MB"

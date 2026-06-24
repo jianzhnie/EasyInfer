@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W4A8 — API functional test script
+# GLM-5.2 W8A8 — API functional test script
 # =============================================================================
-# Targets localhost:8002 by default.
-# Same test logic as GLM-5 W4A8; only the default port/model differ.
+# Targets localhost:8007 by default.
+# Same test logic as GLM-5 W8A8; only the default port/model differ.
 #
 # Usage:
 #   ./curl_test.sh
@@ -16,8 +16,8 @@ set -euo pipefail
 # Configuration
 # ------------------------------------------------------------------------------
 HOST="${HOST:-localhost}"
-PORT="${PORT:-8002}"
-MODEL_NAME="${MODEL_NAME:-glm-5.1}"
+PORT="${PORT:-8007}"
+MODEL_NAME="${MODEL_NAME:-glm-5.2}"
 readonly TIMEOUT=300
 readonly WAIT_INTERVAL=5
 readonly BASE_URL="http://${HOST}:${PORT}"
@@ -121,7 +121,7 @@ run_stream_test() {
 # Main test sequence
 # ------------------------------------------------------------------------------
 echo "=========================================="
-echo "  GLM-5.1 W4A8 API 功能测试"
+echo "  GLM-5.2 W8A8 API 功能测试"
 echo "  目标地址: ${BASE_URL}"
 echo "  模型名称: ${MODEL_NAME}"
 echo "=========================================="
@@ -160,5 +160,5 @@ run_stream_test "流式 Chat Completion" \
 
 echo ""
 echo "=========================================="
-log_success "GLM-5.1 W4A8 所有测试完成!"
+log_success "GLM-5.2 W8A8 所有测试完成!"
 echo "=========================================="
