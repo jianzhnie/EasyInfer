@@ -5,12 +5,12 @@
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
 # Max Position: 1048576 | Deploy: 32K context (override with MAX_MODEL_LEN)
 # Note: GLM-5.2 does not support Pipeline Parallelism; use large TP across nodes.
-# GLM-5.2 shares the same architecture as GLM-5/5.1 with extended 1M context.
+# GLM-5.2 W8A8 requires minimum TP=16 (2 nodes, 16 NPUs) due to model size (~60GB/card).
+# Single-node (TP=8) will OOM on Atlas 800 A2 (64GB HBM).
 #
 # Usage:
-#   bash run_vllm.sh
-#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh
-#   TP=8 MAX_MODEL_LEN=32768 bash run_vllm.sh
+#   TP=16 bash run_vllm.sh                              # 2-node minimum
+#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh         # 2-node large context
 #
 # Reference:
 #   https://docs.vllm.ai/projects/ascend/en/main/tutorials/models/GLM5.2.html
@@ -32,11 +32,11 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
-readonly TP="${TP:-8}"
+readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.94}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
