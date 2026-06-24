@@ -210,3 +210,7 @@ output/
 *.db
 lichcai/
 .gstack/
+claude_env.sh
+config.sh
+available_nodes.txt
+node_list.txt
