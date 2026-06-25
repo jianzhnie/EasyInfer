@@ -7,8 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../scripts/common.sh
-source "${SCRIPT_DIR}/../scripts/common.sh"
+# shellcheck source=../../scripts/common.sh
+source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 MODEL_PATH="${MODEL_PATH:-/llm_workspace_1P/robin/hfhub/pcl-kimi2-stage2/kimi2-mcore2hf_step_550_v1}"
 HOST="${HOST:-0.0.0.0}"

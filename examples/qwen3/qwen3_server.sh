@@ -19,7 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VLLM_SCRIPT="${SCRIPT_DIR}/../scripts/vllm/vllm_model_server.sh"
+VLLM_SCRIPT="${SCRIPT_DIR}/../../scripts/vllm/vllm_model_server.sh"
 
 # 检查启动脚本是否存在
 if [[ ! -f "$VLLM_SCRIPT" ]]; then

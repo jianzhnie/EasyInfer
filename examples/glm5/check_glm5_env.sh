@@ -12,8 +12,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../scripts/common.sh
-source "${SCRIPT_DIR}/../scripts/common.sh"
+# shellcheck source=../../scripts/common.sh
+source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 # 默认配置
 HARDWARE="${HARDWARE:-a2}"  # a2, a3

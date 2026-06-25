@@ -42,8 +42,8 @@ command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127
 [[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../scripts/common.sh
-source "${SCRIPT_DIR}/../scripts/common.sh"
+# shellcheck source=../../scripts/common.sh
+source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 #=============================================================================
 # 启动命令
