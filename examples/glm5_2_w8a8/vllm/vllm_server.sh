@@ -8,9 +8,8 @@
 # GLM-5.2 shares the same architecture as GLM-5/5.1 with extended 1M context.
 #
 # Hardware:
-#   - Atlas 800 A2 (64G x 16): 2-node W8A8 (minimum, TP=16)
-#   - Atlas 800 A3 (64G x 16): 2-node W8A8 (larger context)
-#   Note: Single-node (TP=8) will OOM due to model size (~60GB/card).
+#   - Atlas 800 A2 (64G x 8):  single-node W8A8
+#   - Atlas 800 A3 (64G x 16): single-node W8A8 (larger context)
 #
 # Usage:
 #   ./vllm_server.sh
@@ -54,7 +53,7 @@ export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 # ------------------------------------------------------------------------------
 # Parallel configuration (GLM MoE, 256 experts, no PP support)
 # ------------------------------------------------------------------------------
-export TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-16}"
+export TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 export PIPELINE_PARALLEL_SIZE="${PIPELINE_PARALLEL_SIZE:-1}"
 export ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-1}"
 export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
@@ -65,7 +64,7 @@ export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 export DTYPE="${DTYPE:-bfloat16}"
 export QUANTIZATION="${QUANTIZATION:-ascend}"
 export LOAD_FORMAT="${LOAD_FORMAT:-auto}"
-export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
 export SWAP_SPACE="${SWAP_SPACE:-16}"
 
 # ------------------------------------------------------------------------------
