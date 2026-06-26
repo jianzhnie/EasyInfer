@@ -17,16 +17,6 @@
 # =============================================================================
 set -euo pipefail
 
-# Load Ascend CANN environment
-set +u
-if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
-    source /usr/local/Ascend/cann/set_env.sh
-fi
-if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
-    source /usr/local/Ascend/nnal/atb/set_env.sh
-fi
-set -u
-
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
@@ -38,6 +28,8 @@ readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
@@ -59,10 +51,20 @@ export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f1}"
 # Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 
+# 前置检查
+command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
+[[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
+
+
+#=============================================================================
+# 启动命令
+#=============================================================================
+
 echo "============================================"
 echo "[INFO] LongCat-Flash-Chat-1024E-512Zero-Topk24-v2 — Deployment"
 echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
+echo "[INFO] TP=$TP PP=$PP DP=$DP"
+echo "[INFO] Host: ${HOST}:${PORT}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "============================================"
@@ -70,7 +72,7 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --served-model-name "longcat-flash-chat" \
+    --served-model-name "${SERVED_MODEL_NAME}" \
     --trust-remote-code \
     --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
@@ -80,10 +82,9 @@ vllm serve "$MODEL_PATH" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
-    --max-num-batched-tokens 8192 \
+    --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
     --enable-chunked-prefill \
     --no-enable-prefix-caching \
     --enforce-eager \
-    --enable-expert-parallel \
     --seed 1024 \
     "$@"
