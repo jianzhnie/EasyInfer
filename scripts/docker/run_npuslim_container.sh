@@ -1,12 +1,14 @@
 #!/bin/bash
 # Run vLLM-Ascend Docker Container
-# Usage: bash run_container.sh [CARDS] [--multi-node] [--npuslim[=/path]] [--daemon]
+# Usage: bash run_container.sh [CARDS] [--multi-node] [--npuslim[=/path]] [--daemon] [--privileged]
 #   CARDS: physical card(s) to use, comma-separated (default: 0)
 #          e.g. 0,1 means card 0+1 -> chips 0,1,2,3
 #   --multi-node: enable multi-node distributed inference mode (all cards)
 #   --npuslim: mount npuslim source and auto install in editable mode
 #   --npuslim=/path: mount npuslim source from custom directory
 #   --daemon: run in background (detached), survives exit
+#   --privileged: run container in privileged mode (required on some Ascend hosts
+#                 for full NPU device access; can also set env PRIVILEGED=true)
 
 set -e
 
@@ -29,6 +31,7 @@ MULTI_NODE=false
 WITH_NPUSLIM=false
 NPUSLIM_SRC_PATH=""
 DAEMON=false
+PRIVILEGED="${PRIVILEGED:-false}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -47,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --daemon)
             DAEMON=true
+            shift
+            ;;
+        --privileged)
+            PRIVILEGED=true
             shift
             ;;
         [0-3])
@@ -102,6 +109,10 @@ DOCKER_ARGS=(
     -it --rm
     --shm-size=10g
 )
+
+if [[ "$PRIVILEGED" == true ]]; then
+    DOCKER_ARGS+=(--privileged)
+fi
 
 if [[ "$MULTI_NODE" == true ]]; then
     # ========== Multi-node mode ==========

@@ -33,6 +33,7 @@ Options:
   -f, --file <FILE>         节点列表文件路径
   --npuslim                 挂载 NPUSlim 源码（默认）
   --no-npuslim              不挂载 NPUSlim 源码
+  --privileged              以特权模式启动容器
 
 环境变量配置: scripts/docker/docker_env.sh
 USAGE
@@ -49,13 +50,15 @@ case "$CMD" in
     *) usage; exit 0 ;;
 esac
 
-# 在 resolve_nodes 消费参数前，先提取 --npuslim / --no-npuslim
-WITH_NPUSLIM=false
+# 在 resolve_nodes 消费参数前，先提取 --npuslim / --no-npuslim / --privileged
+WITH_NPUSLIM=true
+PRIVILEGED=true
 npushift_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --npuslim)     WITH_NPUSLIM=true; shift ;;
         --no-npuslim)  WITH_NPUSLIM=false; shift ;;
+        --privileged)  PRIVILEGED=true; shift ;;
         *)             npushift_args+=("$1"); shift ;;
     esac
 done
@@ -84,18 +87,23 @@ cmd_start() {
     echo "========================================"
     echo "Starting Containers"
     echo "========================================"
-    echo "Hosts:   ${RESOLVED_NODES[*]}"
-    echo "NPUSlim: ${WITH_NPUSLIM}"
+    echo "Hosts:      ${RESOLVED_NODES[*]}"
+    echo "NPUSlim:    ${WITH_NPUSLIM}"
+    echo "Privileged: ${PRIVILEGED}"
     echo ""
 
     for host in "${RESOLVED_NODES[@]}"; do
         echo "--- Starting on ${host} ---"
         local npuslim_arg=""
+        local privileged_arg=""
         if $WITH_NPUSLIM; then
             npuslim_arg="--npuslim=${NPUSLIM_PATH}"
         fi
+        if $PRIVILEGED; then
+            privileged_arg="--privileged"
+        fi
         # shellcheck disable=SC2086
-        ssh_run "$host" "bash ${RUN_CONTAINER} --multi-node --daemon ${npuslim_arg}"
+        ssh_run "$host" "bash ${RUN_CONTAINER} --multi-node --daemon ${privileged_arg} ${npuslim_arg}"
         echo ""
     done
 
