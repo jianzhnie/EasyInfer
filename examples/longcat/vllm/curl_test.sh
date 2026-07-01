@@ -16,7 +16,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 HOST="${HOST:-localhost}"
 PORT="${PORT:-8010}"
-MODEL_NAME="${MODEL_NAME:-longcat-flash-chat}"
+MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 readonly TIMEOUT=300
 readonly WAIT_INTERVAL=5
 readonly BASE_URL="http://${HOST}:${PORT}"

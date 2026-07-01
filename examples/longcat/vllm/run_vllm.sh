@@ -39,14 +39,9 @@ export HCCL_BUFFSIZE=800
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 
-# Disable MC2 MoE dispatch (local_experts=16 < topk=24 at TP=64)
-export VLLM_ASCEND_FUSED_MOE_MC2=0
-export VLLM_ASCEND_MOE_ALL_TO_ALL_DISABLE_MC2=1
-
 # HCCL multi-node communication
 export HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-1800}"
 export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
-export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f1}"
 
 # Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
@@ -54,7 +49,6 @@ export VLLM_ASCEND_BALANCE_SCHEDULING=1
 # 前置检查
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
 [[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
-
 
 #=============================================================================
 # 启动命令
