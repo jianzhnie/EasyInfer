@@ -41,8 +41,6 @@ Evaluation Options:
   --output-dir DIR            Output directory (default: outputs/benchmark/lmeval)
   --limit N                   Limit number of samples per task (default: all)
   --log-samples               Save model outputs for debugging
-  --max-gen-toks N            Max tokens to generate per sample (default: model default)
-                              Useful when prompt + generation exceeds max_model_len
 
 Model & Hardware Options (vllm/api backends):
   -d, --devices DEVICES       Device IDs (default: 0)
@@ -72,8 +70,6 @@ API Backend Options:
   --apply-chat-template       Apply model's chat template via HuggingFace tokenizer
                               Works with all backends. Note: incompatible with loglikelihood-based
                               tasks (e.g. mmlu) -- use --chat + mmlu_generative instead
-  --gen-kwargs KEY=VAL,...    Extra generation kwargs forwarded to lm_eval --gen_kwargs
-                              (e.g. temperature=0.0,until=['\n']) merged with --max-gen-toks
 
 Authentication (for remote APIs):
   Set OPENAI_API_KEY environment variable before running:
@@ -130,8 +126,6 @@ API_PORT=8080
 MODEL_NAME=""
 API_CHAT=false
 APPLY_CHAT_TEMPLATE=false
-MAX_GEN_TOKS=""
-GEN_KWARGS_EXTRA=""
 
 POSITIONAL_ARGS=()
 
@@ -169,8 +163,6 @@ while [[ $# -gt 0 ]]; do
         --model-name) MODEL_NAME="$2"; shift 2 ;;
         --chat) API_CHAT=true; shift 1 ;;
         --apply-chat-template) APPLY_CHAT_TEMPLATE=true; shift 1 ;;
-        --max-gen-toks) MAX_GEN_TOKS="$2"; shift 2 ;;
-        --gen-kwargs) GEN_KWARGS_EXTRA="$2"; shift 2 ;;
         --offline) OFFLINE=true; shift 1 ;;
         -h|--help) usage; exit 0 ;;
         *) POSITIONAL_ARGS+=("$1"); shift ;;
@@ -372,29 +364,7 @@ OPTIONAL_ARGS=()
 [[ "$LOG_SAMPLES" == true ]] && OPTIONAL_ARGS+=(--log_samples)
 [[ "$APPLY_CHAT_TEMPLATE" == true ]] && OPTIONAL_ARGS+=(--apply_chat_template)
 
-# Build generation kwargs (passed via --gen_kwargs to override task defaults)
-# Note: max_gen_toks in model_args is ignored by lm_eval — must use --gen_kwargs
-# Priority: user --gen-kwargs > --max-gen-toks
-GEN_KWARGS_STR=""
-if [[ -n "$MAX_GEN_TOKS" ]]; then
-    GEN_KWARGS_STR="max_tokens=${MAX_GEN_TOKS}"
-fi
-if [[ -n "$GEN_KWARGS_EXTRA" ]]; then
-    if [[ -n "$GEN_KWARGS_STR" ]]; then
-        GEN_KWARGS_STR="${GEN_KWARGS_STR},${GEN_KWARGS_EXTRA}"
-    else
-        GEN_KWARGS_STR="$GEN_KWARGS_EXTRA"
-    fi
-fi
-
-GEN_KWARGS=()
-if [[ -n "$GEN_KWARGS_STR" ]]; then
-    GEN_KWARGS+=(--gen_kwargs "$GEN_KWARGS_STR")
-    log_info "Gen Kwargs" "$GEN_KWARGS_STR"
-fi
-
 PYTHONUNBUFFERED=1 lm_eval \
-    "${GEN_KWARGS[@]}" \
     --model "$LM_EVAL_MODEL" \
     --model_args "$MODEL_ARGS" \
     --tasks "$TASKS" \

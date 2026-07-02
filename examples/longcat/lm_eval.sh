@@ -20,8 +20,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../scripts/common.sh
-source "${SCRIPT_DIR}/../scripts/common.sh"
+# shellcheck source=../../scripts/common.sh
+source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 # ---------------------------------------------------------------------------
 # HF 缓存配置 — 指向本地数据目录，避免重复下载
@@ -35,22 +35,19 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
 # ---------------------------------------------------------------------------
 # 评测参数
 # ---------------------------------------------------------------------------
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24}"
-OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Chat-1024E-512Zero-E-Topk24}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-combined}"
+OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Chat}"
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 PORT="${PORT:-8000}"
 TASKS="${TASKS:-mmlu}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
-MAX_GEN_TOKS="${MAX_GEN_TOKS:-256}"
-# 额外生成参数，通过 --gen-kwargs 透传给 lm_eval（与 --max-gen-toks 合并）
-# 注意：不要在此设置 max_tokens，会覆盖上面的 MAX_GEN_TOKS
-GEN_KWARGS_EXTRA="${GEN_KWARGS_EXTRA:-}"
+# max_model_len 在 API 模式下映射为 max_length（生成长度上限）
+# 注意: 不要与模型部署时的 MAX_MODEL_LEN（上下文窗口）混淆
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
 
-# math 500
-# hendrycks_math500,minerva_math500
-# ceval
-# ceval-valid
+# 可选任务:
+#   mmlu, gsm8k, ceval-valid, hendrycks_math500, minerva_math500
 # ---------------------------------------------------------------------------
 # 执行评测
 # ---------------------------------------------------------------------------
@@ -64,5 +61,4 @@ bash /home/jianzhnie/llmtuner/llm/npuslim/tools/eval/run_lmeval.sh \
     --port "$PORT" \
     --tasks "$TASKS" \
     --fewshot "$FEWSHOT" \
-    --max-gen-toks "$MAX_GEN_TOKS" \
-    ${GEN_KWARGS_EXTRA:+--gen-kwargs "$GEN_KWARGS_EXTRA"}
+    --max-model-len "$MAX_MODEL_LEN"
