@@ -45,9 +45,10 @@ PORT="${PORT:-8000}"
 TASKS="${TASKS:-mmlu}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
-# max_model_len 在 API 模式下映射为 max_length（生成长度上限）
-# 注意: 不要与模型部署时的 MAX_MODEL_LEN（上下文窗口）混淆
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
+# max_model_len → 在 API 模式下映射为 max_length（上下文总长度，含 prompt + 生成）
+# max_gen_toks 控制生成长度上限，未设置时由各后端决定（默认 256）
+# 注意: 必须 ≤ 模型部署时的 MAX_MODEL_LEN，否则请求会被拒绝
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 
 # 可选任务:
 #   mmlu, gsm8k, ceval-valid, hendrycks_math500, minerva_math500
@@ -56,7 +57,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
 # ---------------------------------------------------------------------------
 log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
 
-bash "${PROJECT_ROOT}/tools/eval/run_npu_lmeval.sh" \
+bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" \
     --model-path "$MODEL_PATH" \
     --output-dir "$OUTPUT_DIR" \
     --model-name "${MODEL_NAME}" \
@@ -64,4 +65,5 @@ bash "${PROJECT_ROOT}/tools/eval/run_npu_lmeval.sh" \
     --port "$PORT" \
     --tasks "$TASKS" \
     --fewshot "$FEWSHOT" \
-    --max-model-len "$MAX_MODEL_LEN"
+    --max-model-len "$MAX_MODEL_LEN" \
+    --num-concurrent 4
