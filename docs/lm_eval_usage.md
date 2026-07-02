@@ -162,7 +162,7 @@ run_lmeval.sh /path/to/model \
 
 | 参数 | 说明 |
 |------|------|
-| `--api-key KEY` | 设置 `OPENAI_API_KEY` 环境变量（优于在 model_args 中暴露） |
+| `--api-key-file PATH` | 从文件读取 API key 设置 `OPENAI_API_KEY`（推荐 chmod 600） |
 | `--verify-certificate` | 启用 SSL 证书验证（默认） |
 | `--no-verify-certificate` | 禁用 SSL 证书验证 |
 | `--timeout SECONDS` | 请求超时秒数（lm_eval 内部默认 300） |
