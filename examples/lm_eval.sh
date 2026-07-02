@@ -20,6 +20,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Source project common library
 # shellcheck source=../scripts/common.sh
 source "${SCRIPT_DIR}/../scripts/common.sh"
 
@@ -56,7 +59,7 @@ GEN_KWARGS_EXTRA="${GEN_KWARGS_EXTRA:-}"
 # ---------------------------------------------------------------------------
 log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
 
-bash /home/jianzhnie/llmtuner/llm/npuslim/tools/eval/run_lmeval.sh \
+bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" \
     --model-path "$MODEL_PATH" \
     --output-dir "$OUTPUT_DIR" \
     --model-name "${MODEL_NAME}" \
