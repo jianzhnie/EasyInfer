@@ -35,7 +35,7 @@ GLM-5.2 的 config.json 包含 `index_topk: 2048`，导致 vLLM-Ascend 识别为
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.2-w8a8`
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8`
 
 ```bash
 # 1. 启动 NPU Docker 容器

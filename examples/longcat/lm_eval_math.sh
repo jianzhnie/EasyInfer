@@ -52,9 +52,9 @@ PORT="${PORT:-8000}"
 BACKEND="${BACKEND:-api}"
 
 # 默认：生成类数学任务（适用 --chat --apply-chat-template）
-TASKS="${TASKS:-gsm8k,math500}"
-FEWSHOT="${FEWSHOT:-5}"
-MAX_GEN_TOKS="${MAX_GEN_TOKS:-512}"
+TASKS="${TASKS:-gsm8k,minerva_math500}"
+FEWSHOT="${FEWSHOT:-1}"
+MAX_GEN_TOKS="${MAX_GEN_TOKS:-3072}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 LIMIT="${LIMIT:-none}"
 

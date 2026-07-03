@@ -2,11 +2,12 @@
 
 ## 环境概况
 
-- **集群**: 8 节点 × 8 昇腾 NPU (Atlas 800 A2/A3, 每卡 64G)
-- **框架**: vLLM-Ascend 0.20.2 + Ray 分布式
-- **容器**: `vllm-ascend-env` (quay.io/ascend/vllm-ascend:v0.20.2rc1-a3)
-- **CANN**: 9.0.0
+- **集群**: 16 节点 × 8 昇腾 NPU (Atlas 800 A2/A3, 每卡 64G)
+- **框架**: vLLM-Ascend + Ray 分布式
+- **容器**: `vllm-ascend-env` (ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0)
+- **CANN**: cann8.5.1
 - **挂载**: `/home/jianzhnie/llmtuner` → 容器内同路径
+- **节点**： /home/jianzhnie/llmtuner/llm/EasyInfer/node_list.txt （使用8节点部署）
 
 ## 任务目标
 
@@ -19,15 +20,15 @@
 - /home/jianzhnie/llmtuner/hfhub/models/moonshotai/Kimi-K2.5
 - /home/jianzhnie/llmtuner/hfhub/models/MiniMaxAI/MiniMax-M2.7
 - /home/jianzhnie/llmtuner/hfhub/models/Qwen/Qwen3-235B-A22B-Instruct-2507
+- /home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8
 
 ## 输出要求
 
-对每个模型，在 `examples/<模型简称>/vllm/ `下生成 **5 个文件**, (glm5, kimi-k2-thinking, kimi-k2.5, minimax-m2.7, qwen3-235b-a22b-instruct-2507):
+对每个模型，在 `examples/<模型简称>/vllm/ `下生成下面文件:
 
 ```
 examples/<model_dir>/
 ├── run_vllm.sh       ← 直接 vllm serve（首选）
-├── vllm_server.sh    ← 传统包装器部署（备份）
 ├── curl_test.sh      ← API 功能测试
 └── README.md         ← 部署与测试文档
 ```
@@ -64,6 +65,8 @@ ssh $HEAD "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
 ```
 
 ### Step 4: 部署模型
+
+进入容器内执行
 
 ```bash
 bash examples/<model_dir>/vllm/run_vllm.sh

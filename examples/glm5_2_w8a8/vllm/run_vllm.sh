@@ -28,7 +28,7 @@ fi
 set -u
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
