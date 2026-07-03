@@ -50,7 +50,6 @@ docker run -d \
     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
     -v /etc/ascend_install.info:/etc/ascend_install.info \
     -v /root/.cache:/root/.cache \
-    -v /llm_workspace_1P:/llm_workspace_1P:rw \
     -v /home/jianzhnie/llmtuner:/home/jianzhnie/llmtuner:rw \
     -v /root/.ssh:/root/.ssh \
     -it "${IMAGE_NAME}" \
