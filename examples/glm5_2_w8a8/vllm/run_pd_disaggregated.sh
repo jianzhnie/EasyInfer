@@ -34,7 +34,7 @@ fi
 set -u
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
@@ -88,7 +88,7 @@ vllm serve "$MODEL_PATH" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
-    --speculative-config '{"num_speculative_tokens": 3, "method": "mtp"}' \
+    --speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp"}' \
     --kv-transfer-config "{
         \"kv_connector\": \"MooncakeConnector\",
         \"kv_role\": \"$KV_ROLE\",

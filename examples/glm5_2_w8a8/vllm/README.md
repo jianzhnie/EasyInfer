@@ -1,8 +1,8 @@
 # GLM-5.2 W8A8 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8007**
+> **vLLM-Ascend 0.22.1rc1 + CANN 8.5.1** | 端口: **8007**
 > 架构: GlmMoeDsaForCausalLM | 256 Experts | MoE | MTP | W8A8 量化
-> 已验证配置: TP=16 PP=1 (2节点) | 上下文: 131,072 | Chat ✅ Tool Calling ✅
+> 已验证配置: TP=8 PP=1 (单节点 A2) | 上下文: 32,768 | Chat ✅ Tool Calling ✅
 > GLM-5.2 与 GLM-5/5.1 共享相同架构，上下文窗口扩展至 1M
 
 ## 模型简介
@@ -79,8 +79,8 @@ curl http://localhost:8007/v1/chat/completions \
 | 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
 |------|-----|-----|-----|-----|--------|------|
 | 单节点轻量 | 8 | 1 | 1 | 8 | 32K | ✅ 已验证 |
-| 2 节点全量 | 16 | 1 | 1 | 16 | **131K** | ✅ 已验证 |
-| 4 节点大规模 | 32 | 1 | 1 | 32 | 131K | ⚠️ 待验证 |
+| 2 节点全量 | 16 | 1 | 1 | 16 | **131K** | ⚠️ 待验证 |
+| 4 节点大规模 | 32 | 1 | 1 | 32 | 202K | ⚠️ 待验证 |
 
 > GLM-5.2 **不支持 Pipeline Parallelism**，多节点必须使用大 TP。
 
@@ -110,7 +110,7 @@ curl http://localhost:8007/v1/chat/completions \
 |------|--------|------|
 | `DTYPE` | `bfloat16` | 计算数据类型 |
 | `QUANTIZATION` | `ascend` | W8A8 Ascend 量化 |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.94` | NPU 显存利用率 |
+| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.95` | NPU 显存利用率 |
 | `SWAP_SPACE` | `16` | CPU 交换空间 (GiB) |
 
 ### 序列调度
@@ -118,7 +118,7 @@ curl http://localhost:8007/v1/chat/completions \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `8` | 最大并发请求数 |
+| `MAX_NUM_SEQS` | `48` | 最大并发请求数 |
 | `MAX_NUM_BATCHED_TOKENS` | `16384` | 每 step 最大 token 数 |
 | `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
 | `CHAT_TEMPLATE_CONTENT_FORMAT` | `string` | Chat Template 内容格式 |
@@ -160,7 +160,7 @@ curl http://localhost:8007/v1/chat/completions \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SPECULATIVE_METHOD` | `mtp` | 投机解码方法 |
+| `SPECULATIVE_METHOD` | `deepseek_mtp` | 投机解码方法 |
 | `SPECULATIVE_NUM_TOKENS` | `3` | 每次投机 token 数 |
 
 ## Claude Code 集成

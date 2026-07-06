@@ -33,7 +33,7 @@ fi
 # ------------------------------------------------------------------------------
 # Model path and base configuration
 # ------------------------------------------------------------------------------
-export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.2-w8a8}"
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8}"
 export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.2}"
 export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8007}"
@@ -64,7 +64,7 @@ export DATA_PARALLEL_SIZE="${DATA_PARALLEL_SIZE:-1}"
 export DTYPE="${DTYPE:-bfloat16}"
 export QUANTIZATION="${QUANTIZATION:-ascend}"
 export LOAD_FORMAT="${LOAD_FORMAT:-auto}"
-export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 export SWAP_SPACE="${SWAP_SPACE:-16}"
 
 # ------------------------------------------------------------------------------
@@ -98,7 +98,7 @@ export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 # ------------------------------------------------------------------------------
 # Speculative decoding (MTP)
 # ------------------------------------------------------------------------------
-export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-mtp}"
+export SPECULATIVE_METHOD="${SPECULATIVE_METHOD:-deepseek_mtp}"
 export SPECULATIVE_NUM_TOKENS="${SPECULATIVE_NUM_TOKENS:-3}"
 
 # ------------------------------------------------------------------------------
@@ -131,7 +131,7 @@ EXTRA_ARGS=(
     --trust-remote-code
 )
 
-if [[ "$SPECULATIVE_METHOD" == "mtp" ]]; then
+if [[ "$SPECULATIVE_METHOD" == "deepseek_mtp" ]]; then
     EXTRA_ARGS+=(
         --speculative-config "{\"num_speculative_tokens\": $SPECULATIVE_NUM_TOKENS, \"method\": \"$SPECULATIVE_METHOD\"}"
     )
