@@ -56,9 +56,6 @@ TP=16 MAX_MODEL_LEN=131072 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/glm5_2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
-
-# 使用传统包装器部署
-bash examples/glm5_2_w8a8/vllm/vllm_server.sh
 ```
 
 ### 验证
@@ -185,15 +182,6 @@ claude
 | Tool Calling (glm47) | ✅ | `curl_test.sh` |
 | Anthropic Messages API | ✅ | `curl_test.sh` |
 | MTP 投机解码 | ✅ | `run_vllm.sh` (内置) |
-
-### 高级功能
-
-| 功能 | 状态 | 脚本 | 硬件要求 |
-|------|------|------|----------|
-| 基于 Mooncake 多实例 PD 共置部署 | 📋 已配置 | `run_pd_colocated.sh` | 多节点 + Mooncake + RoCE |
-| 预填充-解码分离部署 | ⚠️ 有限支持 | `run_pd_disaggregated.sh` | 多节点 (PP 不适用，PD 分离使用 TP 跨节点) |
-| 长序列上下文并行 | ⚠️ 需 A3 | `run_long_seq_cp.sh` | Atlas A3 (A2 不支持 CP) |
-| 动态分块流水线并行 | ❌ 不适用 | `run_dynamic_chunked_pp.sh` | GLM-5.2 不支持 PP |
 
 ## 常见问题
 

@@ -29,7 +29,7 @@ Kimi-K2.5 使用 `KimiK25ForConditionalGeneration` 架构，包含独立的 Visi
 
 ### 工具调用解析器
 
-Kimi-K2.5 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`, `<|tool_call_end|>` 等)，**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
+Kimi-K2.5 的 tokenizer 使用自定义工具调用 token (`<tool>`, `</tool>` 等)，**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
 
 | Parser | 状态 | 说明 |
 |--------|------|------|
@@ -66,9 +66,6 @@ TP=8 PP=2 MAX_MODEL_LEN=131072 bash examples/kimi-k2.5/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/kimi-k2.5/vllm/run_vllm.sh > kimi_k25_vllm.log 2>&1 &
-
-# 使用传统包装器部署
-bash examples/kimi-k2.5/vllm/vllm_server.sh
 ```
 
 ### 验证

@@ -1,9 +1,8 @@
 #!/bin/bash
 # =============================================================================
-# Kimi-K2.6 W4A8 — API functional test script
+# MiniMax-M2.5 W8A8 — API functional test script
 # =============================================================================
-# Targets localhost:8003 by default.
-# Includes a multimodal Vision test.
+# Targets localhost:8006 by default.
 #
 # Usage:
 #   ./curl_test.sh
@@ -16,8 +15,8 @@ set -euo pipefail
 # Configuration
 # ------------------------------------------------------------------------------
 HOST="${HOST:-localhost}"
-PORT="${PORT:-8003}"
-MODEL_NAME="${MODEL_NAME:-kimi-k2.6}"
+PORT="${PORT:-8006}"
+MODEL_NAME="${MODEL_NAME:-minimax-m2.5}"
 readonly TIMEOUT=300
 readonly WAIT_INTERVAL=5
 readonly BASE_URL="http://${HOST}:${PORT}"
@@ -67,7 +66,7 @@ wait_for_service() {
 # Args:
 #   $1: test name
 #   $2: endpoint URL
-#   $3: JSON payload
+#   $3: JSON payload (empty for GET)
 #   $4: optional extra header
 #   $5: optional "quiet" flag
 # ------------------------------------------------------------------------------
@@ -121,7 +120,7 @@ run_stream_test() {
 # Main test sequence
 # ------------------------------------------------------------------------------
 echo "=========================================="
-echo "  Kimi-K2.6 W4A8 API 功能测试"
+echo "  MiniMax-M2.5 W8A8 API 功能测试"
 echo "  目标地址: ${BASE_URL}"
 echo "  模型名称: ${MODEL_NAME}"
 echo "=========================================="
@@ -158,12 +157,7 @@ run_test "Anthropic Messages API" \
 run_stream_test "流式 Chat Completion" \
     '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"从1数到5"}],"max_tokens":100,"stream":true}'
 
-# 7. Multimodal Vision (Kimi-K2.6 only)
-run_test "多模态 Vision (图片 URL)" \
-    "${BASE_URL}/v1/chat/completions" \
-    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":[{"type":"text","text":"Describe this image briefly."},{"type":"image_url","image_url":{"url":"https://example.com/test.png"}}]}],"max_tokens":128}'
-
 echo ""
 echo "=========================================="
-log_success "Kimi-K2.6 W4A8 所有测试完成!"
+log_success "MiniMax-M2.5 W8A8 所有测试完成!"
 echo "=========================================="

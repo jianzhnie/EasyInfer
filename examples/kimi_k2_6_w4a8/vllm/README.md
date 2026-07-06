@@ -28,7 +28,7 @@ Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DS
 
 ### 工具调用解析器
 
-Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`, `<|tool_call_end|>` 等)，**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
+Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<tool>`, `</tool>` 等)，**必须使用 `kimi_k2` parser**，不能使用 `deepseek_v3`。
 
 | Parser | 状态 | 说明 |
 |--------|------|------|
@@ -44,7 +44,7 @@ Kimi-K2.6 的 tokenizer 使用自定义工具调用 token (`<|tool_call_begin|>`
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Kimi-K2.6-w4a8`
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/moonshotai/Kimi-K2.6-w4a8`
 
 ```bash
 # 1. 启动 NPU Docker 容器
@@ -65,9 +65,6 @@ TP=8 PP=2 MAX_MODEL_LEN=131072 bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/kimi_k2_6_w4a8/vllm/run_vllm.sh > kimi_k26_vllm.log 2>&1 &
-
-# 使用传统包装器部署
-bash examples/kimi_k2_6_w4a8/vllm/vllm_server.sh
 ```
 
 ### 验证
@@ -207,15 +204,6 @@ claude
 | Tool Calling (kimi_k2) | ✅ | `curl_test.sh` |
 | Anthropic Messages API | ✅ | `curl_test.sh` |
 | MTP 投机解码 | ❌ 不支持 | 模型无 MTP 模块 |
-
-### 高级功能
-
-| 功能 | 状态 | 脚本 | 硬件要求 |
-|------|------|------|----------|
-| 基于 Mooncake 多实例 PD 共置部署 | 📋 已配置 | `run_pd_colocated.sh` | 多节点 + Mooncake + RoCE |
-| 预填充-解码分离部署 | 📋 已配置 | `run_pd_disaggregated.sh` | 2P1D 多节点 + Mooncake |
-| 长序列上下文并行 | 📋 已配置 | `run_long_seq_cp.sh` | Atlas A3 (A2 不支持 CP) |
-| 动态分块流水线并行 | 📋 已配置 | `run_dynamic_chunked_pp.sh` | PP ≥ 2 (支持 PP) |
 
 ## 常见问题
 

@@ -55,9 +55,6 @@ TP=16 MAX_MODEL_LEN=202752 bash examples/glm5/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/glm5/vllm/run_vllm.sh > glm5_vllm.log 2>&1 &
-
-# 使用传统包装器部署
-bash examples/glm5/vllm/vllm_server.sh
 ```
 
 ### 验证
