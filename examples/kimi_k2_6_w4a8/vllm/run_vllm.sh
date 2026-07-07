@@ -87,6 +87,7 @@ vllm serve "$MODEL_PATH" \
     --language-model-only \
     --mm-encoder-tp-mode data \
     --allowed-local-media-path /home/jianzhnie/llmtuner/ \
+    --cudagraph-capture-sizes 1 2 4 8 16 32 \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"

@@ -78,7 +78,6 @@ vllm serve "$MODEL_PATH" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
     --distributed-executor-backend ray \
-    --quantization compressed-tensors \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
@@ -91,6 +90,7 @@ vllm serve "$MODEL_PATH" \
     --language-model-only \
     --mm-encoder-tp-mode data \
     --allowed-local-media-path /home/jianzhnie/llmtuner/ \
+    --cudagraph-capture-sizes 1 2 4 8 16 32 \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"

@@ -73,7 +73,6 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --distributed-executor-backend ray \
-    --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
@@ -84,6 +83,7 @@ vllm serve "$MODEL_PATH" \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser minimax_m2 \
+    --cudagraph-capture-sizes 1 2 4 8 16 32 \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"
