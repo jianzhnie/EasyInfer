@@ -8,12 +8,12 @@
 #   -h, --help          显示帮助信息
 #   -i, --image <NAME>  Docker 镜像名称（必填，也可通过环境变量 IMAGE_NAME 设置）
 #   -o, --output <FILE> 输出 tar 文件路径（默认: ${IMAGE_DIR}/<镜像名>.tar）
-#   -z, --gzip          使用 gzip 压缩（生成 .tar.gz）
+#   -z, --gzip          使用 gzip 压缩（自动检测 pigz 并行压缩，无 pigz 则回退 gzip）
 #   -f, --file <FILE>   节点列表文件，提供后将 tar 分发到各节点
 #   --no-cleanup        分发后保留本地 tar 文件（默认分发后删除）
 #
 # 环境变量 (均可外部覆盖):
-#   IMAGE_NAME, IMAGE_TAR, IMAGE_DIR
+#   IMAGE_NAME, IMAGE_DIR
 
 set -euo pipefail
 
@@ -45,26 +45,31 @@ Usage:
 
 将 Docker 镜像导出为 tar 文件，可选分发到集群节点。
 
+镜像名可通过以下三种方式指定（优先级从高到低）：
+  1. 命令行: -i/--image
+  2. 环境变量: IMAGE_NAME=xxx bash save_docker_image.sh
+  3. 配置文件: 自动读取 docker_env.sh 中的 IMAGE_NAME
+
 Options:
   -h, --help          显示帮助信息
-  -i, --image <NAME>  Docker 镜像名称（必填，也可通过 IMAGE_NAME 环境变量设置）
+  -i, --image <NAME>  Docker 镜像名称
   -o, --output <FILE> 输出 tar 文件路径（默认: ${IMAGE_DIR}/<镜像名>.tar）
-  -z, --gzip          使用 gzip 压缩（生成 .tar.gz 文件）
+  -z, --gzip          启用 gzip 压缩（自动优先使用 pigz 并行压缩）
   -f, --file <FILE>   节点列表文件，提供后将 tar 分发到各节点
   --no-cleanup        分发后保留本地 tar 文件
 
 Examples:
-  # 使用 docker_env.sh 中的默认镜像名导出
-  bash save_docker_image.sh
-
-  # 指定镜像导出
+  # 指定镜像导出（使用默认输出路径）
   bash save_docker_image.sh -i quay.io/ascend/vllm-ascend:v0.22.1rc1-a3
 
-  # 导出并压缩
+  # 导出并压缩（大镜像推荐）
   bash save_docker_image.sh -i myimage:latest -z
 
+  # 指定输出路径
+  bash save_docker_image.sh -i myimage:latest -o /data/images/myimage.tar
+
   # 导出并分发到集群所有节点
-  bash save_docker_image.sh -i myimage:latest -f node_list.txt
+  bash save_docker_image.sh -i myimage:latest -z -f node_list.txt
 USAGE
 }
 
@@ -126,9 +131,29 @@ if [[ -n "${NODES_FILE}" && ! -f "${NODES_FILE}" ]]; then
 fi
 
 # ------------------------------------------
-# 前置检查
+# 前置检查（fail-fast: 所有可能失败的检查放在耗时操作之前）
 # ------------------------------------------
 require_cmd docker
+
+# 压缩工具检测：优先使用 pigz（并行压缩，4-8x 快），不可用时回退 gzip
+COMPRESS_CMD=""
+if [[ "${USE_GZIP}" -eq 1 ]]; then
+    if command -v pigz >/dev/null 2>&1; then
+        COMPRESS_CMD="pigz"
+        log_info "检测到 pigz，将使用并行压缩"
+    elif command -v gzip >/dev/null 2>&1; then
+        COMPRESS_CMD="gzip"
+        log_info "未检测到 pigz，回退使用 gzip（大镜像建议安装 pigz 加速）"
+    else
+        log_err "启用了压缩但未找到 gzip 或 pigz 命令"
+        exit "$E_CMD_NOT_FOUND"
+    fi
+fi
+
+# 分发模式需要 scp
+if [[ -n "${NODES_FILE}" ]]; then
+    require_cmd scp
+fi
 
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     log_err "Docker 镜像不存在: ${IMAGE_NAME}"
@@ -141,14 +166,14 @@ fi
 # 导出镜像
 # ------------------------------------------
 save_image() {
-    local image="$1" output="$2" use_gzip="$3" size
+    local image="$1" output="$2" compress_cmd="$3" size
 
     log_info "正在导出镜像: ${image}"
     mkdir -p "$(dirname "${output}")"
 
-    if [[ "${use_gzip}" -eq 1 ]]; then
-        log_info "导出并压缩到: ${output}"
-        docker save "${image}" | gzip > "${output}"
+    if [[ -n "${compress_cmd}" ]]; then
+        log_info "导出并压缩到: ${output} (使用 ${compress_cmd})"
+        docker save "${image}" | "${compress_cmd}" > "${output}"
     else
         log_info "导出到: ${output}"
         docker save -o "${output}" "${image}"
@@ -164,20 +189,19 @@ save_image() {
 distribute_to_nodes() {
     local tar_file="$1" nodes_file="$2" nodes failed remote_dir
 
-    require_cmd scp
     nodes="$(read_nodes "${nodes_file}")"
     if [[ -z "${nodes}" ]]; then
         log_err "节点列表为空: ${nodes_file}"
         return 1
     fi
 
+    remote_dir="$(dirname "${tar_file}")"
     log_info "目标节点: ${nodes}"
     log_info "开始分发镜像文件..."
 
     failed=0
     for node in ${nodes}; do
         log_info "[${node}] 正在传输 ${tar_file}..."
-        remote_dir="$(dirname "${tar_file}")"
         ssh_run "${node}" "mkdir -p ${remote_dir}"
         # SSH_OPTS 通过词分割传递，SCP 复用相同的 SSH 选项
         # shellcheck disable=SC2086
@@ -200,7 +224,7 @@ distribute_to_nodes() {
 # 主流程
 # ------------------------------------------
 main() {
-    save_image "${IMAGE_NAME}" "${OUTPUT_FILE}" "${USE_GZIP}"
+    save_image "${IMAGE_NAME}" "${OUTPUT_FILE}" "${COMPRESS_CMD}"
 
     if [[ -n "${NODES_FILE}" ]]; then
         distribute_to_nodes "${OUTPUT_FILE}" "${NODES_FILE}"
