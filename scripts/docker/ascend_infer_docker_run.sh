@@ -7,8 +7,11 @@
 set -euo pipefail
 
 # Configuration
-IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-openeuler}"
-CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
+# IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-openeuler}"
+# CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
+IMAGE_NAME="${IMAGE_NAME:-swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:cann9.0.0-a3-B140}"
+CONTAINER_NAME="${CONTAINER_NAME:-sglang-env-a3}"
+
 
 # Check if container exists
 if [[ -n "$(docker ps -aq -f name="^/${CONTAINER_NAME}$")" ]]; then
