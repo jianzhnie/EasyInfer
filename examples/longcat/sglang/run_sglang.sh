@@ -36,53 +36,52 @@
 #=============================================================================
 set -euo pipefail
 
+# ─── 路径与依赖 ──────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EASYINFER_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-
 # shellcheck source=../../../scripts/common.sh
 source "${EASYINFER_ROOT}/scripts/common.sh"
 
-#=============================================================================
-# 全局配置 (均可通过环境变量覆盖)
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
+# 配置区
+# ════════════════════════════════════════════════════════════════════════════
 
-# --- 节点与模型 ---
+# ─── 节点与模型 ────────────────────────────────────────────────────────────
 NODES_FILE="${NODES_FILE:-${EASYINFER_ROOT}/node_list1.txt}"
 MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 
-# --- Docker ---
+# ─── Docker ────────────────────────────────────────────────────────────────
 CONTAINER_NAME="${CONTAINER_NAME:-sglang-ascend-env}"
 
-# --- 并行与网络 ---
+# ─── 并行与网络 ────────────────────────────────────────────────────────────
 TP_SIZE="${TP_SIZE:-64}"
 SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
 SERVER_PORT="${SERVER_PORT:-6677}"
 MASTER_PORT="${MASTER_PORT:-5000}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
 
-# --- 显存与调度 ---
+# ─── 显存与调度 ────────────────────────────────────────────────────────────
 MEM_FRACTION="${MEM_FRACTION:-0.65}"
 MAX_RUNNING="${MAX_RUNNING:-16}"
 CONTEXT_LENGTH="${CONTEXT_LENGTH:-8192}"
 CHUNKED_PREFILL="${CHUNKED_PREFILL:-8192}"
 WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-9000}"
 
-# --- SGLang 环境 ---
+# ─── SGLang 环境 ───────────────────────────────────────────────────────────
 SGLANG_PYTHONPATH="${SGLANG_PYTHONPATH:-/home/jianzhnie/llmtuner/llm/sglang/python}"
-# 仅允许安全字符: 字母数字、空格、- _ . / : = ,
-# 禁止 shell 元字符 (; | & $ ` ( ) { } [ ] < > 换行) 防止命令注入
 SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
-# --- 网络接口 (export 给 HCCL/GLOO) ---
+# ─── 网络接口 (export 给 HCCL/GLOO) ────────────────────────────────────────
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
 
-# --- SSH 选项 (SC2086: 必须不分词以传递多个 SSH 选项) ---
+# ─── SSH 选项 ──────────────────────────────────────────────────────────────
+# SC2086: 必须不分词以传递多个 SSH 选项
 : "${SSH_OPTS:=-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 帮助信息
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 usage() {
     cat <<'USAGE'
 Usage:
@@ -94,7 +93,7 @@ Options:
   -m, --model-path <PATH>   模型路径
   --stop                    停止所有节点的 SGLang 服务
 
-环境变量 (均可通过环境变量覆盖):
+环境变量:
   NODES_FILE, MODEL_PATH, CONTAINER_NAME
   TP_SIZE, SERVER_HOST, SERVER_PORT, MASTER_PORT, SERVED_MODEL_NAME
   MEM_FRACTION, MAX_RUNNING, CONTEXT_LENGTH
@@ -104,9 +103,9 @@ Options:
 USAGE
 }
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 参数解析
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 parse_args() {
     ACTION="start"
 
@@ -125,9 +124,9 @@ parse_args() {
     done
 }
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 前置校验
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 validate_config() {
     [[ -f "$NODES_FILE" ]] || log_fatal "节点列表文件未找到: $NODES_FILE"
     [[ -d "$MODEL_PATH" ]]   || log_fatal "模型路径不存在: $MODEL_PATH"
@@ -155,11 +154,11 @@ validate_config() {
     fi
 }
 
-#=============================================================================
-# 远程执行: 通过 SSH 在容器内运行命令
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
+# 远程执行
+# ════════════════════════════════════════════════════════════════════════════
 
-# 执行完整脚本 (base64 编码，避免引号嵌套)
+# 通过 SSH 在容器内执行完整脚本 (base64 编码，避免引号嵌套)
 remote_exec_script() {
     local node="$1" script="$2" b64
     b64=$(printf '%s' "$script" | base64 | tr -d '\n')
@@ -169,7 +168,7 @@ remote_exec_script() {
         "docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
 }
 
-# 执行简单命令
+# 通过 SSH 在容器内执行简单命令
 remote_exec_cmd() {
     local node="$1" cmd="$2"
 
@@ -178,7 +177,7 @@ remote_exec_cmd() {
         "docker exec '${CONTAINER_NAME}' bash -c '${cmd}'"
 }
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 容器内脚本片段
 #
 # 每个函数输出一段 bash 脚本，由 build_launch_cmd() 组装后 base64 编码传入容器。
@@ -186,41 +185,41 @@ remote_exec_cmd() {
 # Heredoc 约定:
 #   <<'DELIM'  — 引用型，内容原样输出（纯容器代码，无管理节点变量）
 #   <<DELIM    — 非引用型，管理节点 ${VAR} 在此展开，容器内变量需 \$ 转义
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 
-# --- 脚本头 + 日志函数 (纯容器代码) --------------------------------------------
-_inner_preamble() {
-    cat <<'INNER_PREAMBLE'
+# ─── 脚本头 + 日志函数 ─────────────────────────────────────────────────────
+fragment_preamble() {
+    cat <<'FRAG_PREAMBLE'
 set -euo pipefail
 
-# --- 日志函数 ---
+# ─── 日志函数 ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 _log() {
     local c="$1" l="$2"; shift 2
-    printf "${c}[%-5s]${NC} %s - %s\n" "$l" "$(date +%Y-%m-%d %H:%M:%S)" "$*"
+    printf "${c}[%-5s]${NC} %s - %s\n" "$l" "$(date '+%F %T')" "$*"
 }
 log_info()  { _log "$GREEN"  "INFO"  "$@"; }
 log_warn()  { _log "$YELLOW" "WARN"  "$@" >&2; }
 log_fatal() { _log "$RED"    "FATAL" "$@" >&2; exit 1; }
-INNER_PREAMBLE
+FRAG_PREAMBLE
 }
 
-# --- 系统优化 (纯容器代码) ----------------------------------------------------
-_inner_sys_tuning() {
-    cat <<'INNER_SYS'
-# --- 系统优化 ---
+# ─── 系统优化 ──────────────────────────────────────────────────────────────
+fragment_sys_tuning() {
+    cat <<'FRAG_SYS'
+# ─── 系统优化 ────────────────────────────────────────────────────────────────
 log_info "Applying system optimization..."
 echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 sysctl -w vm.swappiness=0           2>/dev/null || true
 sysctl -w kernel.numa_balancing=0   2>/dev/null || true
 sysctl -w kernel.sched_migration_cost_ns=50000 2>/dev/null || true
-INNER_SYS
+FRAG_SYS
 }
 
-# --- NPU 环境变量 (管理节点 HCCL_*/GLOO_*/PYTHONPATH 在此展开) -----------------
-_inner_npu_env() {
-    cat <<INNER_NPU_ENV
-# --- NPU 环境变量 ---
+# ─── NPU 环境变量 (管理节点变量在此展开) ──────────────────────────────────────
+fragment_npu_env() {
+    cat <<FRAG_NPU_ENV
+# ─── NPU 环境变量 ────────────────────────────────────────────────────────────
 export SGLANG_SET_CPU_AFFINITY=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export STREAMS_PER_DEVICE=32
@@ -232,27 +231,28 @@ export TRANSFORMERS_VERBOSITY=error
 export HCCL_SOCKET_IFNAME=${HCCL_SOCKET_IFNAME}
 export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME}
 export PYTHONPATH=${SGLANG_PYTHONPATH}:\${PYTHONPATH:-}
-INNER_NPU_ENV
+FRAG_NPU_ENV
 }
 
-# --- CANN 环境 (纯容器代码) ---------------------------------------------------
-_inner_cann_setup() {
-    cat <<'INNER_CANN'
-# --- CANN 环境 (set +u 避免 CANN 脚本中未设置变量导致退出) ---
+# ─── CANN 环境 ─────────────────────────────────────────────────────────────
+fragment_cann_setup() {
+    cat <<'FRAG_CANN'
+# ─── CANN 环境 (set +u 避免 CANN 脚本中未设置变量导致退出) ────────────────────
 set +u
 if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
 set -u
-INNER_CANN
+FRAG_CANN
 }
 
-# --- SGLang 启动 (管理节点 MODEL_PATH / SERVER_* 等在此展开) --------------------
-_inner_sglang_launch() {
+# ─── SGLang 启动 (管理节点变量在此展开) ─────────────────────────────────────
+fragment_sglang_launch() {
     local node_rank="$1"
     local master_addr="$2"
 
-    cat <<INNER_LAUNCH
+    cat <<FRAG_LAUNCH
+# ─── SGLang 启动 ────────────────────────────────────────────────────────────
 log_info "============================================"
 log_info " LongCat-Flash-Chat SGLang Worker"
 log_info " 模型路径:       ${MODEL_PATH}"
@@ -286,31 +286,30 @@ exec python -m sglang.launch_server \
     --moe-a2a-backend     deepep \
     --deepep-mode         auto \
     ${SGLANG_EXTRA_ARGS:-}
-INNER_LAUNCH
+FRAG_LAUNCH
 }
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 组装完整容器脚本
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 build_launch_cmd() {
     local node_rank="$1"
     local master_addr="${NODES[0]}:${MASTER_PORT}"
 
-    _inner_preamble
+    fragment_preamble
     echo ""
-    _inner_sys_tuning
+    fragment_sys_tuning
     echo ""
-    _inner_npu_env
+    fragment_npu_env
     echo ""
-    _inner_cann_setup
+    fragment_cann_setup
     echo ""
-    _inner_sglang_launch "$node_rank" "$master_addr"
+    fragment_sglang_launch "$node_rank" "$master_addr"
 }
 
-#=============================================================================
-# 部署操作
-#=============================================================================
-
+# ════════════════════════════════════════════════════════════════════════════
+# 操作: 停止服务
+# ════════════════════════════════════════════════════════════════════════════
 stop_service() {
     log_info "============================================"
     log_info " 停止 SGLang 服务"
@@ -326,6 +325,9 @@ stop_service() {
     log_info "所有节点的 SGLang 服务已停止"
 }
 
+# ════════════════════════════════════════════════════════════════════════════
+# 操作: 部署服务
+# ════════════════════════════════════════════════════════════════════════════
 deploy_service() {
     log_info "============================================"
     log_info " LongCat-Flash-Chat SGLang Deployment"
@@ -367,16 +369,16 @@ deploy_service() {
     log_info "============================================"
 }
 
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 # 主入口
-#=============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 main() {
     parse_args "$@"
     validate_config
 
     case "$ACTION" in
         start) deploy_service ;;
-        stop)  stop_service ;;
+        stop)  stop_service  ;;
     esac
 }
 
