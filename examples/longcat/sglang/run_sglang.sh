@@ -13,65 +13,72 @@
 #   bash run_sglang.sh --stop             # 停止所有节点的 SGLang 服务
 #   MODEL_PATH=/path/to/model bash run_sglang.sh
 #   NODES_FILE=/path/to/nodes.txt TP_SIZE=32 bash run_sglang.sh
+#   SGLANG_EXTRA_ARGS="--log-level debug" bash run_sglang.sh
 #
 # 环境变量 (均可外部覆盖):
-#   NODES_FILE         节点列表文件路径
-#   MODEL_PATH         模型路径
-#   CONTAINER_NAME     Docker 容器名称 (默认: sglang-ascend-env)
-#   TP_SIZE            张量并行大小 (默认: 64)
-#   SERVER_HOST        服务监听地址 (默认: 0.0.0.0)
-#   SERVER_PORT        服务端口 (默认: 6677)
-#   MASTER_PORT        通信端口 (默认: 5000)
-#   SERVED_MODEL_NAME  服务模型名 (默认: longcat-flash)
-#   MEM_FRACTION       显存占用比例 (默认: 0.65)
-#   MAX_RUNNING        最大并发请求 (默认: 16)
-#   CONTEXT_LENGTH     上下文长度 (默认: 8192)
-#   CHUNKED_PREFILL    Chunked Prefill 大小 (默认: 8192)
-#   WATCHDOG_TIMEOUT   Watchdog 超时秒数 (默认: 9000)
-#   SGLANG_PYTHONPATH  SGLang Python 源码路径
-#   SGLANG_EXTRA_ARGS  SGLang 额外命令行参数
-#   HCCL_SOCKET_IFNAME HCCL 网络接口名 (默认: enp66s0f0)
-#   GLOO_SOCKET_IFNAME GLOO 网络接口名 (默认: enp66s0f0)
+#   NODES_FILE          节点列表文件路径
+#   MODEL_PATH          模型路径
+#   CONTAINER_NAME      Docker 容器名称 (默认: sglang-ascend-env)
+#   TP_SIZE             张量并行大小 (默认: 64)
+#   SERVER_HOST         服务监听地址 (默认: 0.0.0.0)
+#   SERVER_PORT         服务端口 (默认: 6677)
+#   MASTER_PORT         通信端口 (默认: 5000)
+#   SERVED_MODEL_NAME   服务模型名 (默认: longcat-flash)
+#   MEM_FRACTION        显存占用比例 (默认: 0.65)
+#   MAX_RUNNING         最大并发请求 (默认: 16)
+#   CONTEXT_LENGTH      上下文长度 (默认: 8192)
+#   CHUNKED_PREFILL     Chunked Prefill 大小 (默认: 8192)
+#   WATCHDOG_TIMEOUT    Watchdog 超时秒数 (默认: 9000)
+#   SGLANG_PYTHONPATH   SGLang Python 源码路径
+#   SGLANG_EXTRA_ARGS   SGLang 额外命令行参数 (空格分隔)
+#   HCCL_SOCKET_IFNAME  HCCL 网络接口名 (默认: enp66s0f0)
+#   GLOO_SOCKET_IFNAME  GLOO 网络接口名 (默认: enp66s0f0)
 #=============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EASYINFER_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# --- 加载共享工具函数 ---
 # shellcheck source=../../../scripts/common.sh
 source "${EASYINFER_ROOT}/scripts/common.sh"
 
 #=============================================================================
-# 配置参数
+# 全局配置 (均可通过环境变量覆盖)
 #=============================================================================
+
+# --- 节点与模型 ---
 NODES_FILE="${NODES_FILE:-${EASYINFER_ROOT}/node_list1.txt}"
 MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 
-# --- Docker 配置 ---
+# --- Docker ---
 CONTAINER_NAME="${CONTAINER_NAME:-sglang-ascend-env}"
 
-# --- SGLang 配置 ---
+# --- 并行与网络 ---
 TP_SIZE="${TP_SIZE:-64}"
 SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
 SERVER_PORT="${SERVER_PORT:-6677}"
 MASTER_PORT="${MASTER_PORT:-5000}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
+
+# --- 显存与调度 ---
 MEM_FRACTION="${MEM_FRACTION:-0.65}"
 MAX_RUNNING="${MAX_RUNNING:-16}"
 CONTEXT_LENGTH="${CONTEXT_LENGTH:-8192}"
 CHUNKED_PREFILL="${CHUNKED_PREFILL:-8192}"
 WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-9000}"
 
-# --- SGLang Python 源码路径 ---
+# --- SGLang 环境 ---
 SGLANG_PYTHONPATH="${SGLANG_PYTHONPATH:-/home/jianzhnie/llmtuner/llm/sglang/python}"
-
-# --- SGLang 额外参数 (空格分隔，会追加到启动命令末尾) ---
+# 仅允许安全字符: 字母数字、空格、- _ . / : = ,
+# 禁止 shell 元字符 (; | & $ ` ( ) { } [ ] < > 换行) 防止命令注入
 SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
-# --- 网络接口配置 ---
+# --- 网络接口 (export 给 HCCL/GLOO) ---
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
+
+# --- SSH 选项 (SC2086: 必须不分词以传递多个 SSH 选项) ---
+: "${SSH_OPTS:=-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10}"
 
 #=============================================================================
 # 帮助信息
@@ -100,47 +107,76 @@ USAGE
 #=============================================================================
 # 参数解析
 #=============================================================================
-ACTION="start"
+parse_args() {
+    ACTION="start"
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -h|--help) usage; exit 0 ;;
-        -f|--file)
-            NODES_FILE="${2:?错误: $1 需要一个参数}"
-            shift 2 ;;
-        -m|--model-path)
-            MODEL_PATH="${2:?错误: $1 需要一个参数}"
-            shift 2 ;;
-        --stop) ACTION="stop"; shift ;;
-        *) log_err "未知参数: $1"; usage; exit 2 ;;
-    esac
-done
-
-#=============================================================================
-# 前置检查
-#=============================================================================
-[[ -f "$NODES_FILE" ]] || log_fatal "节点列表文件未找到: $NODES_FILE"
-[[ -d "$MODEL_PATH" ]] || log_fatal "模型路径不存在: $MODEL_PATH"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage; exit 0 ;;
+            -f|--file)
+                NODES_FILE="${2:?错误: $1 需要一个参数}"
+                shift 2 ;;
+            -m|--model-path)
+                MODEL_PATH="${2:?错误: $1 需要一个参数}"
+                shift 2 ;;
+            --stop) ACTION="stop"; shift ;;
+            *) log_err "未知参数: $1"; usage; exit 2 ;;
+        esac
+    done
+}
 
 #=============================================================================
-# 读取节点列表
+# 前置校验
 #=============================================================================
-NODES=()
-while IFS= read -r line; do
-    [[ -n "$line" ]] && NODES+=("$line")
-done < <(read_nodes "$NODES_FILE")
+validate_config() {
+    [[ -f "$NODES_FILE" ]] || log_fatal "节点列表文件未找到: $NODES_FILE"
+    [[ -d "$MODEL_PATH" ]]   || log_fatal "模型路径不存在: $MODEL_PATH"
 
-NNODES=${#NODES[@]}
-[[ "$NNODES" -gt 0 ]] || log_fatal "节点列表为空: $NODES_FILE"
+    NODES=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && NODES+=("$line")
+    done < <(read_nodes "$NODES_FILE")
 
-MASTER_NODE="${NODES[0]}"
+    NNODES=${#NODES[@]}
+    [[ "$NNODES" -gt 0 ]] || log_fatal "节点列表为空: $NODES_FILE"
 
-# --- 验证 TP_SIZE 与节点数匹配 ---
-EXPECTED_TP=$(( NNODES * 8 ))
-if [[ "$TP_SIZE" != "$EXPECTED_TP" ]]; then
-    log_warn "TP_SIZE (${TP_SIZE}) 与节点数 (${NNODES} 节点 × 8 卡 = ${EXPECTED_TP}) 不匹配"
-    log_warn "请确认这是预期的配置，或设置 TP_SIZE=${EXPECTED_TP}"
-fi
+    MASTER_NODE="${NODES[0]}"
+
+    # TP_SIZE 与节点数的合理性检查
+    local expected_tp=$(( NNODES * 8 ))
+    if [[ "$TP_SIZE" != "$expected_tp" ]]; then
+        log_warn "TP_SIZE (${TP_SIZE}) 与节点数 (${NNODES} 节点 × 8 卡 = ${expected_tp}) 不匹配"
+        log_warn "请确认这是预期的配置，或设置 TP_SIZE=${expected_tp}"
+    fi
+
+    # SGLANG_EXTRA_ARGS 安全检查: 拒绝 shell 元字符，防止命令注入
+    if [[ -n "$SGLANG_EXTRA_ARGS" ]] && [[ "$SGLANG_EXTRA_ARGS" =~ [][\;\&\|\$\(\)\{\}\<\>\n\r] ]]; then
+        log_fatal "SGLANG_EXTRA_ARGS 包含不安全的 shell 元字符，仅允许字母数字、空格和 - _ . / : = ,"
+    fi
+}
+
+#=============================================================================
+# 远程执行: 通过 SSH 在容器内运行命令
+#=============================================================================
+
+# 执行完整脚本 (base64 编码，避免引号嵌套)
+remote_exec_script() {
+    local node="$1" script="$2" b64
+    b64=$(printf '%s' "$script" | base64 | tr -d '\n')
+
+    # shellcheck disable=SC2086,SC2029
+    ssh ${SSH_OPTS} "$node" \
+        "docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
+}
+
+# 执行简单命令
+remote_exec_cmd() {
+    local node="$1" cmd="$2"
+
+    # shellcheck disable=SC2086,SC2029
+    ssh ${SSH_OPTS} "$node" \
+        "docker exec '${CONTAINER_NAME}' bash -c '${cmd}'"
+}
 
 #=============================================================================
 # 容器内脚本片段
@@ -148,13 +184,13 @@ fi
 # 每个函数输出一段 bash 脚本，由 build_launch_cmd() 组装后 base64 编码传入容器。
 #
 # Heredoc 约定:
-#   <<'DELIM'  — 引用型，内容原样输出（纯容器内代码，无管理节点变量）
+#   <<'DELIM'  — 引用型，内容原样输出（纯容器代码，无管理节点变量）
 #   <<DELIM    — 非引用型，管理节点 ${VAR} 在此展开，容器内变量需 \$ 转义
 #=============================================================================
 
-# --- 脚本头 + 日志函数 (纯容器内代码) ------------------------------------------
-_inner_header() {
-    cat <<'INNER_HEADER'
+# --- 脚本头 + 日志函数 (纯容器代码) --------------------------------------------
+_inner_preamble() {
+    cat <<'INNER_PREAMBLE'
 set -euo pipefail
 
 # --- 日志函数 ---
@@ -166,17 +202,17 @@ _log() {
 log_info()  { _log "$GREEN"  "INFO"  "$@"; }
 log_warn()  { _log "$YELLOW" "WARN"  "$@" >&2; }
 log_fatal() { _log "$RED"    "FATAL" "$@" >&2; exit 1; }
-INNER_HEADER
+INNER_PREAMBLE
 }
 
-# --- 系统优化 (纯容器内代码) --------------------------------------------------
+# --- 系统优化 (纯容器代码) ----------------------------------------------------
 _inner_sys_tuning() {
     cat <<'INNER_SYS'
 # --- 系统优化 ---
 log_info "Applying system optimization..."
 echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-sysctl -w vm.swappiness=0 2>/dev/null || true
-sysctl -w kernel.numa_balancing=0 2>/dev/null || true
+sysctl -w vm.swappiness=0           2>/dev/null || true
+sysctl -w kernel.numa_balancing=0   2>/dev/null || true
 sysctl -w kernel.sched_migration_cost_ns=50000 2>/dev/null || true
 INNER_SYS
 }
@@ -199,10 +235,10 @@ export PYTHONPATH=${SGLANG_PYTHONPATH}:\${PYTHONPATH:-}
 INNER_NPU_ENV
 }
 
-# --- CANN 环境 (纯容器内代码) -------------------------------------------------
+# --- CANN 环境 (纯容器代码) ---------------------------------------------------
 _inner_cann_setup() {
     cat <<'INNER_CANN'
-# --- CANN 环境 (先 set +u 避免 CANN 脚本中未设置变量导致退出) ---
+# --- CANN 环境 (set +u 避免 CANN 脚本中未设置变量导致退出) ---
 set +u
 if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -211,7 +247,7 @@ set -u
 INNER_CANN
 }
 
-# --- SGLang 启动 Banner + 命令 (管理节点 MODEL_PATH/SERVER_* 等在此展开) -------
+# --- SGLang 启动 (管理节点 MODEL_PATH / SERVER_* 等在此展开) --------------------
 _inner_sglang_launch() {
     local node_rank="$1"
     local master_addr="$2"
@@ -230,40 +266,37 @@ log_info "============================================"
 log_info "Starting SGLang server..."
 exec python -m sglang.launch_server \
     --trust-remote-code \
-    --model-path "${MODEL_PATH}" \
-    --served-model-name "${SERVED_MODEL_NAME}" \
-    --host "${SERVER_HOST}" \
-    --port "${SERVER_PORT}" \
-    --nnodes "${NNODES}" \
-    --node-rank "${node_rank}" \
-    --dist-init-addr "${master_addr}" \
-    --tp-size "${TP_SIZE}" \
+    --model-path          "${MODEL_PATH}" \
+    --served-model-name   "${SERVED_MODEL_NAME}" \
+    --host                "${SERVER_HOST}" \
+    --port                "${SERVER_PORT}" \
+    --nnodes              "${NNODES}" \
+    --node-rank           "${node_rank}" \
+    --dist-init-addr      "${master_addr}" \
+    --tp-size             "${TP_SIZE}" \
     --mem-fraction-static "${MEM_FRACTION}" \
-    --attention-backend ascend \
-    --device npu \
+    --attention-backend   ascend \
+    --device              npu \
     --max-running-requests "${MAX_RUNNING}" \
-    --context-length "${CONTEXT_LENGTH}" \
+    --context-length       "${CONTEXT_LENGTH}" \
     --disable-radix-cache \
     --chunked-prefill-size "${CHUNKED_PREFILL}" \
-    --watchdog-timeout "${WATCHDOG_TIMEOUT}" \
+    --watchdog-timeout     "${WATCHDOG_TIMEOUT}" \
     --prefill-round-robin-balance \
-    --moe-a2a-backend deepep \
-    --deepep-mode auto \
+    --moe-a2a-backend     deepep \
+    --deepep-mode         auto \
     ${SGLANG_EXTRA_ARGS:-}
 INNER_LAUNCH
 }
 
 #=============================================================================
-# 组装容器内 SGLang 启动命令
-#
-# 将所有脚本片段拼接为完整脚本，通过 base64 编码后传入容器执行。
+# 组装完整容器脚本
 #=============================================================================
 build_launch_cmd() {
     local node_rank="$1"
     local master_addr="${NODES[0]}:${MASTER_PORT}"
 
-    # 按顺序拼接各模块（空行分隔）
-    _inner_header
+    _inner_preamble
     echo ""
     _inner_sys_tuning
     echo ""
@@ -275,80 +308,76 @@ build_launch_cmd() {
 }
 
 #=============================================================================
-# 在远程节点容器内执行命令
-#
-# 使用 base64 编码避免多层引号嵌套问题（与 scripts/ray_cluster/ 中模式一致）。
-# 注意:
-#   - SC2086: SSH_OPTS 不分词无法传递多个选项，这是 common.sh ssh_run 的约定
-#   - SC2029: 变量在管理节点侧展开是预期行为（配置由管理节点决定）
+# 部署操作
 #=============================================================================
-remote_exec() {
-    local node="$1" cmd="$2" b64cmd
-    b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
 
-    # shellcheck disable=SC2086,SC2029
-    ssh ${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10} \
-        "$node" "docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64cmd}' | base64 -d | bash\""
-}
-
-#=============================================================================
-# 停止服务
-#=============================================================================
-if [[ "$ACTION" == "stop" ]]; then
+stop_service() {
     log_info "============================================"
     log_info " 停止 SGLang 服务"
     log_info "============================================"
 
     for node in "${NODES[@]}"; do
         log_info "停止 ${node} ..."
-        # shellcheck disable=SC2086,SC2029
-        ssh ${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10} \
-            "$node" "docker exec '${CONTAINER_NAME}' bash -c 'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null'" 2>/dev/null || true
+        remote_exec_cmd "$node" \
+            'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null' \
+            2>/dev/null || true
     done
 
     log_info "所有节点的 SGLang 服务已停止"
-    exit 0
-fi
+}
 
-#=============================================================================
-# 启动服务
-#=============================================================================
-log_info "============================================"
-log_info " LongCat-Flash-Chat SGLang Deployment"
-log_info "============================================"
-log_info " 节点列表:       ${NODES_FILE}"
-log_info " 节点数:         ${NNODES}"
-log_info " 主节点:         ${MASTER_NODE}"
-log_info " 模型路径:       ${MODEL_PATH}"
-log_info " TP 大小:        ${TP_SIZE}"
-log_info " 服务端口:       ${SERVER_PORT}"
-log_info " 容器名称:       ${CONTAINER_NAME}"
-log_info "============================================"
+deploy_service() {
+    log_info "============================================"
+    log_info " LongCat-Flash-Chat SGLang Deployment"
+    log_info "============================================"
+    log_info " 节点列表:       ${NODES_FILE}"
+    log_info " 节点数:         ${NNODES}"
+    log_info " 主节点:         ${MASTER_NODE}"
+    log_info " 模型路径:       ${MODEL_PATH}"
+    log_info " TP 大小:        ${TP_SIZE}"
+    log_info " 服务端口:       ${SERVER_PORT}"
+    log_info " 容器名称:       ${CONTAINER_NAME}"
+    log_info "============================================"
 
-# 逐节点启动（必须先启动 rank 0，torch.distributed 要求 master 先就绪）
-for i in "${!NODES[@]}"; do
-    node="${NODES[$i]}"
-    log_info "在 ${node} 上启动 SGLang (rank ${i}/${NNODES})..."
+    # 逐节点启动 (rank 0 必须先就绪, torch.distributed 要求)
+    for i in "${!NODES[@]}"; do
+        local node="${NODES[$i]}"
+        log_info "在 ${node} 上启动 SGLang (rank ${i}/${NNODES})..."
 
-    launch_cmd=$(build_launch_cmd "$i")
-    if ! remote_exec "$node" "$launch_cmd"; then
-        log_err "在 ${node} 上启动 SGLang 失败，请检查容器日志"
-    fi
-done
+        local launch_cmd
+        launch_cmd=$(build_launch_cmd "$i")
+        if ! remote_exec_script "$node" "$launch_cmd"; then
+            log_err "在 ${node} 上启动 SGLang 失败，请检查容器日志"
+        fi
+    done
 
-log_info "所有节点的 SGLang 启动命令已发送"
-log_info "等待服务就绪..."
+    log_info "所有节点的 SGLang 启动命令已发送"
+    log_info "等待服务就绪..."
 
-# 等待主节点服务就绪
-if command -v nc >/dev/null 2>&1; then
+    # 等待主节点端口就绪
     wait_for_port "$MASTER_NODE" "$SERVER_PORT" 300 5 || {
         log_warn "服务可能尚未完全就绪，请稍后手动检查"
     }
-fi
 
-log_info "============================================"
-log_info " 部署完成!"
-log_info " 主节点:   ${MASTER_NODE}:${SERVER_PORT}"
-log_info " 健康检查: http://${MASTER_NODE}:${SERVER_PORT}/health"
-log_info " 模型列表: http://${MASTER_NODE}:${SERVER_PORT}/v1/models"
-log_info "============================================"
+    log_info "============================================"
+    log_info " 部署完成!"
+    log_info " 主节点:   ${MASTER_NODE}:${SERVER_PORT}"
+    log_info " 健康检查: http://${MASTER_NODE}:${SERVER_PORT}/health"
+    log_info " 模型列表: http://${MASTER_NODE}:${SERVER_PORT}/v1/models"
+    log_info "============================================"
+}
+
+#=============================================================================
+# 主入口
+#=============================================================================
+main() {
+    parse_args "$@"
+    validate_config
+
+    case "$ACTION" in
+        start) deploy_service ;;
+        stop)  stop_service ;;
+    esac
+}
+
+main "$@"
