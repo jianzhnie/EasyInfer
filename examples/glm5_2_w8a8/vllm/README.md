@@ -37,6 +37,18 @@ GLM-5.2 的 config.json 包含 `index_topk: 2048`，导致 vLLM-Ascend 识别为
 
 模型路径: `/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8`
 
+**硬件要求**: 部署前先确认硬件类型：
+- **A3 (128GB/NPU)**: ✅ 可直接部署 TP=8
+- **A2 (64GB/NPU)**: ❌ 模型权重固定消耗 ~60.4GB/卡，TP=8 必定 OOM；TP=16 因 MLA 维度不兼容无法使用
+
+```bash
+# 确认 NPU 内存（容器内执行）
+npu-smi info | grep "HBM-Usage" | head -1
+# 65536 MB = 64GB (A2) | 131072 MB = 128GB (A3)
+```
+
+> ⚠️ 以下部署步骤仅适用于 **A3 (128GB) 硬件**。
+
 ```bash
 # 1. 启动 NPU Docker 容器
 bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
@@ -48,15 +60,53 @@ bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ### 部署
 
 ```bash
-# 单节点 (32K 上下文, TP=8)
+# 单节点 A3 (32K 上下文, TP=8)
 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
-
-# 2 节点大 TP (131K 上下文)
-TP=16 MAX_MODEL_LEN=131072 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/glm5_2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
+
+# 多节点需要设置 RAY_ADDRESS 和网卡
+RAY_ADDRESS=10.42.11.130:6379 NIC_NAME=enp66s0f0 TP=16 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 ```
+
+### 多节点部署前提（TP>8）
+
+使用 TP>8（跨节点）时，**必须设置 `RAY_ADDRESS`**，否则 Engine Core 子进程无法连接到 Ray 集群：
+
+```bash
+# 获取 Ray 集群地址
+docker exec vllm-ascend-env python3 -c "
+import ray; ray.init(address='auto', ignore_reinit_error=True)
+print(ray.get_runtime_context().gcs_address)
+"
+
+# 部署时导出
+RAY_ADDRESS=10.42.11.130:6379 TP=16 bash run_vllm.sh
+```
+
+### 量化文件修复
+
+如果遇到 `KeyError: model.layers.N.self_attn.indexer.wq_b.weight`，需要修复 `quant_model_description.json`：
+
+```bash
+cd /path/to/GLM-5.2-w8a8
+python3 -c "
+import json, copy
+with open('quant_model_description.json') as f:
+    desc = json.load(f)
+src_idx = {k: v for k, v in desc.items() if 'layers.6.self_attn.indexer' in k}
+for layer in range(78):
+    if not any(f'layers.{layer}.self_attn.indexer' in k for k in desc):
+        for k, v in src_idx.items():
+            desc[k.replace('layers.6.', f'layers.{layer}.')] = copy.deepcopy(v)
+with open('quant_model_description.json', 'w') as f:
+    json.dump(desc, f)
+print('Fixed!')
+"
+```
+
+> 原因：官方发布的 `quant_model_description.json` 中 78 层只有 22 层包含 Indexer 量化描述，其余 56 个 MoE 层缺失。
 
 ### 验证
 
@@ -75,13 +125,27 @@ curl http://localhost:8007/v1/chat/completions \
 
 | 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
 |------|-----|-----|-----|-----|--------|------|
-| 单节点 A2 | 8 | 1 | 1 | 8 | 32K | ✅ 已验证 |
-| 单节点 A3 | 8 | 1 | 2 | 16 | 32K | ⚠️ 待验证 |
-| 2 节点全量 | 16 | 1 | 1 | 16 | **131K** | ⚠️ 待验证 |
-| 4 节点大规模 | 32 | 1 | 1 | 32 | 202K | ⚠️ 待验证 |
-| 8 节点最大上下文 | 8 | 1 | 1 | 64 | **1M** | ⚠️ 待测试 |
+| 单节点 A3 (128G) | 8 | 1 | 2 | 16 | 32K | ✅ 生产验证 |
+| 单节点 A2 (64G) | 8 | 1 | 1 | 8 | 4K+ | ❌ OOM（权重 ~60.4GB/卡） |
+| 2 节点 A2 (64G) | 16 | 1 | 1 | 16 | - | ❌ TP=16 维度不兼容 |
+| 4 节点 A2 (64G) | 16 | 2 | 1 | 32 | - | ❌ 同上（PP 不影响 TP 维度分割） |
 
-> GLM-5.2 **不支持 Pipeline Parallelism**，多节点必须使用大 TP。
+> **关键结论**：
+> - GLM-5.2 W8A8 在 64GB A2 NPU 上使用 TP=8 **无法部署**，模型权重固定消耗 ~60.4GB/卡
+> - GLM-5.2 **不支持 Pipeline Parallelism** (`SupportsPP` 接口缺失)
+> - TP=16 尝试失败：MLA 注意力层维度 (`num_kv_heads=3 × head_dim=192 = 576`) 无法被 16 整除
+> - **生产环境**（`service_node0.sh`）使用 **A3 128GB NPU + DP=2** 配置
+
+### 内存分析（W8A8 @ 64GB A2）
+
+| 组件 | 消耗 (TP=8) | 说明 |
+|------|-------------|------|
+| 模型权重 (256 专家) | ≈60.4 GiB | 256 专家 MoE 权重，每卡 32 专家 |
+| KV Cache (32K ctx) | ≈2-4 GiB | 随 max_model_len 变化 |
+| 编译缓存 + 临时 | ≈1-2 GiB | CUDA Graph、triton、算子缓存 |
+| **总计** | **≈64 GiB** | **超出 A2 64GB 上限** |
+
+降低 `max_model_len`、`max_num_seqs`、禁用 MTP/CUDA Graph 均无法改变权重的固定消耗。
 
 ## 环境变量
 
@@ -137,6 +201,7 @@ curl http://localhost:8007/v1/chat/completions \
 | `CACHE_ROOT` | `/dev/shm/glm52-cache` | 非可执行缓存根路径 (tmpfs: tmp/home/日志) |
 | `EXEC_CACHE_ROOT` | `/root/.cache/glm52-cache` | 可执行缓存根路径 (overlay: triton/torchinductor .so) |
 | `VLLM_ENGINE_READY_TIMEOUT_S` | `1800` | 引擎启动超时 (秒) |
+| `RAY_ADDRESS` | 空 | 多节点 Ray 集群地址 (如 `10.42.11.130:6379`)，TP>8 时 **必需** |
 | `NIC_NAME` | 空 | 多节点高速网卡名 (如 `enp66s0f0`) |
 | `HCCL_IF_IP` | 空 | 多节点 HCCL 通信 IP |
 
@@ -240,3 +305,30 @@ A: 缓存分为两类：
 ### Q: enforce_eager 去哪里了？
 
 A: 已从顶层 `--enforce-eager` 标志移至 `--speculative-config` 内的 `"enforce_eager": true`（对齐官方脚本）。主模型使用 CUDA Graph (`FULL_DECODE_ONLY`)，仅 MTP 草稿模型使用 eager 模式，确保兼容性与性能兼顾。
+
+### Q: 部署时一直卡在 "Waiting for creating a placement group"？
+
+A: Engine Core 子进程默认启动了本地 Ray 实例（只有 8 NPU），未连接到集群。设置 `RAY_ADDRESS` 环境变量指向 Ray Head 节点：
+
+```bash
+# 获取地址
+docker exec vllm-ascend-env python3 -c "
+import ray; ray.init(address='auto', ignore_reinit_error=True)
+print(ray.get_runtime_context().gcs_address)
+"
+
+# 部署（以 TP=16 为例）
+RAY_ADDRESS=10.42.11.130:6379 TP=16 bash run_vllm.sh
+```
+
+### Q: A2 (64GB) 上能用 TP=8 部署吗？
+
+A: **不能**。实际测试 5 种不同内存配置（从 `gpu_memory_utilization=0.95` 到 `0.50`，`max_model_len` 从 32K 到 2K，禁用 MTP/CUDA Graph），模型权重均固定消耗 **≈60.4 GiB/卡**，仅剩 ~3.6GB 余量。需要 A3 (128GB) 硬件或 W4A8 量化版本。
+
+### Q: 为什么 TP=16 也不行？
+
+A: GLM-5.2 的 MLA 注意力层维度 `num_kv_heads × head_dim = 3 × 192 = 576`，不能被 16 整除。TP=16 时 weight sharding 计算错误：`start(0) + length(704) > 576`。需要 vLLM-Ascend 修复 `deepseek_v2.py` 中的 Indexer shard 计算逻辑。
+
+### Q: `quant_model_description.json` 有什么问题？
+
+A: 官方发布的 W8A8 量化描述文件中，78 层只有 22 层（密集层 + 每第 4 个 MoE 层）包含 Indexer 量化条目，其余 56 个 MoE 层缺失。需要在加载前手动补充。详见「量化文件修复」章节。
