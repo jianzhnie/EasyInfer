@@ -2,7 +2,8 @@
 #=============================================================================
 # LongCat-Flash-Chat SGLang 集群部署脚本
 #=============================================================================
-# 假设 Docker 容器已在各节点创建好，本脚本通过 SSH 进入各节点容器执行 SGLang 启动。
+# 假设 Docker 容器已在各节点创建好 (--network host)，本脚本通过 SSH 进入
+# 各节点容器执行 SGLang 启动命令。
 #
 # 容器已挂载 /home/jianzhnie/llmtuner/llm/EasyInfer，容器内路径与 host 一致，
 # 无需 scp 分发文件。
@@ -14,15 +15,23 @@
 #   NODES_FILE=/path/to/nodes.txt TP_SIZE=32 bash run_sglang.sh
 #
 # 环境变量 (均可外部覆盖):
-#   NODES_FILE      节点列表文件路径
-#   MODEL_PATH      模型路径
-#   TP_SIZE         张量并行大小 (默认: 64)
-#   SERVER_PORT     服务端口 (默认: 6677)
-#   MASTER_PORT     通信端口 (默认: 5000)
+#   NODES_FILE         节点列表文件路径
+#   MODEL_PATH         模型路径
+#   CONTAINER_NAME     Docker 容器名称 (默认: sglang-ascend-env)
+#   TP_SIZE            张量并行大小 (默认: 64)
+#   SERVER_HOST        服务监听地址 (默认: 0.0.0.0)
+#   SERVER_PORT        服务端口 (默认: 6677)
+#   MASTER_PORT        通信端口 (默认: 5000)
 #   SERVED_MODEL_NAME  服务模型名 (默认: longcat-flash)
-#   MEM_FRACTION    显存占用比例 (默认: 0.65)
-#   MAX_RUNNING     最大并发请求 (默认: 16)
-#   CONTEXT_LENGTH  上下文长度 (默认: 8192)
+#   MEM_FRACTION       显存占用比例 (默认: 0.65)
+#   MAX_RUNNING        最大并发请求 (默认: 16)
+#   CONTEXT_LENGTH     上下文长度 (默认: 8192)
+#   CHUNKED_PREFILL    Chunked Prefill 大小 (默认: 8192)
+#   WATCHDOG_TIMEOUT   Watchdog 超时秒数 (默认: 9000)
+#   SGLANG_PYTHONPATH  SGLang Python 源码路径
+#   SGLANG_EXTRA_ARGS  SGLang 额外命令行参数
+#   HCCL_SOCKET_IFNAME HCCL 网络接口名 (默认: enp66s0f0)
+#   GLOO_SOCKET_IFNAME GLOO 网络接口名 (默认: enp66s0f0)
 #=============================================================================
 set -euo pipefail
 
@@ -30,6 +39,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EASYINFER_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # --- 加载共享工具函数 ---
+# shellcheck source=../../../scripts/common.sh
 source "${EASYINFER_ROOT}/scripts/common.sh"
 
 #=============================================================================
@@ -53,6 +63,12 @@ CONTEXT_LENGTH="${CONTEXT_LENGTH:-8192}"
 CHUNKED_PREFILL="${CHUNKED_PREFILL:-8192}"
 WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-9000}"
 
+# --- SGLang Python 源码路径 ---
+SGLANG_PYTHONPATH="${SGLANG_PYTHONPATH:-/home/jianzhnie/llmtuner/llm/sglang/python}"
+
+# --- SGLang 额外参数 (空格分隔，会追加到启动命令末尾) ---
+SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
+
 # --- 网络接口配置 ---
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
@@ -71,9 +87,13 @@ Options:
   -m, --model-path <PATH>   模型路径
   --stop                    停止所有节点的 SGLang 服务
 
-环境变量:
+环境变量 (均可通过环境变量覆盖):
   NODES_FILE, MODEL_PATH, CONTAINER_NAME
-  TP_SIZE, SERVER_PORT, MASTER_PORT, SERVED_MODEL_NAME
+  TP_SIZE, SERVER_HOST, SERVER_PORT, MASTER_PORT, SERVED_MODEL_NAME
+  MEM_FRACTION, MAX_RUNNING, CONTEXT_LENGTH
+  CHUNKED_PREFILL, WATCHDOG_TIMEOUT
+  SGLANG_PYTHONPATH, SGLANG_EXTRA_ARGS
+  HCCL_SOCKET_IFNAME, GLOO_SOCKET_IFNAME
 USAGE
 }
 
@@ -97,11 +117,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 #=============================================================================
-# 读取节点列表
+# 前置检查
 #=============================================================================
 [[ -f "$NODES_FILE" ]] || log_fatal "节点列表文件未找到: $NODES_FILE"
 [[ -d "$MODEL_PATH" ]] || log_fatal "模型路径不存在: $MODEL_PATH"
 
+#=============================================================================
+# 读取节点列表
+#=============================================================================
 NODES=()
 while IFS= read -r line; do
     [[ -n "$line" ]] && NODES+=("$line")
@@ -120,6 +143,155 @@ if [[ "$TP_SIZE" != "$EXPECTED_TP" ]]; then
 fi
 
 #=============================================================================
+# 容器内脚本片段
+#
+# 每个函数输出一段 bash 脚本，由 build_launch_cmd() 组装后 base64 编码传入容器。
+#
+# Heredoc 约定:
+#   <<'DELIM'  — 引用型，内容原样输出（纯容器内代码，无管理节点变量）
+#   <<DELIM    — 非引用型，管理节点 ${VAR} 在此展开，容器内变量需 \$ 转义
+#=============================================================================
+
+# --- 脚本头 + 日志函数 (纯容器内代码) ------------------------------------------
+_inner_header() {
+    cat <<'INNER_HEADER'
+set -euo pipefail
+
+# --- 日志函数 ---
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+_log() {
+    local c="$1" l="$2"; shift 2
+    printf "${c}[%-5s]${NC} %s - %s\n" "$l" "$(date +%Y-%m-%d %H:%M:%S)" "$*"
+}
+log_info()  { _log "$GREEN"  "INFO"  "$@"; }
+log_warn()  { _log "$YELLOW" "WARN"  "$@" >&2; }
+log_fatal() { _log "$RED"    "FATAL" "$@" >&2; exit 1; }
+INNER_HEADER
+}
+
+# --- 系统优化 (纯容器内代码) --------------------------------------------------
+_inner_sys_tuning() {
+    cat <<'INNER_SYS'
+# --- 系统优化 ---
+log_info "Applying system optimization..."
+echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
+sysctl -w vm.swappiness=0 2>/dev/null || true
+sysctl -w kernel.numa_balancing=0 2>/dev/null || true
+sysctl -w kernel.sched_migration_cost_ns=50000 2>/dev/null || true
+INNER_SYS
+}
+
+# --- NPU 环境变量 (管理节点 HCCL_*/GLOO_*/PYTHONPATH 在此展开) -----------------
+_inner_npu_env() {
+    cat <<INNER_NPU_ENV
+# --- NPU 环境变量 ---
+export SGLANG_SET_CPU_AFFINITY=1
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export STREAMS_PER_DEVICE=32
+export SGLANG_DEEPEP_BF16_DISPATCH=1
+export HCCL_OP_EXPANSION_MODE="AIV"
+export HCCL_BUFFSIZE=2048
+export MOE_ENABLE_TOPK_NEG_ONE=1
+export TRANSFORMERS_VERBOSITY=error
+export HCCL_SOCKET_IFNAME=${HCCL_SOCKET_IFNAME}
+export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME}
+export PYTHONPATH=${SGLANG_PYTHONPATH}:\${PYTHONPATH:-}
+INNER_NPU_ENV
+}
+
+# --- CANN 环境 (纯容器内代码) -------------------------------------------------
+_inner_cann_setup() {
+    cat <<'INNER_CANN'
+# --- CANN 环境 (先 set +u 避免 CANN 脚本中未设置变量导致退出) ---
+set +u
+if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh
+fi
+set -u
+INNER_CANN
+}
+
+# --- SGLang 启动 Banner + 命令 (管理节点 MODEL_PATH/SERVER_* 等在此展开) -------
+_inner_sglang_launch() {
+    local node_rank="$1"
+    local master_addr="$2"
+
+    cat <<INNER_LAUNCH
+log_info "============================================"
+log_info " LongCat-Flash-Chat SGLang Worker"
+log_info " 模型路径:       ${MODEL_PATH}"
+log_info " 节点数:         ${NNODES}"
+log_info " TP 大小:        ${TP_SIZE}"
+log_info " 主节点地址:     ${master_addr}"
+log_info " 服务地址:       ${SERVER_HOST}:${SERVER_PORT}"
+log_info " 当前节点 Rank:  ${node_rank}"
+log_info "============================================"
+
+log_info "Starting SGLang server..."
+exec python -m sglang.launch_server \
+    --trust-remote-code \
+    --model-path "${MODEL_PATH}" \
+    --served-model-name "${SERVED_MODEL_NAME}" \
+    --host "${SERVER_HOST}" \
+    --port "${SERVER_PORT}" \
+    --nnodes "${NNODES}" \
+    --node-rank "${node_rank}" \
+    --dist-init-addr "${master_addr}" \
+    --tp-size "${TP_SIZE}" \
+    --mem-fraction-static "${MEM_FRACTION}" \
+    --attention-backend ascend \
+    --device npu \
+    --max-running-requests "${MAX_RUNNING}" \
+    --context-length "${CONTEXT_LENGTH}" \
+    --disable-radix-cache \
+    --chunked-prefill-size "${CHUNKED_PREFILL}" \
+    --watchdog-timeout "${WATCHDOG_TIMEOUT}" \
+    --prefill-round-robin-balance \
+    --moe-a2a-backend deepep \
+    --deepep-mode auto \
+    ${SGLANG_EXTRA_ARGS:-}
+INNER_LAUNCH
+}
+
+#=============================================================================
+# 组装容器内 SGLang 启动命令
+#
+# 将所有脚本片段拼接为完整脚本，通过 base64 编码后传入容器执行。
+#=============================================================================
+build_launch_cmd() {
+    local node_rank="$1"
+    local master_addr="${NODES[0]}:${MASTER_PORT}"
+
+    # 按顺序拼接各模块（空行分隔）
+    _inner_header
+    echo ""
+    _inner_sys_tuning
+    echo ""
+    _inner_npu_env
+    echo ""
+    _inner_cann_setup
+    echo ""
+    _inner_sglang_launch "$node_rank" "$master_addr"
+}
+
+#=============================================================================
+# 在远程节点容器内执行命令
+#
+# 使用 base64 编码避免多层引号嵌套问题（与 scripts/ray_cluster/ 中模式一致）。
+# 注意:
+#   - SC2086: SSH_OPTS 不分词无法传递多个选项，这是 common.sh ssh_run 的约定
+#   - SC2029: 变量在管理节点侧展开是预期行为（配置由管理节点决定）
+#=============================================================================
+remote_exec() {
+    local node="$1" cmd="$2" b64cmd
+    b64cmd=$(printf '%s' "$cmd" | base64 | tr -d '\n')
+
+    # shellcheck disable=SC2086,SC2029
+    ssh ${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10} \
+        "$node" "docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64cmd}' | base64 -d | bash\""
+}
+
+#=============================================================================
 # 停止服务
 #=============================================================================
 if [[ "$ACTION" == "stop" ]]; then
@@ -129,8 +301,9 @@ if [[ "$ACTION" == "stop" ]]; then
 
     for node in "${NODES[@]}"; do
         log_info "停止 ${node} ..."
+        # shellcheck disable=SC2086,SC2029
         ssh ${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10} \
-            "$node" "docker exec '${CONTAINER_NAME}' pkill -f 'sglang.launch_server' 2>/dev/null; docker exec '${CONTAINER_NAME}' pkill -9 -f 'sglang.launch_server' 2>/dev/null" 2>/dev/null || true
+            "$node" "docker exec '${CONTAINER_NAME}' bash -c 'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null'" 2>/dev/null || true
     done
 
     log_info "所有节点的 SGLang 服务已停止"
@@ -152,106 +325,18 @@ log_info " 服务端口:       ${SERVER_PORT}"
 log_info " 容器名称:       ${CONTAINER_NAME}"
 log_info "============================================"
 
-# 构建节点 IP 字符串
-NODES_IPS_STR="${NODES[*]}"
+# 逐节点启动（必须先启动 rank 0，torch.distributed 要求 master 先就绪）
+for i in "${!NODES[@]}"; do
+    node="${NODES[$i]}"
+    log_info "在 ${node} 上启动 SGLang (rank ${i}/${NNODES})..."
 
-for node in "${NODES[@]}"; do
-    log_info "在 ${node} 上启动 SGLang..."
-
-    ssh ${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10} \
-        "$node" "docker exec -d '${CONTAINER_NAME}' bash -c '
-            set -euo pipefail
-
-            # --- 日志函数 ---
-            RED=\"\033[0;31m\" GREEN=\"\033[0;32m\" YELLOW=\"\033[1;33m\" NC=\"\033[0m\"
-            _log() { local c=\"\$1\" l=\"\$2\"; shift 2; printf \"\${c}[%-5s]\${NC} %s - %s\n\" \"\$l\" \"\$(date +%Y-%m-%d %H:%M:%S)\" \"\$*\"; }
-            log_info()  { _log \"\$GREEN\"  \"INFO\"  \"\$@\"; }
-            log_warn()  { _log \"\$YELLOW\" \"WARN\"  \"\$@\" >&2; }
-            log_fatal() { _log \"\$RED\"    \"FATAL\" \"\$@\" >&2; exit 1; }
-
-            # --- 系统优化 ---
-            log_info \"应用系统优化...\"
-            echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-            sysctl -w vm.swappiness=0 2>/dev/null || true
-            sysctl -w kernel.numa_balancing=0 2>/dev/null || true
-            sysctl -w kernel.sched_migration_cost_ns=50000 2>/dev/null || true
-
-            # --- 环境变量 ---
-            export SGLANG_SET_CPU_AFFINITY=1
-            export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-            export STREAMS_PER_DEVICE=32
-            export SGLANG_DEEPEP_BF16_DISPATCH=1
-            export HCCL_OP_EXPANSION_MODE=\"AIV\"
-            export HCCL_BUFFSIZE=2048
-            export MOE_ENABLE_TOPK_NEG_ONE=1
-            export TRANSFORMERS_VERBOSITY=error
-            export PYTHONPATH=/home/jianzhnie/llmtuner/llm/sglang/python:\${PYTHONPATH:-}
-            export HCCL_SOCKET_IFNAME=${HCCL_SOCKET_IFNAME}
-            export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME}
-
-            # --- CANN 环境 ---
-            if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
-                source /usr/local/Ascend/ascend-toolkit/set_env.sh
-            fi
-
-            # --- 读取节点列表 ---
-            NODES=()
-            read -ra NODES <<< \"${NODES_IPS_STR}\"
-            NNODES=\${#NODES[@]}
-            [[ \"\$NNODES\" -gt 0 ]] || log_fatal \"节点列表为空\"
-
-            P_IP=(\"\${NODES[@]}\")
-            P_MASTER=\"\${P_IP[0]}:${MASTER_PORT}\"
-
-            # --- 确定当前节点 rank ---
-            LOCAL_IPS=\"\$(hostname -I 2>/dev/null || true)\"
-            NODE_RANK=\"\"
-            for i in \"\${!P_IP[@]}\"; do
-                if [[ \" \${LOCAL_IPS} \" == *\" \${P_IP[\$i]} \"* ]]; then
-                    NODE_RANK=\"\${i}\"
-                    break
-                fi
-            done
-            [[ -n \"\${NODE_RANK}\" ]] || log_fatal \"本地 IP [\${LOCAL_IPS}] 未在节点列表中找到\"
-
-            log_info \"============================================\"
-            log_info \" LongCat-Flash-Chat SGLang Worker\"
-            log_info \" 模型路径:       ${MODEL_PATH}\"
-            log_info \" 节点数:         \${NNODES}\"
-            log_info \" TP 大小:        ${TP_SIZE}\"
-            log_info \" 主节点:         \${P_MASTER}\"
-            log_info \" 服务地址:       ${SERVER_HOST}:${SERVER_PORT}\"
-            log_info \" 当前节点 Rank:  \${NODE_RANK}\"
-            log_info \"============================================\"
-
-            log_info \"启动 SGLang 服务...\"
-            exec python -m sglang.launch_server \
-                --trust-remote-code \
-                --model-path \"${MODEL_PATH}\" \
-                --served-model-name \"${SERVED_MODEL_NAME}\" \
-                --host \"${SERVER_HOST}\" \
-                --port \"${SERVER_PORT}\" \
-                --nnodes \"\${NNODES}\" \
-                --node-rank \"\${NODE_RANK}\" \
-                --dist-init-addr \"\${P_MASTER}\" \
-                --tp-size \"${TP_SIZE}\" \
-                --mem-fraction-static \"${MEM_FRACTION}\" \
-                --attention-backend ascend \
-                --device npu \
-                --max-running-requests \"${MAX_RUNNING}\" \
-                --context-length \"${CONTEXT_LENGTH}\" \
-                --disable-radix-cache \
-                --chunked-prefill-size \"${CHUNKED_PREFILL}\" \
-                --watchdog-timeout \"${WATCHDOG_TIMEOUT}\" \
-                --prefill-round-robin-balance \
-                --moe-a2a-backend deepep \
-                --deepep-mode auto
-        '" 2>/dev/null || {
-            log_err "在 ${node} 上启动 SGLang 失败"
-        }
+    launch_cmd=$(build_launch_cmd "$i")
+    if ! remote_exec "$node" "$launch_cmd"; then
+        log_err "在 ${node} 上启动 SGLang 失败，请检查容器日志"
+    fi
 done
 
-log_info "SGLang 服务启动命令已发送"
+log_info "所有节点的 SGLang 启动命令已发送"
 log_info "等待服务就绪..."
 
 # 等待主节点服务就绪
@@ -263,8 +348,7 @@ fi
 
 log_info "============================================"
 log_info " 部署完成!"
-log_info " 主节点: ${MASTER_NODE}:${SERVER_PORT}"
+log_info " 主节点:   ${MASTER_NODE}:${SERVER_PORT}"
 log_info " 健康检查: http://${MASTER_NODE}:${SERVER_PORT}/health"
 log_info " 模型列表: http://${MASTER_NODE}:${SERVER_PORT}/v1/models"
 log_info "============================================"
-log_info "部署流程结束"

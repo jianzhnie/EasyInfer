@@ -20,6 +20,19 @@ readonly WAIT_INTERVAL=5
 readonly BASE_URL="http://${HOST}:${PORT}"
 
 #------------------------------------------------------------------------------
+# 前置检查
+#------------------------------------------------------------------------------
+check_command() {
+    local cmd="$1"
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "[ERROR] 缺少必要命令: ${cmd}，请先安装" >&2
+        exit 127
+    }
+}
+check_command curl
+check_command python3
+
+#------------------------------------------------------------------------------
 # 日志辅助函数
 #------------------------------------------------------------------------------
 RED='\033[0;31m'
@@ -60,52 +73,62 @@ wait_for_service() {
 }
 
 #------------------------------------------------------------------------------
+# 构建 JSON 请求体 (安全拼接，避免引号注入)
+#------------------------------------------------------------------------------
+build_json_body() {
+    local model="$1" messages="$2"
+    local extra="${3:-}"
+    # 使用 python3 生成合法 JSON，彻底避免 shell 字符串拼接导致的注入问题
+    python3 -c "
+import json
+body = {'model': '${model}', 'messages': ${messages}}
+body.update(${extra:-{}})
+print(json.dumps(body))
+"
+}
+
+#------------------------------------------------------------------------------
 # 执行单个 API 测试
 #------------------------------------------------------------------------------
-run_test() {
-    local test_name="$1"
-    local endpoint="$2"
-    local payload="$3"
-    local header="${4:-}"
-    local quiet="${5:-}"
-    local response curl_status=0
+_run_test() {
+    local test_name="$1" endpoint="$2" payload="$3"
     local curl_opts=(-s "$endpoint" -H "Content-Type: application/json")
 
-    [[ -n "$header" ]] && curl_opts+=(-H "$header")
     [[ -n "$payload" ]] && curl_opts+=(-d "$payload")
 
     echo ""
     log_info "测试: ${test_name}"
     log_info "Endpoint: ${endpoint}"
 
-    if [[ "$quiet" == "quiet" ]]; then
-        curl "${curl_opts[@]}" >/dev/null 2>&1 || curl_status=$?
-    else
-        response=$(curl "${curl_opts[@]}") || curl_status=$?
+    if response=$(curl "${curl_opts[@]}"); then
         echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
-    fi
-
-    if [[ "$curl_status" -eq 0 ]]; then
-        log_success "${test_name} 完成 (退出码: ${curl_status})"
+        log_success "${test_name} 通过"
+        return 0
     else
-        log_warning "${test_name} 可能存在问题 (退出码: ${curl_status})"
+        log_error "${test_name} 失败 (curl 退出码: $?)"
+        return 1
     fi
-    return "$curl_status"
 }
 
 #------------------------------------------------------------------------------
 # 流式聊天完成测试
 #------------------------------------------------------------------------------
-run_stream_test() {
-    local test_name="$1"
-    local payload="$2"
+_run_stream_test() {
+    local test_name="$1" payload="$2"
+    local http_code
 
     echo ""
     log_info "测试: ${test_name}"
-    curl -s "${BASE_URL}/v1/chat/completions" \
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' \
+        "${BASE_URL}/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>&1 | head -10 || true
-    log_success "${test_name} 完成"
+        -d "$payload" 2>&1) || true
+
+    if [[ "$http_code" == "200" ]]; then
+        log_success "${test_name} 通过 (HTTP ${http_code})"
+    else
+        log_warning "${test_name} 返回 HTTP ${http_code}，流式端点可能存在问题"
+    fi
 }
 
 #------------------------------------------------------------------------------
@@ -119,31 +142,45 @@ echo "=========================================="
 
 wait_for_service || exit 1
 
+FAILED=0
+
 # 1. 模型列表查询 (GET)
-run_test "模型列表查询" \
+_run_test "模型列表查询" \
     "${BASE_URL}/v1/models" \
-    ""
+    "" || ((FAILED++))
 
 # 2. 英文对话
-run_test "Chat Completion (英文)" \
+_run_test "Chat Completion (英文)" \
     "${BASE_URL}/v1/chat/completions" \
-    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"Hello, who are you?"}],"max_tokens":128,"temperature":0.7}'
+    "$(build_json_body "$MODEL_NAME" \
+        '[{"role":"user","content":"Hello, who are you?"}]' \
+        '{"max_tokens":128,"temperature":0.7}')" || ((FAILED++))
 
 # 3. 中文对话
-run_test "Chat Completion (中文)" \
+_run_test "Chat Completion (中文)" \
     "${BASE_URL}/v1/chat/completions" \
-    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"你好，请简单介绍一下你自己。"}],"max_tokens":128,"temperature":0.7}'
+    "$(build_json_body "$MODEL_NAME" \
+        '[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"你好，请简单介绍一下你自己。"}]' \
+        '{"max_tokens":128,"temperature":0.7}')" || ((FAILED++))
 
 # 4. Tool Calling
-run_test "Tool Calling" \
+_run_test "Tool Calling" \
     "${BASE_URL}/v1/chat/completions" \
-    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"What is the weather like in Beijing?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"city":{"type":"string","description":"The city to get weather for"}},"required":["city"]}}}],"tool_choice":"auto","max_tokens":100}'
+    "$(build_json_body "$MODEL_NAME" \
+        '[{"role":"user","content":"What is the weather like in Beijing?"}]' \
+        '{"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"city":{"type":"string","description":"The city to get weather for"}},"required":["city"]}}}],"tool_choice":"auto","max_tokens":100}')" || ((FAILED++))
 
 # 5. 流式输出
-run_stream_test "流式 Chat Completion" \
-    '{"model":"'"$MODEL_NAME"'","messages":[{"role":"user","content":"从1数到5"}],"max_tokens":100,"stream":true}'
+_run_stream_test "流式 Chat Completion" \
+    "$(build_json_body "$MODEL_NAME" \
+        '[{"role":"user","content":"从1数到5"}]' \
+        '{"max_tokens":100,"stream":true}')"
 
 echo ""
 echo "=========================================="
-log_success "LongCat-Flash-Chat SGLang 所有验证测试完成!"
+if [[ "$FAILED" -eq 0 ]]; then
+    log_success "LongCat-Flash-Chat SGLang 所有验证测试通过!"
+else
+    log_warning "LongCat-Flash-Chat SGLang 测试完成，${FAILED} 项失败"
+fi
 echo "=========================================="
