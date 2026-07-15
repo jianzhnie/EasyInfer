@@ -42,7 +42,7 @@ from vllm_ascend.ops.fused_moe.experts_selector import (
 )
 from vllm_ascend.ops.fused_moe.fused_moe import AscendFusedMoE, FusedMoEResult
 
-from easyinfer.plugins.registry import package_version_range, register_patch
+from easyinfer.plugins.registry import register_patch
 
 if TYPE_CHECKING:
     pass
@@ -75,7 +75,6 @@ _EP_COMM_TYPES = frozenset(
 
 @register_patch(
     registrar=CustomOp.register_oot(name="ZeroExpertFusedMoE"),
-    condition=package_version_range("vllm_ascend", max_version="0.20.1"),
 )
 class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
     """Ascend replacement for upstream ``ZeroExpertFusedMoE``.
