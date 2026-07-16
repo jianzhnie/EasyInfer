@@ -158,14 +158,14 @@ validate_config() {
 # 远程执行
 # ════════════════════════════════════════════════════════════════════════════
 
-# 通过 SSH 在容器内执行完整脚本 (base64 编码，避免引号嵌套)
+# 通过 SSH 在容器内后台执行完整脚本 (base64 编码，避免引号嵌套)
 remote_exec_script() {
     local node="$1" script="$2" b64
     b64=$(printf '%s' "$script" | base64 | tr -d '\n')
 
     # shellcheck disable=SC2086,SC2029
     ssh ${SSH_OPTS} "$node" \
-        "docker exec -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
+        "docker exec -d -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
 }
 
 # 通过 SSH 在容器内执行简单命令
@@ -231,6 +231,7 @@ export TRANSFORMERS_VERBOSITY=error
 export HCCL_SOCKET_IFNAME=${HCCL_SOCKET_IFNAME}
 export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME}
 export PYTHONPATH=${SGLANG_PYTHONPATH}:\${PYTHONPATH:-}
+export SERVER_HOST=${SERVER_HOST}
 FRAG_NPU_ENV
 }
 
@@ -264,7 +265,7 @@ log_info " 当前节点 Rank:  ${node_rank}"
 log_info "============================================"
 
 log_info "Starting SGLang server..."
-exec python -m sglang.launch_server \
+nohup python -m sglang.launch_server \
     --trust-remote-code \
     --model-path          "${MODEL_PATH}" \
     --served-model-name   "${SERVED_MODEL_NAME}" \
@@ -285,7 +286,12 @@ exec python -m sglang.launch_server \
     --prefill-round-robin-balance \
     --moe-a2a-backend     deepep \
     --deepep-mode         auto \
-    ${SGLANG_EXTRA_ARGS:-}
+    ${SGLANG_EXTRA_ARGS:-} > /tmp/sglang.log 2>&1 &
+
+log_info "SGLang server started in background (PID: $!)"
+sleep 2
+log_info "Process check:"
+ps aux | grep sglang.launch_server | grep -v grep || log_warn "SGLang process not found immediately, may still be starting"
 FRAG_LAUNCH
 }
 
