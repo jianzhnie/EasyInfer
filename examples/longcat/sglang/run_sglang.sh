@@ -285,13 +285,12 @@ nohup python -m sglang.launch_server \
     --watchdog-timeout     "${WATCHDOG_TIMEOUT}" \
     --prefill-round-robin-balance \
     --moe-a2a-backend     deepep \
+    ${SGLANG_EXTRA_ARGS:-} \
     --deepep-mode         auto \
-    ${SGLANG_EXTRA_ARGS:-} > /tmp/sglang.log 2>&1 &
+    > ${EASYINFER_ROOT}/sglang.log 2>&1 &
 
-log_info "SGLang server started in background (PID: $!)"
-sleep 2
-log_info "Process check:"
-ps aux | grep sglang.launch_server | grep -v grep || log_warn "SGLang process not found immediately, may still be starting"
+log_info "SGLang server started in background (PID: \$!)"
+log_info "模型加载通常需要 10-20 分钟，查看进度: tail -f ${EASYINFER_ROOT}/sglang.log"
 FRAG_LAUNCH
 }
 
@@ -324,8 +323,7 @@ stop_service() {
     for node in "${NODES[@]}"; do
         log_info "停止 ${node} ..."
         remote_exec_cmd "$node" \
-            'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null' \
-            2>/dev/null || true
+            'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null' 2>/dev/null || true
     done
 
     log_info "所有节点的 SGLang 服务已停止"
@@ -348,11 +346,11 @@ deploy_service() {
     log_info "============================================"
 
     # 逐节点启动 (rank 0 必须先就绪, torch.distributed 要求)
+    local node launch_cmd
     for i in "${!NODES[@]}"; do
-        local node="${NODES[$i]}"
+        node="${NODES[$i]}"
         log_info "在 ${node} 上启动 SGLang (rank ${i}/${NNODES})..."
 
-        local launch_cmd
         launch_cmd=$(build_launch_cmd "$i")
         if ! remote_exec_script "$node" "$launch_cmd"; then
             log_err "在 ${node} 上启动 SGLang 失败，请检查容器日志"
