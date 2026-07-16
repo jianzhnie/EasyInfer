@@ -524,7 +524,26 @@ require_command "lm-eval" \
 # is a defensive fallback in case common.sh behavior changes.
 if [[ "$BACKEND" == "api" ]]; then
     log_info "Checking" "Server connectivity and model identity..."
-    check_vllm_server --port "$API_PORT" --model "$MODEL_PATH" || exit 1
+    # 从 API_URL 提取 host/port 用于健康检查（支持远程服务）
+    CHECK_HOST="127.0.0.1"
+    CHECK_PORT="$API_PORT"
+    if [[ -n "$API_URL" ]]; then
+        # 解析 http://host:port/path 中的 host 和 port
+        CHECK_HOST=$(echo "$API_URL" | sed -n 's|http://\([^:/]*\).*|\1|p')
+        CHECK_PORT=$(echo "$API_URL" | sed -n 's|http://[^:]*:\([0-9]*\).*|\1|p')
+        [[ -z "$CHECK_PORT" ]] && CHECK_PORT="$API_PORT"
+    fi
+    # 使用 ssh 在目标 host 上执行健康检查（如果是远程节点）
+    if [[ "$CHECK_HOST" != "127.0.0.1" && "$CHECK_HOST" != "localhost" ]]; then
+        log_info "Remote server" "${CHECK_HOST}:${CHECK_PORT}"
+        if ! ssh ${SSH_OPTS:-} "${CHECK_HOST}" "curl -sf http://${CHECK_HOST}:${CHECK_PORT}/health >/dev/null 2>&1"; then
+            log_error "Server not responding on ${CHECK_HOST}:${CHECK_PORT}. Is SGLang server running?"
+            exit 1
+        fi
+        log_success "Server is UP (HTTP 200)"
+    else
+        check_vllm_server --port "$CHECK_PORT" --model "$MODEL_PATH" || exit 1
+    fi
 fi
 
 # ------------------------------------------------------------------------------

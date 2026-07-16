@@ -31,17 +31,21 @@ source "${SCRIPT_DIR}/../../scripts/common.sh"
 # ---------------------------------------------------------------------------
 export HF_HOME="${HF_HOME:-/home/jianzhnie/llmtuner/hfhub/cache}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
-# export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
-# export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
-# export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 
 # ---------------------------------------------------------------------------
 # 评测参数
 # ---------------------------------------------------------------------------
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-combined}"
+# 模型路径 (本地 tokenizer 路径，用于 lm-eval 做 tokenization)
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Chat}"
+# API 中注册的模型名 (served-model-name)
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
-PORT="${PORT:-8000}"
+# SGLang 服务地址
+API_HOST="${API_HOST:-10.42.11.130}"
+PORT="${PORT:-6677}"
 TASKS="${TASKS:-mmlu}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
@@ -57,13 +61,22 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 # ---------------------------------------------------------------------------
 log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
 
-bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" \
-    --model-path "$MODEL_PATH" \
-    --output-dir "$OUTPUT_DIR" \
-    --model-name "${MODEL_NAME}" \
-    --backend "$BACKEND" \
-    --port "$PORT" \
-    --tasks "$TASKS" \
-    --fewshot "$FEWSHOT" \
-    --max-model-len "$MAX_MODEL_LEN" \
+# 构建 run_lmeval.sh 参数
+LMEVAL_ARGS=(
+    --model-path "$MODEL_PATH"
+    --output-dir "$OUTPUT_DIR"
+    --model-name "${MODEL_NAME}"
+    --backend "$BACKEND"
+    --port "$PORT"
+    --tasks "$TASKS"
+    --fewshot "$FEWSHOT"
+    --max-model-len "$MAX_MODEL_LEN"
     --num-concurrent 4
+)
+
+# API 模式下必须显式指定远程 URL（服务不在本地 127.0.0.1）
+if [[ "$BACKEND" == "api" ]]; then
+    LMEVAL_ARGS+=(--url "http://${API_HOST}:${PORT}/v1/completions")
+fi
+
+bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" "${LMEVAL_ARGS[@]}"
