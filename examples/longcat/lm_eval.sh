@@ -44,7 +44,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-
 # API 中注册的模型名 (served-model-name)
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 # SGLang 服务地址
-API_HOST="${API_HOST:-10.42.11.130}"
+API_HOST="${API_HOST:-localhost}"
 PORT="${PORT:-6677}"
 TASKS="${TASKS:-mmlu}"
 FEWSHOT="${FEWSHOT:-5}"

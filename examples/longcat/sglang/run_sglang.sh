@@ -75,7 +75,7 @@ SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
 # ─── 日志 ──────────────────────────────────────────────────────────────────
 # 统一日志路径: 容器内与 host 一致，使用 /tmp 避免权限问题
-SGLANG_LOG_DIR="${SGLANG_LOG_DIR:-EASYINFER_ROOT}"
+SGLANG_LOG_DIR="${SGLANG_LOG_DIR:-"${EASYINFER_ROOT}"}"
 SGLANG_LOG_FILE="${SGLANG_LOG_DIR}/sglang_$(basename "${SERVED_MODEL_NAME}").log"
 
 # ─── 网络接口 (export 给 HCCL/GLOO) ────────────────────────────────────────
@@ -325,9 +325,9 @@ build_launch_cmd() {
     echo ""
     fragment_sys_tuning
     echo ""
-    fragment_npu_env
-    echo ""
     fragment_cann_setup
+    echo ""
+    fragment_npu_env
     echo ""
     fragment_sglang_launch "$node_rank" "$master_addr"
 }

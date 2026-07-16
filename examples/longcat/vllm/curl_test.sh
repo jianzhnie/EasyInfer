@@ -15,7 +15,7 @@ set -euo pipefail
 # Configuration
 # ------------------------------------------------------------------------------
 HOST="${HOST:-localhost}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-6677}"
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 readonly TIMEOUT=300
 readonly WAIT_INTERVAL=5

@@ -12,7 +12,7 @@ set -euo pipefail
 #------------------------------------------------------------------------------
 # 配置
 #------------------------------------------------------------------------------
-HOST="${HOST:-10.42.11.130}"
+HOST="${HOST:-localhost}"
 PORT="${PORT:-6677}"
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 readonly TIMEOUT=300
@@ -76,15 +76,16 @@ wait_for_service() {
 # 构建 JSON 请求体 (安全拼接，避免引号注入)
 #------------------------------------------------------------------------------
 build_json_body() {
-    local model="$1" messages="$2"
-    local extra="${3:-}"
-    # 使用 python3 生成合法 JSON，彻底避免 shell 字符串拼接导致的注入问题
-    python3 -c "
-import json
-body = {'model': '${model}', 'messages': ${messages}}
-body.update(${extra:-{}})
+    local model="$1" messages="$2" extra="${3:-}"
+    # 通过环境变量传参，Python 代码单引号包裹，彻底避免 shell 插值引号问题
+    MODEL="$model" MESSAGES="$messages" EXTRA="$extra" python3 -c '
+import json, os
+body = {"model": os.environ["MODEL"], "messages": json.loads(os.environ["MESSAGES"])}
+extra = os.environ.get("EXTRA", "")
+if extra:
+    body.update(json.loads(extra))
 print(json.dumps(body))
-"
+'
 }
 
 #------------------------------------------------------------------------------
@@ -101,7 +102,11 @@ _run_test() {
     log_info "Endpoint: ${endpoint}"
 
     if response=$(curl "${curl_opts[@]}"); then
-        echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+        echo "$response" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+print(json.dumps(data, ensure_ascii=False, indent=4))
+" 2>/dev/null || echo "$response"
         log_success "${test_name} 通过"
         return 0
     else
@@ -154,14 +159,14 @@ _run_test "Chat Completion (英文)" \
     "${BASE_URL}/v1/chat/completions" \
     "$(build_json_body "$MODEL_NAME" \
         '[{"role":"user","content":"Hello, who are you?"}]' \
-        '{"max_tokens":128,"temperature":0.7}')" || ((FAILED++))
+        '{"max_tokens":128,"temperature":0}')" || ((FAILED++))
 
 # 3. 中文对话
 _run_test "Chat Completion (中文)" \
     "${BASE_URL}/v1/chat/completions" \
     "$(build_json_body "$MODEL_NAME" \
         '[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"你好，请简单介绍一下你自己。"}]' \
-        '{"max_tokens":128,"temperature":0.7}')" || ((FAILED++))
+        '{"max_tokens":128,"temperature":0}')" || ((FAILED++))
 
 # 4. Tool Calling
 _run_test "Tool Calling" \
