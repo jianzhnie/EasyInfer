@@ -4,6 +4,9 @@
 # 用于在集群节点上管理 Docker 容器环境 (start/stop/restart)
 # ==========================================
 
+# 注意: 顶层不设 set -e，因为本脚本使用后台并行任务模型（& + wait），
+# set -e 在函数内的后台任务失败时会意外退出整个脚本。
+# 各 _remote_ 前缀的函数内部自行设置 set -eo pipefail。
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,6 +32,9 @@ Options:
   -f, --file <FILE>     节点列表文件路径（必传）
   -j, --jobs <N>        并行度（默认: 8，可通过 PARALLELISM 环境变量设置）
   -r, --retries <N>     失败重试次数（默认: 1）
+  --image <IMAGE>       容器镜像（覆盖 docker_env.sh 中的 IMAGE_NAME）
+  --name <NAME>         容器名称（覆盖 docker_env.sh 中的 CONTAINER_NAME）
+  --timeout <SEC>       SSH 操作超时秒数（默认: 600）
   --keep-logs           执行完毕后保留临时日志目录
 
 环境变量配置: scripts/docker/docker_env.sh
@@ -41,6 +47,10 @@ USAGE
 ACTION="start"
 RETRIES=1
 KEEP_LOGS=0
+SSH_TIMEOUT="${SSH_TIMEOUT:-600}"
+# ascend_infer_docker_run.sh 已内置 docker run -d，--daemon 对它无操作（无害）；
+# run_npuslim_container.sh 则需要 --daemon 来以分离模式运行。
+CONTAINER_RUN_EXTRA_ARGS="${CONTAINER_RUN_EXTRA_ARGS:---daemon}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -58,7 +68,19 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --keep-logs) KEEP_LOGS=1; shift ;;
-        start|stop|restart) ACTION="$1"; shift ;;
+        --image)
+            IMAGE_NAME="${2:?错误: $1 需要一个参数}"
+            shift 2
+            ;;
+        --name)
+            CONTAINER_NAME="${2:?错误: $1 需要一个参数}"
+            shift 2
+            ;;
+        --timeout)
+            SSH_TIMEOUT="${2:?错误: $1 需要一个参数}"
+            shift 2
+            ;;
+        start|stop|restart|status) ACTION="$1"; shift ;;
         *)
             log_err "未知参数: $1"; usage; exit "$E_INVALID_ARG"
             ;;
@@ -74,12 +96,10 @@ fi
 # shellcheck source=./docker_env.sh
 source "${ENV_FILE}"
 
-# 验证必要环境变量
+# 验证必要环境变量（所有动作都需要）
 : "${NODES_FILE:?环境变量 NODES_FILE 未设置}"
 : "${CONTAINER_NAME:?环境变量 CONTAINER_NAME 未设置}"
 : "${IMAGE_NAME:?环境变量 IMAGE_NAME 未设置}"
-: "${IMAGE_TAR:?环境变量 IMAGE_TAR 未设置}"
-: "${RUN_CONTAINER_SCRIPT:?环境变量 RUN_CONTAINER_SCRIPT 未设置}"
 
 # ------------------------------------------
 # 前置依赖检查
@@ -91,7 +111,9 @@ if [[ ! -f "$NODES_FILE" ]]; then
     exit "$E_NOT_FOUND"
 fi
 
-if [[ "$ACTION" != "stop" ]]; then
+if [[ "$ACTION" != "stop" && "$ACTION" != "status" ]]; then
+    : "${IMAGE_TAR:?环境变量 IMAGE_TAR 未设置}"
+    : "${RUN_CONTAINER_SCRIPT:?环境变量 RUN_CONTAINER_SCRIPT 未设置}"
     if [[ ! -f "$IMAGE_TAR" ]]; then
         log_err "镜像文件未找到: $IMAGE_TAR"
         exit "$E_NOT_FOUND"
@@ -118,19 +140,26 @@ _remote_ensure_docker_running() {
     echo "[INFO] Docker service not running, attempting to start..."
     systemctl daemon-reload || true
     systemctl start docker
-    sleep 2
-    if ! docker info >/dev/null 2>&1; then
-        echo "[ERROR] Failed to start docker service" >&2
-        return 1
-    fi
+    # 重试等待 Docker 就绪（最多 30 秒，每 2 秒检查一次）
+    local attempt=1 max_attempts=15
+    while [[ $attempt -le $max_attempts ]]; do
+        if docker info >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    echo "[ERROR] Failed to start docker service after ${max_attempts} attempts" >&2
+    return 1
 }
 
 _remote_cleanup_containers() {
     local container_name="${1:-}"
     if [[ -n "$container_name" ]]; then
         if docker ps -aq -f "name=^/${container_name}$" | grep -q .; then
-            echo "[INFO] Removing existing container: ${container_name}"
-            docker rm -f "${container_name}" 2>/dev/null || true
+            echo "[INFO] Stopping existing container: ${container_name}"
+            docker stop -t 10 "${container_name}" 2>/dev/null || true
+            docker rm "${container_name}" 2>/dev/null || true
         fi
     else
         echo "[INFO] Stopping and removing all existing containers..."
@@ -138,7 +167,7 @@ _remote_cleanup_containers() {
         containers="$(docker ps -aq 2>/dev/null)"
         [[ -z "$containers" ]] && return 0
         echo "$containers" | xargs docker stop -t 10 2>/dev/null || true
-        echo "$containers" | xargs docker rm -f 2>/dev/null || true
+        echo "$containers" | xargs docker rm 2>/dev/null || true
     fi
 }
 
@@ -150,6 +179,18 @@ _remote_load_and_run() {
             echo "[ERROR] Image tar not found: ${image_tar}" >&2
             return 2
         fi
+        # 校验镜像 tar 完整性（若存在 .sha256 校验文件）
+        local sha256_file="${image_tar}.sha256"
+        if [[ -f "${sha256_file}" ]]; then
+            echo "[INFO] Verifying image tar checksum..."
+            if ! sha256sum -c "${sha256_file}" --status 2>/dev/null; then
+                echo "[ERROR] Image tar checksum mismatch: ${image_tar}" >&2
+                echo "  期望: $(cat "${sha256_file}")" >&2
+                echo "  实际: $(sha256sum "${image_tar}" | awk '{print $1}')" >&2
+                return 2
+            fi
+            echo "[INFO] Checksum verified"
+        fi
         echo "[INFO] Loading image from ${image_tar}..."
         docker load -i "${image_tar}"
         echo "[INFO] Image loaded successfully"
@@ -157,22 +198,41 @@ _remote_load_and_run() {
         echo "[INFO] Image already exists: ${image_name}"
     fi
 
-    _remote_cleanup_containers "${container_name}"
-
     if [[ ! -f "${run_container_script}" ]]; then
         echo "[ERROR] Run script not found: ${run_container_script}" >&2
         return 2
     fi
 
-    echo "[INFO] Starting container: ${container_name}"
-    IMAGE_NAME="${image_name}" CONTAINER_NAME="${container_name}" bash "${run_container_script}" --daemon
+    _remote_cleanup_containers "${container_name}"
 
-    sleep 1
-    if docker ps --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null; then
+    echo "[INFO] Starting container: ${container_name}"
+    # CONTAINER_RUN_EXTRA_ARGS 经分词传递多个 flag（如 --daemon），有意不加引号
+    # shellcheck disable=SC2086
+    IMAGE_NAME="${image_name}" CONTAINER_NAME="${container_name}" bash "${run_container_script}" ${CONTAINER_RUN_EXTRA_ARGS}
+
+    # 使用 docker inspect 验证容器状态（比 sleep + docker ps 更可靠，无竞态）
+    if docker inspect -f '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -q "true"; then
         echo "[INFO] Container ready: ${container_name}"
+        echo "  进入容器: docker exec -it ${container_name} bash"
+        echo "  查看日志: docker logs ${container_name}"
+        echo "  停止容器: docker stop ${container_name} && docker rm ${container_name}"
     else
         echo "[ERROR] Failed to start container: ${container_name}" >&2
         docker logs "${container_name}" 2>&1 | tail -10 || true
+        return 1
+    fi
+}
+
+_remote_check_status() {
+    local container_name="${1:-}"
+    echo "=== 容器状态: ${container_name} ==="
+    if docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null; then
+        echo "  镜像:   $(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)"
+        echo "  PID:    $(docker inspect -f '{{.State.Pid}}' "$container_name" 2>/dev/null)"
+        echo "  启动:   $(docker inspect -f '{{.State.StartedAt}}' "$container_name" 2>/dev/null)"
+        echo "  运行中: $(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null)"
+    else
+        echo "  容器 '${container_name}' 不存在"
         return 1
     fi
 }
@@ -200,7 +260,52 @@ _remote_prepare_node() {
 }
 
 # ------------------------------------------
-# 主控: 节点调度
+# status 动作: 查询集群各节点容器状态
+# ------------------------------------------
+if [[ "$ACTION" == "status" ]]; then
+    nodes="$(read_nodes "$NODES_FILE")"
+    if [[ -z "$nodes" ]]; then
+        log_err "NODES_FILE 中未找到任何节点信息"
+        exit "$E_NOT_FOUND"
+    fi
+    mapfile -t NODE_ARRAY <<< "$nodes"
+    NODE_COUNT=${#NODE_ARRAY[@]}
+
+    log_info "============================================"
+    log_info " 容器: ${CONTAINER_NAME}"
+    log_info " 动作: status"
+    log_info " 节点数: ${NODE_COUNT}"
+    log_info "============================================"
+    log_info ""
+
+    check_node_status() {
+        local node="$1"
+        local func_code call_code b64
+        func_code="$(declare -f _remote_check_status)"
+        printf -v call_code '_remote_check_status %q' "${CONTAINER_NAME}"
+        b64="$(printf '%s\n%s\n' "${func_code}" "${call_code}" | base64 | tr -d '\n')"
+
+        if ! ssh_run_timeout 30 "$node" "echo '${b64}' | base64 -d | bash -l"; then
+            echo "[${node}] SSH 连接失败或超时"
+            return 1
+        fi
+    }
+
+    for node in "${NODE_ARRAY[@]}"; do
+        limit_jobs "$MAX_PARALLEL"
+        echo ""
+        log_info "[${node}] 查询中..."
+        check_node_status "$node" &
+    done
+    wait
+
+    log_info ""
+    log_info "=== 状态查询完成 ==="
+    exit 0
+fi
+
+# ------------------------------------------
+# 主控: 节点调度 (start/stop/restart)
 # ------------------------------------------
 
 prepare_node() {
@@ -214,8 +319,8 @@ prepare_node() {
         "${IMAGE_NAME}" "${IMAGE_TAR}" "${RUN_CONTAINER_SCRIPT}" "${CONTAINER_NAME}" "${ACTION}"
     b64="$(printf '%s\n%s\n' "${func_code}" "${call_code}" | base64 | tr -d '\n')"
 
-    if ! ssh_run "$node" "echo '${b64}' | base64 -d | bash -l"; then
-        log_err "[${node}] 环境准备失败"
+    if ! ssh_run_timeout "$SSH_TIMEOUT" "$node" "echo '${b64}' | base64 -d | bash -l"; then
+        log_err "[${node}] 环境准备失败（超时或执行错误）"
         return 1
     fi
     log_info "[${node}] 环境准备完成"
