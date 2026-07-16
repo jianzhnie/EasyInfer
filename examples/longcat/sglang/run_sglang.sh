@@ -11,6 +11,8 @@
 # 用法:
 #   bash run_sglang.sh                    # 部署并启动 SGLang 服务
 #   bash run_sglang.sh --stop             # 停止所有节点的 SGLang 服务
+#   bash run_sglang.sh --status           # 查看各节点服务状态
+#   bash run_sglang.sh --logs [N]         # 查看主节点日志 (N=行数, 默认 50)
 #   MODEL_PATH=/path/to/model bash run_sglang.sh
 #   NODES_FILE=/path/to/nodes.txt TP_SIZE=32 bash run_sglang.sh
 #   SGLANG_EXTRA_ARGS="--log-level debug" bash run_sglang.sh
@@ -71,6 +73,11 @@ WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-9000}"
 SGLANG_PYTHONPATH="${SGLANG_PYTHONPATH:-/home/jianzhnie/llmtuner/llm/sglang/python}"
 SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
+# ─── 日志 ──────────────────────────────────────────────────────────────────
+# 统一日志路径: 容器内与 host 一致，使用 /tmp 避免权限问题
+SGLANG_LOG_DIR="${SGLANG_LOG_DIR:-EASYINFER_ROOT}"
+SGLANG_LOG_FILE="${SGLANG_LOG_DIR}/sglang_$(basename "${SERVED_MODEL_NAME}").log"
+
 # ─── 网络接口 (export 给 HCCL/GLOO) ────────────────────────────────────────
 export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
@@ -92,6 +99,9 @@ Options:
   -f, --file <FILE>         节点列表文件路径
   -m, --model-path <PATH>   模型路径
   --stop                    停止所有节点的 SGLang 服务
+  --status                  查看各节点服务运行状态
+  --logs [N]                查看主节点日志 (默认最后 50 行)
+  --restart                 先停止再启动服务
 
 环境变量:
   NODES_FILE, MODEL_PATH, CONTAINER_NAME
@@ -108,6 +118,7 @@ USAGE
 # ════════════════════════════════════════════════════════════════════════════
 parse_args() {
     ACTION="start"
+    LOG_LINES=50
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -119,6 +130,15 @@ parse_args() {
                 MODEL_PATH="${2:?错误: $1 需要一个参数}"
                 shift 2 ;;
             --stop) ACTION="stop"; shift ;;
+            --status) ACTION="status"; shift ;;
+            --logs)
+                if [[ -n "${2:-}" && "$2" != -* ]]; then
+                    LOG_LINES="$2"
+                    shift 2
+                else
+                    LOG_LINES=50; shift
+                fi ;;
+            --restart) ACTION="restart"; shift ;;
             *) log_err "未知参数: $1"; usage; exit 2 ;;
         esac
     done
@@ -168,13 +188,13 @@ remote_exec_script() {
         "docker exec -d -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
 }
 
-# 通过 SSH 在容器内执行简单命令
+# 通过 SSH 在容器内执行简单命令 (返回输出)
 remote_exec_cmd() {
     local node="$1" cmd="$2"
 
     # shellcheck disable=SC2086,SC2029
     ssh ${SSH_OPTS} "$node" \
-        "docker exec '${CONTAINER_NAME}' bash -c '${cmd}'"
+        "docker exec '${CONTAINER_NAME}' bash -c \"$cmd\""
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -261,7 +281,7 @@ log_info " 节点数:         ${NNODES}"
 log_info " TP 大小:        ${TP_SIZE}"
 log_info " 主节点地址:     ${master_addr}"
 log_info " 服务地址:       ${SERVER_HOST}:${SERVER_PORT}"
-log_info " 当前节点 Rank:  ${node_rank}"
+log_info " 当前节点 Rank:  ${node_rank}/$((NNODES - 1))"
 log_info "============================================"
 
 log_info "Starting SGLang server..."
@@ -285,12 +305,12 @@ nohup python -m sglang.launch_server \
     --watchdog-timeout     "${WATCHDOG_TIMEOUT}" \
     --prefill-round-robin-balance \
     --moe-a2a-backend     deepep \
-    ${SGLANG_EXTRA_ARGS:-} \
     --deepep-mode         auto \
-    > ${EASYINFER_ROOT}/sglang.log 2>&1 &
+    ${SGLANG_EXTRA_ARGS:-} \
+    > "${SGLANG_LOG_FILE}" 2>&1 &
 
 log_info "SGLang server started in background (PID: \$!)"
-log_info "模型加载通常需要 10-20 分钟，查看进度: tail -f ${EASYINFER_ROOT}/sglang.log"
+log_info "模型加载通常需要 10-20 分钟，查看进度: tail -f ${SGLANG_LOG_FILE}"
 FRAG_LAUNCH
 }
 
@@ -320,13 +340,51 @@ stop_service() {
     log_info " 停止 SGLang 服务"
     log_info "============================================"
 
+    local node
     for node in "${NODES[@]}"; do
         log_info "停止 ${node} ..."
+        # 使用双引号包裹命令，避免单引号嵌套问题
         remote_exec_cmd "$node" \
-            'pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null' 2>/dev/null || true
+            "pkill -f sglang.launch_server 2>/dev/null; sleep 2; pkill -9 -f sglang.launch_server 2>/dev/null || true" \
+            2>/dev/null || true
     done
 
     log_info "所有节点的 SGLang 服务已停止"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 操作: 查看状态
+# ════════════════════════════════════════════════════════════════════════════
+show_status() {
+    log_info "============================================"
+    log_info " SGLang 服务状态"
+    log_info "============================================"
+
+    local node
+    for node in "${NODES[@]}"; do
+        local pid_count
+        pid_count=$(remote_exec_cmd "$node" \
+            "ps aux | grep sglang.launch_server | grep -v grep | wc -l" 2>/dev/null || echo "0")
+        if [[ "$pid_count" -gt 0 ]]; then
+            log_info "  ${node}: 运行中 (${pid_count} 个进程)"
+        else
+            log_warn "  ${node}: 未运行"
+        fi
+    done
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 操作: 查看日志
+# ════════════════════════════════════════════════════════════════════════════
+show_logs() {
+    local lines="${1:-50}"
+    log_info "============================================"
+    log_info " 主节点日志 (最后 ${lines} 行)"
+    log_info " 文件: ${SGLANG_LOG_FILE}"
+    log_info "============================================"
+
+    remote_exec_cmd "$MASTER_NODE" \
+        "tail -n ${lines} '${SGLANG_LOG_FILE}' 2>/dev/null || echo '日志文件不存在'"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -343,13 +401,14 @@ deploy_service() {
     log_info " TP 大小:        ${TP_SIZE}"
     log_info " 服务端口:       ${SERVER_PORT}"
     log_info " 容器名称:       ${CONTAINER_NAME}"
+    log_info " 日志文件:       ${SGLANG_LOG_FILE}"
     log_info "============================================"
 
     # 逐节点启动 (rank 0 必须先就绪, torch.distributed 要求)
     local node launch_cmd
     for i in "${!NODES[@]}"; do
         node="${NODES[$i]}"
-        log_info "在 ${node} 上启动 SGLang (rank ${i}/${NNODES})..."
+        log_info "在 ${node} 上启动 SGLang (rank ${i}/$((NNODES - 1)))..."
 
         launch_cmd=$(build_launch_cmd "$i")
         if ! remote_exec_script "$node" "$launch_cmd"; then
@@ -370,7 +429,17 @@ deploy_service() {
     log_info " 主节点:   ${MASTER_NODE}:${SERVER_PORT}"
     log_info " 健康检查: http://${MASTER_NODE}:${SERVER_PORT}/health"
     log_info " 模型列表: http://${MASTER_NODE}:${SERVER_PORT}/v1/models"
+    log_info " 查看日志: bash run_sglang.sh --logs"
     log_info "============================================"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 操作: 重启服务
+# ════════════════════════════════════════════════════════════════════════════
+restart_service() {
+    stop_service
+    sleep 3
+    deploy_service
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -381,8 +450,11 @@ main() {
     validate_config
 
     case "$ACTION" in
-        start) deploy_service ;;
-        stop)  stop_service  ;;
+        start)   deploy_service ;;
+        stop)    stop_service   ;;
+        status)  show_status    ;;
+        logs)    show_logs "$LOG_LINES" ;;
+        restart) restart_service ;;
     esac
 }
 
