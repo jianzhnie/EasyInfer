@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================
 # Docker 容器集群管理脚本（并行版）
-# 用于在集群节点上管理 Docker 容器环境 (start/stop/restart)
+# 用于在集群节点上管理 Docker 容器环境 (start/stop/restart/status)
 # ==========================================
 
 # 注意: 顶层不设 set -e，因为本脚本使用后台并行任务模型（& + wait），
@@ -20,16 +20,17 @@ source "${SCRIPT_DIR}/../common.sh"
 usage() {
     cat <<'USAGE'
 Usage:
-  bash manage_docker_containers.sh [start|stop|restart] [OPTIONS]
+  bash manage_docker_containers.sh [start|stop|restart|status] [OPTIONS]
 
 操作:
   start     确保 Docker 可用，加载镜像并启动容器（默认）
   stop      仅停止并清理旧容器，不启动新容器
   restart   停止并清理旧容器，加载镜像并启动新容器
+  status    查询集群中各节点容器的运行状态
 
 Options:
   -h, --help            显示帮助信息
-  -f, --file <FILE>     节点列表文件路径（必传）
+  -f, --file <FILE>     节点列表文件路径（默认: 项目根目录 node_list.txt）
   -j, --jobs <N>        并行度（默认: 8，可通过 PARALLELISM 环境变量设置）
   -r, --retries <N>     失败重试次数（默认: 1）
   --image <IMAGE>       容器镜像（覆盖 docker_env.sh 中的 IMAGE_NAME）
@@ -96,6 +97,13 @@ fi
 # shellcheck source=./docker_env.sh
 source "${ENV_FILE}"
 
+# 设置默认节点列表（可通过 -f/--file 或 NODES_FILE 环境变量覆盖）
+_set_default_nodes_file() {
+    [[ -n "${NODES_FILE:-}" ]] && return 0
+    NODES_FILE="${SCRIPTS_ROOT}/../node_list.txt"
+}
+_set_default_nodes_file
+
 # 验证必要环境变量（所有动作都需要）
 : "${NODES_FILE:?环境变量 NODES_FILE 未设置}"
 : "${CONTAINER_NAME:?环境变量 CONTAINER_NAME 未设置}"
@@ -139,7 +147,7 @@ _remote_ensure_docker_running() {
     fi
     echo "[INFO] Docker service not running, attempting to start..."
     systemctl daemon-reload || true
-    systemctl start docker
+    systemctl start docker || true
     # 重试等待 Docker 就绪（最多 30 秒，每 2 秒检查一次）
     local attempt=1 max_attempts=15
     while [[ $attempt -le $max_attempts ]]; do
@@ -224,16 +232,22 @@ _remote_load_and_run() {
 }
 
 _remote_check_status() {
-    local container_name="${1:-}"
-    echo "=== 容器状态: ${container_name} ==="
-    if docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null; then
-        echo "  镜像:   $(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)"
-        echo "  PID:    $(docker inspect -f '{{.State.Pid}}' "$container_name" 2>/dev/null)"
-        echo "  启动:   $(docker inspect -f '{{.State.StartedAt}}' "$container_name" 2>/dev/null)"
-        echo "  运行中: $(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null)"
+    local node="${1:-}" container_name="${2:-}"
+    local info
+    info=$(docker inspect --format '{{.State.Status}}|{{.Config.Image}}|{{.State.Pid}}|{{.State.StartedAt}}|{{.State.Running}}' "$container_name" 2>/dev/null)
+    if [[ -n "$info" ]]; then
+        IFS='|' read -r status image pid started running <<< "$info"
+        echo "  节点:     ${node}"
+        echo "  容器名称: ${container_name}"
+        echo "  状态:     ${status}"
+        echo "  镜像:     ${image}"
+        echo "  PID:      ${pid}"
+        echo "  启动:     ${started}"
+        echo "  运行中:   ${running}"
     else
-        echo "  容器 '${container_name}' 不存在"
-        return 1
+        echo "  节点:     ${node}"
+        echo "  容器名称: ${container_name}"
+        echo "  状态:     不存在"
     fi
 }
 
@@ -270,6 +284,8 @@ if [[ "$ACTION" == "status" ]]; then
     fi
     mapfile -t NODE_ARRAY <<< "$nodes"
     NODE_COUNT=${#NODE_ARRAY[@]}
+    MAX_PARALLEL="${PARALLELISM:-8}"
+    START_TIME=$(date +%s)
 
     log_info "============================================"
     log_info " 容器: ${CONTAINER_NAME}"
@@ -278,29 +294,71 @@ if [[ "$ACTION" == "status" ]]; then
     log_info "============================================"
     log_info ""
 
+    STATUS_DIR=$(mktemp -d "/tmp/docker_status.XXXXXX")
+    trap 'rm -rf "$STATUS_DIR"' EXIT INT TERM
+
     check_node_status() {
         local node="$1"
+        local outfile="${STATUS_DIR}/${node}"
         local func_code call_code b64
         func_code="$(declare -f _remote_check_status)"
-        printf -v call_code '_remote_check_status %q' "${CONTAINER_NAME}"
+        printf -v call_code '_remote_check_status %q %q' "${node}" "${CONTAINER_NAME}"
         b64="$(printf '%s\n%s\n' "${func_code}" "${call_code}" | base64 | tr -d '\n')"
 
-        if ! ssh_run_timeout 30 "$node" "echo '${b64}' | base64 -d | bash -l"; then
-            echo "[${node}] SSH 连接失败或超时"
-            return 1
+        if ! ssh_run_timeout 30 "$node" "echo '${b64}' | base64 -d | bash -l" > "$outfile" 2>&1; then
+            echo "  节点:     ${node}" > "$outfile"
+            echo "  容器名称: ${CONTAINER_NAME}" >> "$outfile"
+            echo "  状态:     SSH 连接失败或超时" >> "$outfile"
         fi
     }
 
     for node in "${NODE_ARRAY[@]}"; do
         limit_jobs "$MAX_PARALLEL"
-        echo ""
-        log_info "[${node}] 查询中..."
         check_node_status "$node" &
     done
     wait
 
-    log_info ""
-    log_info "=== 状态查询完成 ==="
+    # 按节点顺序打印结果，避免并行输出交错
+    for node in "${NODE_ARRAY[@]}"; do
+        outfile="${STATUS_DIR}/${node}"
+        echo "----------------------------------------"
+        if [[ -f "$outfile" ]]; then
+            cat "$outfile"
+            echo ""
+        else
+            echo "  节点:     ${node}"
+            echo "  状态:     SSH 连接失败"
+            echo ""
+        fi
+    done
+
+    # 结果汇总
+    END_TIME=$(date +%s)
+    ELAPSED=$((END_TIME - START_TIME))
+    ELAPSED_MIN=$((ELAPSED / 60))
+    ELAPSED_SEC=$((ELAPSED % 60))
+
+    running=0 missing=0 error=0
+    for node in "${NODE_ARRAY[@]}"; do
+        outfile="${STATUS_DIR}/${node}"
+        if [[ -f "$outfile" ]]; then
+            if grep -q '运行中:   true' "$outfile" 2>/dev/null; then
+                running=$((running + 1))
+            elif grep -q '状态:     不存在' "$outfile" 2>/dev/null; then
+                missing=$((missing + 1))
+            else
+                error=$((error + 1))
+            fi
+        else
+            error=$((error + 1))
+        fi
+    done
+
+    rm -rf "$STATUS_DIR"
+    trap - EXIT INT TERM
+    log_info "=== 执行结果汇总 (耗时: ${ELAPSED_MIN}m${ELAPSED_SEC}s) ==="
+    log_info "运行中: ${running}/${NODE_COUNT}  缺失: ${missing}/${NODE_COUNT}  错误: ${error}/${NODE_COUNT}"
+    log_info "=== status 完成 ==="
     exit 0
 fi
 
@@ -342,7 +400,7 @@ MAX_PARALLEL="${PARALLELISM:-8}"
 LOG_DIR=$(mktemp -d "/tmp/docker_deploy.XXXXXX")
 
 if [[ "$KEEP_LOGS" -eq 0 ]]; then
-    trap 'rm -rf "$LOG_DIR"' EXIT
+    trap 'rm -rf "$LOG_DIR"' EXIT INT TERM
 fi
 
 START_TIME=$(date +%s)
@@ -350,6 +408,7 @@ START_TIME=$(date +%s)
 log_info "============================================"
 log_info " 容器: ${CONTAINER_NAME}"
 log_info " 镜像: ${IMAGE_NAME}"
+log_info " 镜像包: ${IMAGE_TAR}"
 log_info " 动作: ${ACTION}"
 log_info " 节点数: ${NODE_COUNT}"
 log_info " 并行度: ${MAX_PARALLEL}"
@@ -357,7 +416,7 @@ log_info " 重试次数: ${RETRIES}"
 log_info " 日志目录: ${LOG_DIR}"
 log_info "============================================"
 log_info ""
-log_info "=== 开始并行准备节点 ==="
+log_info "=== 开始并行执行: ${ACTION} ==="
 
 run_node_with_retry() {
     local node="$1"
@@ -408,10 +467,10 @@ for node in "${NODE_ARRAY[@]}"; do
     rc=1
     [[ -f "$rc_file" ]] && rc=$(cat "$rc_file")
     if [[ "$rc" -eq 0 ]]; then
-        log_info "[${node}] ✓ 成功"
+        log_info "[${node}] ✓ ${ACTION} 成功"
         succeeded=$((succeeded + 1))
     else
-        log_err "[${node}] ✗ 失败"
+        log_err "[${node}] ✗ ${ACTION} 失败"
         failed=$((failed + 1))
         FAILED_NODES+=("$node")
         if [[ -f "$logfile" ]]; then
@@ -428,8 +487,8 @@ if [[ "$failed" -gt 0 ]]; then
     log_err "失败节点: ${FAILED_NODES[*]}"
     log_err "日志目录: ${LOG_DIR}"
     KEEP_LOGS=1
-    trap - EXIT
+    trap - EXIT INT TERM
     exit 1
 fi
 
-log_info "=== 所有节点准备完成 ==="
+log_info "=== ${ACTION} 完成 ==="

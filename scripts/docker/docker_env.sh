@@ -28,9 +28,7 @@ export PARALLELISM="${PARALLELISM:-8}"
 # ------------------------------------------
 
 # 注意: IMAGE_DIR 默认值依赖 $HOME，请按实际环境覆盖:
-#   IMAGE_DIR=/your/image/dir source docker_env.sh
-#   export IMAGE_DIR=/your/image/dir  # 或在调用前设置环境变量
-export IMAGE_DIR="${IMAGE_DIR:-${HOME}/llmtuner/hfhub/docker/image}"
+export IMAGE_DIR="${IMAGE_DIR:-/home/jianzhnie/llmtuner/hfhub/docker/image}"
 
 # --- vLLM-Ascend 镜像配置（当前生效）---
 export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.22.1rc1-a3}"

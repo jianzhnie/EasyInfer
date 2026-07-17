@@ -15,18 +15,25 @@ import os
 import sys
 import argparse
 import time
-import textwrap
-from openai import OpenAI
+
+# 本地 API 不走代理，避免 httpx 通过代理连接 localhost 导致超时
+for _env in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+             "ALL_PROXY", "all_proxy", "SOCKS_PROXY", "socks_proxy"):
+    os.environ.pop(_env, None)
+
+from openai import OpenAI  # noqa: E402 — 必须在代理清理之后导入
 
 # ── 配置 ──────────────────────────────────────────────
 HOST         = os.environ.get("HOST", "localhost")
 PORT         = os.environ.get("PORT", "6677")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "longcat-flash")
 TIMEOUT      = int(os.environ.get("TIMEOUT", "300"))
+TEMPERATURE  = float(os.environ.get("TEMPERATURE", "0.5"))
+MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "1024"))
 WAIT_INTERVAL = int(os.environ.get("WAIT_INTERVAL", "5"))
 BASE_URL     = f"http://{HOST}:{PORT}"
 
-SYSTEM_PROMPT = "你是一个有帮助的 AI 助手。请用简洁清晰的中文回答问题。"
+SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", "")
 
 # ── 客户端 ────────────────────────────────────────────
 client = OpenAI(
@@ -34,13 +41,6 @@ client = OpenAI(
     api_key="not-needed",
     timeout=TIMEOUT,
 )
-
-
-def term_width(default: int = 80) -> int:
-    try:
-        return os.get_terminal_size().columns
-    except (OSError, ValueError):
-        return default
 
 
 def wait_for_server() -> bool:
@@ -78,25 +78,31 @@ def print_banner() -> None:
   ├──────────────────────────────────────────────┤
   │  /exit         退出                          │
   │  /clear        清空对话历史                  │
-  │  /system <msg> 修改系统提示词                │
+  │  /system <msg> 修改/清空系统提示词             │
+  │  /temp <val>   修改采样温度                  │
   │  /info         查看当前配置                  │
   │  Ctrl+C        退出                          │
   └──────────────────────────────────────────────┘
 """)
 
 
-def do_chat(messages: list[dict], stream: bool = True) -> str:
+def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOKENS,
+            temperature: float = TEMPERATURE) -> str:
     """发送请求，返回模型回复文本。"""
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
         stream=stream,
-        temperature=0.7,
-        max_tokens=4096,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
 
     if not stream:
+        if not response.choices:
+            print("[ERROR] API 返回空响应")
+            return ""
         content = response.choices[0].message.content or ""
+        print(content)
         usage = response.usage
         if usage:
             print(f"\n[Tokens: prompt={usage.prompt_tokens} completion={usage.completion_tokens}]")
@@ -104,16 +110,17 @@ def do_chat(messages: list[dict], stream: bool = True) -> str:
 
     full_response = ""
     for chunk in response:
-        if chunk.choices and chunk.choices[0].delta.content:
-            token = chunk.choices[0].delta.content
-            print(token, end="", flush=True)
-            full_response += token
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            print(delta.content, end="", flush=True)
+            full_response += delta.content
     print()
     return full_response
 
 
 # ── 单次提问模式 ──────────────────────────────────────
-def run_single(prompt: str, stream: bool = True) -> None:
+def run_single(prompt: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
+               temperature: float = TEMPERATURE) -> None:
     """单次提问，输出结果后退出。"""
     if not wait_for_server():
         print(f"[ERROR] 无法连接到 {BASE_URL}")
@@ -121,24 +128,25 @@ def run_single(prompt: str, stream: bool = True) -> None:
 
     messages = [{"role": "user", "content": prompt}]
     try:
-        do_chat(messages, stream=stream)
+        do_chat(messages, stream=stream, max_tokens=max_tokens, temperature=temperature)
     except Exception as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
 
 # ── 管道模式 ──────────────────────────────────────────
-def run_pipe(stream: bool = True) -> None:
+def run_pipe(stream: bool = True, max_tokens: int = MAX_TOKENS,
+             temperature: float = TEMPERATURE) -> None:
     """从 stdin 读取内容，单次提问后退出。"""
     stdin_content = sys.stdin.read().strip()
     if not stdin_content:
         print("[ERROR] stdin 为空")
         sys.exit(1)
-    run_single(stdin_content, stream=stream)
+    run_single(stdin_content, stream=stream, max_tokens=max_tokens, temperature=temperature)
 
 
 # ── 交互模式 ──────────────────────────────────────────
-def run_interactive() -> None:
+def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKENS) -> None:
     """交互式 REPL。"""
     print_banner()
 
@@ -150,7 +158,9 @@ def run_interactive() -> None:
     print("[INFO] 服务器连接成功 ✓\n")
 
     system_prompt = SYSTEM_PROMPT
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
 
     try:
         while True:
@@ -168,23 +178,45 @@ def run_interactive() -> None:
                 print("[INFO] 再见！")
                 break
             elif user_input == "/clear":
-                messages = [{"role": "system", "content": system_prompt}]
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
                 print("[INFO] 对话历史已清空")
                 continue
             elif user_input == "/info":
-                print(f"  Model    : {MODEL_NAME}")
-                print(f"  URL      : {BASE_URL}")
-                print(f"  历史消息  : {len(messages)} 条 (含 system prompt)")
-                print(f"  System   : {system_prompt[:60]}{'...' if len(system_prompt) > 60 else ''}")
+                print(f"  Model       : {MODEL_NAME}")
+                print(f"  URL         : {BASE_URL}")
+                print(f"  Temperature : {temperature}")
+                print(f"  Max Tokens  : {max_tokens}")
+                print(f"  历史消息     : {len(messages)} 条" + (" (含 system prompt)" if system_prompt else ""))
+                print(f"  System      : {system_prompt if system_prompt else '(未设置)'}")
                 continue
             elif user_input.startswith("/system"):
                 new_prompt = user_input[len("/system"):].strip()
                 if new_prompt:
                     system_prompt = new_prompt
-                    messages[0] = {"role": "system", "content": system_prompt}
+                    if messages and messages[0]["role"] == "system":
+                        messages[0] = {"role": "system", "content": system_prompt}
+                    else:
+                        messages.insert(0, {"role": "system", "content": system_prompt})
                     print(f"[INFO] 系统提示词已更新")
                 else:
-                    print(f"[INFO] 当前系统提示词: {system_prompt}")
+                    # 清空 system prompt
+                    if messages and messages[0]["role"] == "system":
+                        messages.pop(0)
+                    system_prompt = ""
+                    print(f"[INFO] 系统提示词已清空")
+                continue
+            elif user_input.startswith("/temp"):
+                val = user_input[len("/temp"):].strip()
+                if val:
+                    try:
+                        temperature = float(val)
+                        print(f"[INFO] Temperature 已更新为 {temperature}")
+                    except ValueError:
+                        print(f"[ERROR] 无效值: {val}")
+                else:
+                    print(f"[INFO] 当前 Temperature: {temperature}")
                 continue
 
             # ── 调用模型 ────────────────────────────
@@ -192,7 +224,8 @@ def run_interactive() -> None:
             print("\033[1;32mBot › \033[0m", end="", flush=True)
 
             try:
-                full_response = do_chat(messages, stream=True)
+                full_response = do_chat(messages, stream=True, max_tokens=max_tokens,
+                                        temperature=temperature)
                 messages.append({"role": "assistant", "content": full_response})
             except Exception as e:
                 print(f"\n[ERROR] {e}")
@@ -215,28 +248,24 @@ def main() -> None:
   echo "你好" | %(prog)s --pipe     管道输入模式
 
 环境变量:
-  HOST, PORT, MODEL_NAME, TIMEOUT, WAIT_INTERVAL
+  HOST, PORT, MODEL_NAME, TIMEOUT, TEMPERATURE, MAX_TOKENS, WAIT_INTERVAL, SYSTEM_PROMPT
         """,
     )
     parser.add_argument("-p", "--prompt", type=str, default=None, help="单次提问内容")
     parser.add_argument("--pipe", action="store_true", help="从 stdin 读取提问内容")
     parser.add_argument("--no-stream", action="store_true", dest="no_stream", help="禁用流式输出")
+    parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS, help=f"最大输出 token 数 (默认: {MAX_TOKENS})")
+    parser.add_argument("--temperature", type=float, default=TEMPERATURE, help=f"采样温度，越高越随机 (默认: {TEMPERATURE})")
 
     args = parser.parse_args()
 
-    # 依赖检查
-    try:
-        import openai  # noqa: F811
-    except ImportError:
-        print("[ERROR] 请先安装 openai: pip install openai")
-        sys.exit(1)
-
     if args.pipe:
-        run_pipe(stream=not args.no_stream)
+        run_pipe(stream=not args.no_stream, max_tokens=args.max_tokens, temperature=args.temperature)
     elif args.prompt:
-        run_single(args.prompt, stream=not args.no_stream)
+        run_single(args.prompt, stream=not args.no_stream, max_tokens=args.max_tokens,
+                   temperature=args.temperature)
     else:
-        run_interactive()
+        run_interactive(temperature=args.temperature, max_tokens=args.max_tokens)
 
 
 if __name__ == "__main__":
