@@ -79,8 +79,11 @@ SGLANG_LOG_DIR="${SGLANG_LOG_DIR:-"${EASYINFER_ROOT}"}"
 SGLANG_LOG_FILE="${SGLANG_LOG_DIR}/sglang_$(basename "${SERVED_MODEL_NAME}").log"
 
 # ─── 网络接口 (export 给 HCCL/GLOO) ────────────────────────────────────────
-export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f0}"
-export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f0}"
+NIC_NAME="${NIC_NAME:-$(ip route | grep default | awk '{print $5}' | head -1)}"
+LOCAL_IP="${LOCAL_IP:-$(ip addr show "$NIC_NAME" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)}"
+export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-${NIC_NAME}}"
+export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-${NIC_NAME}}"
+export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-${NIC_NAME}}"
 
 # ─── SSH 选项 ──────────────────────────────────────────────────────────────
 # SC2086: 必须不分词以传递多个 SSH 选项
@@ -132,11 +135,12 @@ parse_args() {
             --stop) ACTION="stop"; shift ;;
             --status) ACTION="status"; shift ;;
             --logs)
+                ACTION="logs"
                 if [[ -n "${2:-}" && "$2" != -* ]]; then
                     LOG_LINES="$2"
                     shift 2
                 else
-                    LOG_LINES=50; shift
+                    shift
                 fi ;;
             --restart) ACTION="restart"; shift ;;
             *) log_err "未知参数: $1"; usage; exit 2 ;;
@@ -169,7 +173,7 @@ validate_config() {
     fi
 
     # SGLANG_EXTRA_ARGS 安全检查: 拒绝 shell 元字符，防止命令注入
-    if [[ -n "$SGLANG_EXTRA_ARGS" ]] && [[ "$SGLANG_EXTRA_ARGS" =~ [][\;\&\|\$\(\)\{\}\<\>\n\r] ]]; then
+    if [[ -n "$SGLANG_EXTRA_ARGS" ]] && [[ "$SGLANG_EXTRA_ARGS" =~ [][\;\&\|\$\(\)\{\}\<\>\n\r\`] ]]; then
         log_fatal "SGLANG_EXTRA_ARGS 包含不安全的 shell 元字符，仅允许字母数字、空格和 - _ . / : = ,"
     fi
 }
@@ -185,7 +189,7 @@ remote_exec_script() {
 
     # shellcheck disable=SC2086,SC2029
     ssh ${SSH_OPTS} "$node" \
-        "docker exec -d -i '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
+        "docker exec -d '${CONTAINER_NAME}' bash -c \"echo '${b64}' | base64 -d | bash\""
 }
 
 # 通过 SSH 在容器内执行简单命令 (返回输出)

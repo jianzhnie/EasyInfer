@@ -3,5 +3,5 @@ install_path=/usr/local/Ascend
 source $install_path/ascend-toolkit/set_env.sh
 source $install_path/nnal/atb/set_env.sh
 
-# llmtuner env
-source /llm_workspace_1P/robin/miniconda3/bin/activate llmtuner
+# llmeval env
+source /home/jianzhnie/llmtuner/software/miniconda3/bin/activate llmeval
