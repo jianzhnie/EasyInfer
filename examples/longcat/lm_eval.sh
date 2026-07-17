@@ -46,7 +46,7 @@ MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 # SGLang 服务地址
 API_HOST="${API_HOST:-localhost}"
 PORT="${PORT:-6677}"
-TASKS="${TASKS:-mmlu}"
+TASKS="${TASKS:-ceval-valid}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
 # max_model_len → 在 API 模式下映射为 max_length（上下文总长度，含 prompt + 生成）
