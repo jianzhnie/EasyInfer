@@ -22,7 +22,7 @@ check_container() {
     ssh_run "$host" "docker ps --format '{{.Names}}' | grep -qx '${CONTAINER_NAME}'" 2>/dev/null
 }
 
-# 在远程节点的容器内执行命令（通过 CONTAINER_NAME 指定容器, 与 start/stop_ray_cluster.sh 保持一致）
+# 在远程节点的容器内执行命令（通过 CONTAINER_NAME 指定容器, 与 manage_ray_cluster.sh 保持一致）
 node_exec() {
     local host=$1
     shift

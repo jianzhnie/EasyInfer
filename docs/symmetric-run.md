@@ -35,7 +35,7 @@ ray stop   # 每个节点都要执行
 节点3 (IP 不匹配)           →  Worker: 等待 head 就绪 → ray start --address --block → ray stop
 ```
 
-对比传统方式（`start_ray_cluster.sh` → 手动启动 vLLM → 逐个 `ray stop`），`symmetric-run` 省去了中间的 SSH 编排和生命周期管理。
+对比传统方式（`start_ray_cluster.sh` + `stop_ray_cluster.sh` → 手动启动 vLLM → 逐个 `ray stop`），`symmetric-run` 省去了中间的 SSH 编排和生命周期管理。
 
 ## 基本语法
 
@@ -231,7 +231,7 @@ export RAY_SYMMETRIC_RUN_CLUSTER_WAIT_TIMEOUT=120
 
 ## 与现有脚本的对比
 
-| | `start_ray_cluster.sh` | `deploy_vllm_multinode.sh` | `ray symmetric-run` |
+| | `manage_ray_cluster.sh` | `deploy_vllm_multinode.sh` | `ray symmetric-run` |
 |---|---|---|---|
 | Ray 管理 | 手动 start/stop | 无（各节点独立 DP） | 自动 start → run → stop |
 | vLLM 进程数 | 不启动 vLLM | 每个节点一个 | 仅 head 一个 |

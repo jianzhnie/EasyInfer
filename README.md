@@ -26,8 +26,7 @@ EasyInfer/
 │   │   └── run_npuslim_container.sh           #   NPUSlim 容器启动
 │   ├── ray_cluster/                           # Ray 集群管理
 │   │   ├── set_ray_env.sh                     #   Ray/Ascend 环境配置
-│   │   ├── start_ray_cluster.sh               #   启动 Ray 集群
-│   │   ├── stop_ray_cluster.sh                #   停止 Ray 集群
+│   │   ├── manage_ray_cluster.sh              #   启动 / 停止 Ray 集群
 │   │   ├── kill_multi_nodes.sh                #   多节点进程清理
 │   │   ├── ray_head.sh                        #   Ray Head 节点启动
 │   │   ├── ray_node.sh                        #   Ray Worker 节点启动
@@ -108,7 +107,7 @@ bash scripts/docker/copy_file_to_containers.sh -n node01 -n node02 ./file.txt /t
 ### 4. 启动 Ray 集群
 
 ```bash
-bash scripts/ray_cluster/start_ray_cluster.sh start
+bash scripts/ray_cluster/manage_ray_cluster.sh start
 ```
 
 ### 5. 启动 vLLM 服务
@@ -146,7 +145,7 @@ BASE_URL=http://10.0.0.1:9000 MODEL_NAME=qwen3-32b bash scripts/vllm/test/curl_t
 
 ```bash
 # 停止 Ray 集群
-bash scripts/ray_cluster/stop_ray_cluster.sh -y
+bash scripts/ray_cluster/manage_ray_cluster.sh stop -y
 
 # 清理多节点上的 ray/vllm 等进程
 bash scripts/ray_cluster/kill_multi_nodes.sh -y

@@ -17,16 +17,28 @@ SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPTS_ROOT}/common.sh"
 source "${SCRIPT_DIR}/set_ray_env.sh"
 
+# 配置
+KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
+PARALLELISM="${PARALLELISM:-16}"
+RAY_KEYWORDS="raylet|plasma_store|gcs_server|ray::|ray.worker|python.*ray|dashboard_agent|runtime_env_agent"
+
 # ------------------------------------------
 # 帮助信息
 # ------------------------------------------
 usage() {
     cat <<'USAGE'
 Usage:
-  bash start_ray_cluster.sh <start|stop> [OPTIONS]
+  bash manage_ray_cluster.sh <start|stop> [OPTIONS]
 
 Options:
   -f, --file <FILE>   节点列表文件路径
+  --on-host           在宿主机上停止 Ray（不进容器，仅 stop 有效）
+  --force             强制模式：立即停止并清理所有残余（仅 stop 有效）
+  -y, --yes           跳过确认步骤（仅 stop 有效）
+  -h, --help          显示帮助信息
+
+Environment Variables:
+  NODE_LIST, KILL_TIMEOUT, PARALLELISM, CONTAINER_NAME
 
 环境变量配置: scripts/ray_cluster/set_ray_env.sh
 USAGE
@@ -37,18 +49,30 @@ USAGE
 # 参数解析
 # ------------------------------------------
 ACTION=""
+ON_HOST=false
+FORCE=false
+SKIP_CONFIRM=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         start|stop)   ACTION="$1"; shift ;;
         --file|-f)
             [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; usage; }
             NODE_LIST="$2"; shift 2 ;;
+        --on-host)    ON_HOST=true; shift ;;
+        --force)      FORCE=true; shift ;;
+        -y|--yes)     SKIP_CONFIRM=true; export SKIP_CONFIRM; shift ;;
         --help|-h)    usage ;;
         *)            log_err "未知参数: $1"; usage ;;
     esac
 done
 
 [[ -n "$ACTION" ]] || { log_err "缺少操作 (start 或 stop)"; usage; }
+
+# stop 专用参数校验
+if [[ "$ACTION" == "start" ]]; then
+    $ON_HOST && { log_err "--on-host 仅适用于 stop 操作"; usage; }
+    $FORCE && { log_err "--force 仅适用于 stop 操作"; usage; }
+fi
 
 # ------------------------------------------
 # 临时目录 & 清理
@@ -77,6 +101,10 @@ remote_exec() {
         echo '${b64cmd}' | base64 -d | bash\""
 }
 
+# ------------------------------------------
+# start 相关函数
+# ------------------------------------------
+
 stop_ray_on_node() {
     remote_exec "$1" "ray stop -f 2>/dev/null || true" >/dev/null 2>&1 || true
 }
@@ -99,6 +127,92 @@ start_worker() {
 }
 
 # ------------------------------------------
+# stop 相关函数（合并自 stop_ray_cluster.sh）
+# ------------------------------------------
+
+_remote_stop_ray() {
+    local force="$1" kill_timeout="$2" pattern="$3"
+    set -euo pipefail
+
+    get_ray_pids() {
+        # shellcheck disable=SC2009
+        ps aux | grep -E "$pattern" | grep -v grep | awk '{print $2}' | sort -u | tr '\n' ' ' || true
+    }
+
+    kill_procs() {
+        local sig="$1" pids="$2"
+        [[ -n "$pids" ]] || return 0
+        # shellcheck disable=SC2086
+        for pid in $pids; do kill -"$sig" "$pid" 2>/dev/null || true; done
+    }
+
+    # 步骤1: 尝试 ray stop
+    if command -v ray >/dev/null 2>&1; then
+        [[ "$force" == "true" ]] && ray stop -f --grace-period 0 >/dev/null 2>&1 || ray stop -f >/dev/null 2>&1 || true
+    fi
+
+    # 步骤2: 终止 Ray 进程
+    local pids
+    pids=$(get_ray_pids)
+    [[ -n "$pids" ]] || { echo "未找到 Ray 进程"; return 0; }
+
+    echo "找到 Ray 进程: $pids"
+
+    if [[ "$force" == "true" ]]; then
+        echo "强制终止..."
+        kill_procs 9 "$pids"
+    else
+        echo "温和终止 (SIGTERM)..."
+        kill_procs 15 "$pids"
+        sleep "$kill_timeout"
+
+        local remaining
+        remaining=$(get_ray_pids)
+        if [[ -n "$remaining" ]]; then
+            echo "强制终止残余进程 (SIGKILL)..."
+            kill_procs 9 "$remaining"
+            sleep 0.5
+        fi
+    fi
+
+    # 最终检查
+    local final
+    final=$(get_ray_pids)
+    if [[ -n "$final" ]]; then
+        echo "警告: 仍有残余进程: $final"
+        return 1
+    fi
+    echo "Ray 进程清理完成"
+}
+
+# 停止单个节点（支持容器内/宿主机两种模式）
+stop_ray_node() {
+    local node="$1"
+    log_info "[${node}] 停止 Ray..."
+
+    local func call
+    func=$(declare -f _remote_stop_ray)
+    call="_remote_stop_ray '${FORCE}' '${KILL_TIMEOUT}' '${RAY_KEYWORDS}'"
+
+    if $ON_HOST; then
+        if echo "$func; $call" | ssh_run "$node" bash -s; then
+            log_info "[${node}] 已停止"
+        else
+            log_err "[${node}] 停止失败"
+        fi
+    else
+        # 加载环境文件后再执行 docker exec
+        local env_file="${SCRIPT_DIR}/set_ray_env.sh"
+        local cmd="[[ -f '${env_file}' ]] && source '${env_file}'; docker exec -i \"${CONTAINER_NAME}\" bash -s"
+        if echo "$func; $call" | ssh_run "$node" "$cmd"; then
+            log_info "[${node}] 已停止"
+        else
+            log_err "[${node}] 停止失败"
+        fi
+    fi
+}
+
+# ------------------------------------------
 # 主流程
 # ------------------------------------------
 
@@ -117,14 +231,24 @@ log_info "Workers:    ${WORKERS[*]:-无}"
 log_info "Container:  $CONTAINER_NAME"
 log_info "Ray Port:   $RAY_PORT"
 log_info "NPUs/Node:  $NPUS_PER_NODE"
+if [[ "$ACTION" == "stop" ]]; then
+    log_info "Mode:       $(if $ON_HOST; then echo '宿主机'; else echo '容器内'; fi)"
+    log_info "Force:      $FORCE"
+fi
 log_info "============================================="
 
 # --- stop ---
 if [[ "$ACTION" == "stop" ]]; then
+    # 确认
+    if ! confirm "将停止以上节点的 Ray 集群，是否继续?"; then
+        log_info "已取消"
+        exit 0
+    fi
+
     log_info "正在停止所有节点上的 Ray 进程..."
     for node in "${NODES[@]}"; do
-        limit_jobs "$MAX_SSH_PARALLELISM"
-        stop_ray_on_node "$node" &
+        limit_jobs "$PARALLELISM"
+        stop_ray_node "$node" &
     done
     wait
     log_info "集群已停止."
