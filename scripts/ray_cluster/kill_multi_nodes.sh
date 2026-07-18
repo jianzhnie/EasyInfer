@@ -209,15 +209,12 @@ parse_args "$@"
 # 统一节点解析 (通过 NODES_FILE 环境变量，支持 --file/-f CLI 参数和位置参数)
 resolve_nodes
 
-# 向后兼容：复制到 NODES 数组
-NODES=("${RESOLVED_NODES[@]}")
-
 # 输出配置信息
 log_info "开始多节点进程清理..."
 $DRY_RUN && log_info "[DRY RUN 模式] 不会实际终止进程"
 log_info "目标关键词: ${KEYWORDS[*]}"
 log_info "节点列表文件: ${NODES_FILE:-scripts/node_list.txt}"
-log_info "节点数量: ${#NODES[@]}"
+log_info "节点数量: ${#RESOLVED_NODES[@]}"
 log_info "最大并发数: $MAX_JOBS"
 log_info "终止超时: ${KILL_TIMEOUT}s"
 log_info "SSH 超时: ${SSH_TIMEOUT}s"
@@ -227,13 +224,13 @@ confirm_operation "$SKIP_CONFIRM" "$DRY_RUN"
 
 # 并发处理所有节点
 declare -i SUCCESS_COUNT=0
- declare -i FAILED_COUNT=0
- declare -i TIMEOUT_COUNT=0
+declare -i FAILED_COUNT=0
+declare -i TIMEOUT_COUNT=0
 
 TMP_LOG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kill_nodes_$$.XXXXXX")
 trap 'rm -rf "$TMP_LOG_DIR"' EXIT
 
-for node in "${NODES[@]}"; do
+for node in "${RESOLVED_NODES[@]}"; do
     [[ -z "$node" ]] && continue
     limit_jobs "$MAX_JOBS"
 

@@ -7,8 +7,8 @@ SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../common.sh
 source "${SCRIPTS_ROOT}/common.sh"
 
-# 项目目录
-PROJECT_DIR="/root/llmtuner/llm/MindSpeed-RL-master"
+# 项目目录（可通过环境变量覆盖）
+PROJECT_DIR="${PROJECT_DIR:-/root/llmtuner/llm/MindSpeed-RL-master}"
 
 # Ray 配置
 MASTER_PORT="29500"
@@ -25,12 +25,9 @@ while IFS= read -r line; do
     NODES+=("$line")
 done < <(read_nodes "$NODE_LIST")
 
-# 回退到硬编码节点（向后兼容）
+# 节点列表为空则报错退出（不再回退到硬编码节点，避免误连其他集群）
 if [[ ${#NODES[@]} -eq 0 ]]; then
-    NODES=(
-        "10.16.201.201"
-        "10.16.201.42"
-    )
+    log_fatal "节点列表为空: ${NODE_LIST}。请通过 -f/--file 指定节点列表文件。"
 fi
 
 NUM_NODES=${#NODES[@]}

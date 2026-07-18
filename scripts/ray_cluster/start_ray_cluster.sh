@@ -40,7 +40,9 @@ ACTION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         start|stop)   ACTION="$1"; shift ;;
-        --file|-f)    NODE_LIST="${2:?错误: $1 需要一个参数}"; shift 2 ;;
+        --file|-f)
+            [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; usage; }
+            NODE_LIST="$2"; shift 2 ;;
         --help|-h)    usage ;;
         *)            log_err "未知参数: $1"; usage ;;
     esac

@@ -44,10 +44,24 @@ _gen_kill_remote_script() {
         KILL_TIMEOUT="__KILL_TIMEOUT__"
         DRY_RUN="__DRY_RUN__"
 
+        # 获取当前进程及其祖先 PID, 用于从匹配结果中排除自身 (避免 SSH 会话被误杀)
+        get_self_pids() {
+            local pids="$$" pid=$$
+            while [[ "$pid" != "1" && -n "$pid" ]]; do
+                pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || break
+                [[ -n "$pid" && "$pid" != "0" ]] && pids="$pids $pid" || break
+            done
+            printf '%s' "$pids"
+        }
+
         get_matching_pids() {
+            local self_pids exclude_re
+            self_pids=$(get_self_pids)
+            exclude_re=$(printf '%s\n' $self_pids | paste -sd'|' -)
             ps aux | grep -E "$PATTERN" | grep -v grep | \
-                grep -v -E '(vscode-server|code-server|sshd:|/bin/sh -c|extension|/agent/|ssh.*:)' | \
-                awk '{print $2}' | sort -u | tr '\n' ' ' || true
+                grep -v -E '(vscode-server|code-server|sshd:|/bin/(ba)?sh -c|extension|/agent/|ssh.*:)' | \
+                awk -v excl="$exclude_re" 'BEGIN{split(excl,a,"|"); for(i in a) e[a[i]]=1} !($2 in e) {print $2}' | \
+                sort -u | tr '\n' ' ' || true
         }
 
         get_process_info() {

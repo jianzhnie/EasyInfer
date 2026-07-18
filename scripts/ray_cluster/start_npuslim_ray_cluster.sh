@@ -16,13 +16,18 @@ source "${SCRIPT_DIR}/../docker/docker_env.sh"
 
 RAY_PORT="${RAY_PORT:-6379}"
 
-# 在远程节点的容器内执行命令（通过 IMAGE_NAME 查找容器）
+# 校验容器是否运行
+check_container() {
+    local host=$1
+    ssh_run "$host" "docker ps --format '{{.Names}}' | grep -qx '${CONTAINER_NAME}'" 2>/dev/null
+}
+
+# 在远程节点的容器内执行命令（通过 CONTAINER_NAME 指定容器, 与 start/stop_ray_cluster.sh 保持一致）
 node_exec() {
-    local host=$1 container
+    local host=$1
     shift
-    container=$(ssh_run "$host" "docker ps -q --filter ancestor=${IMAGE_NAME} | head -1" 2>/dev/null)
-    [[ -n "$container" ]] || { log_err "${host}: 未找到运行中的容器"; return 1; }
-    ssh_run "$host" "docker exec ${container} bash -lc $(printf '%q' "$*")"
+    check_container "$host" || { log_err "${host}: 容器 '${CONTAINER_NAME}' 未运行"; return 1; }
+    ssh_run "$host" "docker exec ${CONTAINER_NAME} bash -lc $(printf '%q' "$*")"
 }
 
 # ------------------------------------------

@@ -7,12 +7,13 @@
 #   KILL_TIMEOUT=5 ./stop_ray_cluster.sh  # 通过环境变量覆盖
 #
 # 环境变量 (均可外部覆盖):
-#   NODES_FILE    - 节点列表文件 (默认: set_env.sh 中配置)
-#   KILL_TIMEOUT  - SIGTERM 后等待超时秒数 (默认: 3)
-#   PARALLELISM   - 并发节点数 (默认: 16)
+#   NODE_LIST_FILE / NODE_LIST - 节点列表文件 (默认: scripts/node_list.txt)
+#   KILL_TIMEOUT   - SIGTERM 后等待超时秒数 (默认: 3)
+#   PARALLELISM    - 并发节点数 (默认: 16)
+#   CONTAINER_NAME - 目标容器名 (默认: 从 docker_env.sh 继承)
 #
 # 依赖:
-#   - source common.sh, vllm/set_env.sh
+#   - source common.sh, set_ray_env.sh
 #   - 远程节点需要: ray, docker
 
 set -euo pipefail
@@ -28,6 +29,7 @@ source "${SCRIPT_DIR}/../common.sh"
 # 配置
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
 PARALLELISM="${PARALLELISM:-16}"
+DEFAULT_CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
 RAY_KEYWORDS="raylet|plasma_store|gcs_server|ray::|ray.worker|python.*ray|dashboard_agent|runtime_env_agent"
 
 # 帮助
@@ -39,7 +41,11 @@ Options:
   --on-host    在宿主机上停止 Ray（不进容器）
   -f, --force  强制模式：立即停止并清理所有残余
   -y, --yes    跳过确认步骤
+  --file FILE  指定节点列表文件
   -h, --help   显示帮助信息
+
+Environment Variables:
+  NODE_LIST_FILE / NODE_LIST, KILL_TIMEOUT, PARALLELISM, CONTAINER_NAME
 EOF
 }
 
@@ -132,7 +138,7 @@ stop_ray_node() {
         fi
     else
         # 加载环境文件后再执行 docker exec
-        local cmd="[[ -f '${ENV_FILE}' ]] && source '${ENV_FILE}'; docker exec -i \"\${CONTAINER_NAME:-vllm-ascend-env-a3}\" bash -s"
+        local cmd="[[ -f '${ENV_FILE}' ]] && source '${ENV_FILE}'; docker exec -i \"${DEFAULT_CONTAINER_NAME}\" bash -s"
         if echo "$func; $call" | ssh_run "$node" "$cmd"; then
             log_info "[${node}] 已停止"
         else
@@ -145,8 +151,14 @@ stop_ray_node() {
 nodes=$(read_nodes "$NODE_FILE")
 [[ -n "$nodes" ]] || { log_err "未找到节点信息: $NODE_FILE"; exit 2; }
 
+# 汇总操作信息
+log_info "操作模式: $(if $ON_HOST; then echo '宿主机'; else echo "容器 ${DEFAULT_CONTAINER_NAME}"; fi)"
+log_info "强制模式: $FORCE"
+log_info "节点列表: $NODE_FILE"
+log_info "目标节点: $nodes"
+
 # 确认
-if ! confirm "将停止以下节点的 Ray 集群: $nodes"; then
+if ! confirm "将停止以上节点的 Ray 集群，是否继续?"; then
     log_info "已取消"
     exit 0
 fi
