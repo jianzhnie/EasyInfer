@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================
 # Ray 集群管理脚本
-# 启动 / 停止多节点 Ray 集群
+# 启动 / 停止 / 重启 / 查看多节点 Ray 集群
 # ==========================================
 #
 # 依赖:
@@ -28,13 +28,13 @@ RAY_KEYWORDS="raylet|plasma_store|gcs_server|ray::|ray.worker|python.*ray|dashbo
 usage() {
     cat <<'USAGE'
 Usage:
-  bash manage_ray_cluster.sh <start|stop> [OPTIONS]
+  bash manage_ray_cluster.sh <start|stop|restart|status> [OPTIONS]
 
 Options:
   -f, --file <FILE>   节点列表文件路径
-  --on-host           在宿主机上停止 Ray（不进容器，仅 stop 有效）
-  --force             强制模式：立即停止并清理所有残余（仅 stop 有效）
-  -y, --yes           跳过确认步骤（仅 stop 有效）
+  --on-host           在宿主机上停止 Ray（不进容器，仅 stop/restart 有效）
+  --force             强制模式：立即停止并清理所有残余（仅 stop/restart 有效）
+  -y, --yes           跳过确认步骤（仅 stop/restart 有效）
   -h, --help          显示帮助信息
 
 Environment Variables:
@@ -56,7 +56,7 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            start|stop)   ACTION="$1"; shift ;;
+            start|stop|restart|status)   ACTION="$1"; shift ;;
             --file|-f)
                 [[ -n "${2:-}" && "$2" != -* ]] || { log_err "选项 $1 需要一个参数"; usage; }
                 NODE_LIST="$2"; shift 2 ;;
@@ -68,11 +68,11 @@ parse_args() {
         esac
     done
 
-    [[ -n "$ACTION" ]] || { log_err "缺少操作 (start 或 stop)"; usage; }
+    [[ -n "$ACTION" ]] || { log_err "缺少操作 (start/stop/restart/status)"; usage; }
 
-    if [[ "$ACTION" == "start" ]]; then
-        $ON_HOST && { log_err "--on-host 仅适用于 stop 操作"; usage; }
-        $FORCE && { log_err "--force 仅适用于 stop 操作"; usage; }
+    if [[ "$ACTION" == "start" || "$ACTION" == "status" ]]; then
+        $ON_HOST && { log_err "--on-host 仅适用于 stop/restart 操作"; usage; }
+        $FORCE && { log_err "--force 仅适用于 stop/restart 操作"; usage; }
     fi
 }
 
@@ -97,7 +97,7 @@ print_cluster_info() {
     log_info "Container:  $CONTAINER_NAME"
     log_info "Ray Port:   $RAY_PORT"
     log_info "NPUs/Node:  $NPUS_PER_NODE"
-    if [[ "$ACTION" == "stop" ]]; then
+    if [[ "$ACTION" == "stop" || "$ACTION" == "restart" ]]; then
         log_info "Mode:       $(if $ON_HOST; then echo '宿主机'; else echo '容器内'; fi)"
         log_info "Force:      $FORCE"
     fi
@@ -307,6 +307,63 @@ stop_ray_node() {
 }
 
 # ------------------------------------------
+# status 相关函数
+# ------------------------------------------
+
+show_cluster_status() {
+    log_info "============================================="
+    log_info "Ray 集群状态 (Head: $HEAD_NODE)"
+    log_info "============================================="
+    echo ""
+    remote_exec "$HEAD_NODE" "ray status" 2>&1 || log_warn "无法获取 Ray 集群状态"
+    echo ""
+}
+
+# ------------------------------------------
+# 流程组合
+# ------------------------------------------
+
+stop_cluster() {
+    if ! confirm "将停止以上节点的 Ray 集群，是否继续?"; then
+        log_info "已取消"
+        exit 0
+    fi
+    log_info "正在停止所有节点上的 Ray 进程..."
+    run_on_nodes "$PARALLELISM" stop_ray_node "${NODES[@]}"
+    log_info "集群已停止."
+}
+
+start_cluster() {
+    log_info "[1/5] 检查容器状态..."
+    run_on_nodes "$MAX_SSH_PARALLELISM" start_preflight_check "${NODES[@]}"
+    [[ ! -f "${_TEMP_DIR}/preflight_fail" ]] || log_fatal "前置检查失败，请确认容器状态"
+
+    cleanup_existing_ray
+
+    log_info "[3/5] 启动 Head 节点 $HEAD_NODE..."
+    start_head "$HEAD_NODE" || log_fatal "Head 节点启动失败: $HEAD_NODE"
+    log_info "等待 ${WAIT_TIME}s 完成初始化..."
+    sleep "$WAIT_TIME"
+
+    if [[ ${#WORKERS[@]} -gt 0 ]]; then
+        log_info "[4/5] 并行启动 ${#WORKERS[@]} 个 Worker..."
+        run_on_nodes "$MAX_SSH_PARALLELISM" start_worker_or_mark_failed "${WORKERS[@]}"
+    else
+        log_info "[4/5] 单节点模式，跳过 Worker 启动."
+    fi
+
+    wait_for_cluster_ready
+    print_final_status
+}
+
+restart_cluster() {
+    stop_cluster
+    log_info "等待 3s 后重新启动集群..."
+    sleep 3
+    start_cluster
+}
+
+# ------------------------------------------
 # 主流程分发
 # ------------------------------------------
 
@@ -318,37 +375,10 @@ main() {
     print_cluster_info
 
     case "$ACTION" in
-        stop)
-            if ! confirm "将停止以上节点的 Ray 集群，是否继续?"; then
-                log_info "已取消"
-                exit 0
-            fi
-            log_info "正在停止所有节点上的 Ray 进程..."
-            run_on_nodes "$PARALLELISM" stop_ray_node "${NODES[@]}"
-            log_info "集群已停止."
-            ;;
-        start)
-            log_info "[1/5] 检查容器状态..."
-            run_on_nodes "$MAX_SSH_PARALLELISM" start_preflight_check "${NODES[@]}"
-            [[ ! -f "${_TEMP_DIR}/preflight_fail" ]] || log_fatal "前置检查失败，请确认容器状态"
-
-            cleanup_existing_ray
-
-            log_info "[3/5] 启动 Head 节点 $HEAD_NODE..."
-            start_head "$HEAD_NODE" || log_fatal "Head 节点启动失败: $HEAD_NODE"
-            log_info "等待 ${WAIT_TIME}s 完成初始化..."
-            sleep "$WAIT_TIME"
-
-            if [[ ${#WORKERS[@]} -gt 0 ]]; then
-                log_info "[4/5] 并行启动 ${#WORKERS[@]} 个 Worker..."
-                run_on_nodes "$MAX_SSH_PARALLELISM" start_worker_or_mark_failed "${WORKERS[@]}"
-            else
-                log_info "[4/5] 单节点模式，跳过 Worker 启动."
-            fi
-
-            wait_for_cluster_ready
-            print_final_status
-            ;;
+        stop)      stop_cluster ;;
+        start)     start_cluster ;;
+        restart)   restart_cluster ;;
+        status)    show_cluster_status ;;
     esac
 }
 
