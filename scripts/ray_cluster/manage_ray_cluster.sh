@@ -20,6 +20,7 @@ source "${SCRIPT_DIR}/set_ray_env.sh"
 # 配置
 KILL_TIMEOUT="${KILL_TIMEOUT:-3}"
 PARALLELISM="${PARALLELISM:-16}"
+RESTART_WAIT_SECONDS="${RESTART_WAIT_SECONDS:-3}"
 RAY_KEYWORDS="raylet|plasma_store|gcs_server|ray::|ray.worker|python.*ray|dashboard_agent|runtime_env_agent"
 
 # ------------------------------------------
@@ -38,7 +39,7 @@ Options:
   -h, --help          显示帮助信息
 
 Environment Variables:
-  NODE_LIST, KILL_TIMEOUT, PARALLELISM, CONTAINER_NAME
+  NODE_LIST, KILL_TIMEOUT, PARALLELISM, RESTART_WAIT_SECONDS, CONTAINER_NAME
 
 环境变量配置: scripts/ray_cluster/set_ray_env.sh
 USAGE
@@ -69,16 +70,22 @@ parse_args() {
     done
 
     [[ -n "$ACTION" ]] || { log_err "缺少操作 (start/stop/restart/status)"; usage; }
-
-    if [[ "$ACTION" == "start" || "$ACTION" == "status" ]]; then
-        $ON_HOST && { log_err "--on-host 仅适用于 stop/restart 操作"; usage; }
-        $FORCE && { log_err "--force 仅适用于 stop/restart 操作"; usage; }
-    fi
 }
 
 # ------------------------------------------
 # 通用工具函数
 # ------------------------------------------
+
+_is_stop_action() {
+    [[ "$ACTION" == "stop" || "$ACTION" == "restart" ]]
+}
+
+validate_action_options() {
+    if ! _is_stop_action; then
+        $ON_HOST && { log_err "--on-host 仅适用于 stop/restart 操作"; usage; }
+        $FORCE && { log_err "--force 仅适用于 stop/restart 操作"; usage; }
+    fi
+}
 
 load_nodes() {
     [[ -n "${NODE_LIST:-}" && -f "$NODE_LIST" ]] || log_fatal "节点列表文件未找到: ${NODE_LIST:-未设置}"
@@ -97,7 +104,7 @@ print_cluster_info() {
     log_info "Container:  $CONTAINER_NAME"
     log_info "Ray Port:   $RAY_PORT"
     log_info "NPUs/Node:  $NPUS_PER_NODE"
-    if [[ "$ACTION" == "stop" || "$ACTION" == "restart" ]]; then
+    if _is_stop_action; then
         log_info "Mode:       $(if $ON_HOST; then echo '宿主机'; else echo '容器内'; fi)"
         log_info "Force:      $FORCE"
     fi
@@ -323,11 +330,14 @@ show_cluster_status() {
 # 流程组合
 # ------------------------------------------
 
-stop_cluster() {
+confirm_stop() {
     if ! confirm "将停止以上节点的 Ray 集群，是否继续?"; then
         log_info "已取消"
         exit 0
     fi
+}
+
+stop_cluster() {
     log_info "正在停止所有节点上的 Ray 进程..."
     run_on_nodes "$PARALLELISM" stop_ray_node "${NODES[@]}"
     log_info "集群已停止."
@@ -357,9 +367,10 @@ start_cluster() {
 }
 
 restart_cluster() {
+    confirm_stop
     stop_cluster
-    log_info "等待 3s 后重新启动集群..."
-    sleep 3
+    log_info "等待 ${RESTART_WAIT_SECONDS}s 后重新启动集群..."
+    sleep "$RESTART_WAIT_SECONDS"
     start_cluster
 }
 
@@ -369,13 +380,14 @@ restart_cluster() {
 
 main() {
     parse_args "$@"
+    validate_action_options
 
     _TEMP_DIR=$(mktemp_dir)
     load_nodes
     print_cluster_info
 
     case "$ACTION" in
-        stop)      stop_cluster ;;
+        stop)      confirm_stop; stop_cluster ;;
         start)     start_cluster ;;
         restart)   restart_cluster ;;
         status)    show_cluster_status ;;
