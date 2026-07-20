@@ -87,9 +87,9 @@ run_test() {
     log_info "Endpoint: ${endpoint}"
 
     if [[ "$quiet" == "quiet" ]]; then
-        curl "${curl_opts[@]}" -d "$payload" >/dev/null 2>&1 || status=$?
+        curl "${curl_opts[@]}" >/dev/null 2>&1 || status=$?
     else
-        response=$(curl "${curl_opts[@]}" -d "$payload") || status=$?
+        response=$(curl "${curl_opts[@]}") || status=$?
         echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
     fi
 

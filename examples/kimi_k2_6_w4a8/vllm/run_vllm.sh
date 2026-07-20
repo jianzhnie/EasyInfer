@@ -34,9 +34,9 @@ readonly PORT="${PORT:-8003}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV

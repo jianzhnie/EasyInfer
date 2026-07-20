@@ -215,3 +215,6 @@ config.sh
 available_nodes.txt
 node_list.txt
 *.txt
+batch_remote_deploy_pd_seg/
+batch_remote_deploy_pd_seg.zip
+kernel_meta/
