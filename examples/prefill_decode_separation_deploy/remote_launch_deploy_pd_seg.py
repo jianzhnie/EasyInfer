@@ -107,7 +107,6 @@ def resolve_model_config(cfg):
     4. 从对应 deploy.conf 读取端口和模型名
     """
     model_type = cfg.get("MODEL_TYPE", "glm52")
-    cfg.setdefault("MODEL_TYPE", model_type)
     # 兼容旧配置：glm5.2 等同于 glm52
     if model_type == "glm5.2":
         model_type = "glm52"
@@ -117,11 +116,14 @@ def resolve_model_config(cfg):
         fail(f"不支持的 MODEL_TYPE: '{model_type}'，可选值: {', '.join(sorted(valid_models))}")
         sys.exit(1)
 
-    # 脚本目录
+    # 脚本目录（共享存储，本地路径即远程路径）
     script_dir_name = f"{model_type}-deploy-scripts"
     cfg["LOCAL_SCRIPT_DIR"] = str(Path(__file__).parent / script_dir_name)
-    script_base = cfg.get("REMOTE_SCRIPT_DIR_BASE", "/data/scripts")
-    cfg["REMOTE_SCRIPT_DIR"] = f"{script_base}/{script_dir_name}"
+    if "REMOTE_SCRIPT_DIR" not in cfg:
+        if "REMOTE_SCRIPT_DIR_BASE" in cfg:
+            cfg["REMOTE_SCRIPT_DIR"] = f"{cfg['REMOTE_SCRIPT_DIR_BASE']}/{script_dir_name}"
+        else:
+            cfg["REMOTE_SCRIPT_DIR"] = cfg["LOCAL_SCRIPT_DIR"]
 
     # Docker 容器名
     if "DOCKER_NAME" not in cfg:
@@ -220,25 +222,6 @@ def _shell_quote(s):
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
-def scp_to_remote(cfg, local_path, remote_ip, remote_path):
-    """SCP 文件到远程节点。"""
-    ssh_args = [
-        "scp",
-        "-o", "ConnectTimeout=" + str(cfg.get("SSH_CONNECT_TIMEOUT", "10")),
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "LogLevel=ERROR",
-        "-P", str(cfg.get("SSH_PORT", "22")),
-    ]
-    key = cfg.get("SSH_KEY", "")
-    if key and os.path.exists(os.path.expanduser(key)):
-        ssh_args += ["-i", os.path.expanduser(key)]
-    ssh_args.append(local_path)
-    ssh_args.append(f"{cfg.get('SSH_USER', 'root')}@{remote_ip}:{remote_path}")
-    result = subprocess.run(ssh_args, capture_output=True, text=True, timeout=120)
-    return result.returncode, result.stderr
-
-
 def check_ssh(cfg, ip):
     """检查 SSH 连接是否可达。"""
     rc, _, _ = ssh_cmd(cfg, ip, "echo ok", timeout=15)
@@ -262,20 +245,6 @@ def http_get(ip, port, path="/v1/models", timeout=10):
         capture_output=True, text=True, timeout=timeout + 5
     )
     return result.stdout.strip() or "000"
-
-
-def wait_for_health(ip, port, name, timeout_sec, interval_sec):
-    """轮询等待节点健康，返回 True/False。"""
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        code = http_get(ip, port)
-        if code == "200":
-            ok(f"{name} ({ip}:{port}) 就绪")
-            return True
-        elapsed = int(time.time() - (deadline - timeout_sec))
-        info(f"  等待 {name} ({ip}:{port})... [{elapsed}s/{timeout_sec}s] HTTP {code}")
-        time.sleep(interval_sec)
-    return False
 
 
 def load_startup_events(cfg):
@@ -401,19 +370,6 @@ def confirm_action(prompt_text, default_yes=True):
             return resp in ("y", "yes")
     except (EOFError, OSError):
         return default_yes
-
-
-def _free_vllm_ports(ip):
-    """在宿主机上强制释放 vLLM 已知内部通信端口。
-    vLLM 使用 --net=host，容器删了但宿主机端口可能还在 TIME_WAIT。"""
-    vllm_ports = [12321, 12322, 12323, 12324]
-    cmds = []
-    for port in vllm_ports:
-        cmds.append(
-            f"fuser -k {port}/tcp 2>/dev/null || "
-            f"ss -tlnp 'sport = :{port}' 2>/dev/null | grep -oP 'pid=\\K\\d+' | xargs -r kill -9 2>/dev/null || true"
-        )
-    return " && ".join(cmds)
 
 
 def restart_container(cfg, ip, docker_name=None):
@@ -595,24 +551,6 @@ def check_ssh_and_docker(cfg, ip):
     return ssh_ok, docker_ok
 
 
-def _vllm_ports_reachable(cfg, ip, start_port, count):
-    """检查容器的 vLLM 端口是否未被占用。
-    通过 cat /proc/net/tcp 查 TCP 监听端口，不依赖 ss/netstat。
-    返回被占用的端口列表。"""
-    busy = []
-    for offset in range(count):
-        port = start_port + offset
-        # cat /proc/net/tcp 中端口是十六进制小端序
-        hex_port = f"{port:04x}"
-        hex_le = hex_port[2:4] + hex_port[0:2]
-        # raw=True 避免 bash -lc 引号嵌套问题
-        cmd = f"sh -c 'cat /proc/net/tcp 2>/dev/null | grep -qi \":{hex_le} \" && echo BUSY || echo FREE'"
-        rc, stdout, _ = ssh_docker_cmd(cfg, ip, cmd, timeout=10, raw=True)
-        if rc == 0 and "BUSY" in stdout:
-            busy.append(port)
-    return busy
-
-
 def check_vllm_running(cfg, ip):
     """检查节点上是否有 vLLM 进程在运行，返回 (running, pids)。"""
     docker_name = cfg.get("DOCKER_NAME", "glm5")
@@ -757,61 +695,41 @@ def update_deploy_conf(cfg):
 
 
 def step_distribute(cfg):
-    """分发部署脚本到所有节点。"""
-    log("========== 步骤 2/6: 分发脚本 ==========", "bold")
-    all_ips = cfg["PNODE_IPS"] + cfg["DNODE_IPS"]
+    """验证部署脚本目录（共享存储无需分发）。"""
+    log("========== 步骤 2/6: 检查脚本 ==========", "bold")
     local_script_dir = Path(cfg["LOCAL_SCRIPT_DIR"])
     remote_dir = cfg["REMOTE_SCRIPT_DIR"]
 
     if not local_script_dir.exists():
-        fail(f"本地脚本目录不存在: {local_script_dir}")
+        fail(f"脚本目录不存在: {local_script_dir}")
         return False
 
-    # 分发前更新 deploy.conf 中的 IP 列表
+    # 更新 deploy.conf 中的 IP 列表（写一次即可，共享存储）
     if not update_deploy_conf(cfg):
         return False
 
-    # 先在远程创建目录，然后 scp 整个目录
+    # 共享存储：验证各节点容器内脚本目录可访问
+    all_ips = cfg["PNODE_IPS"] + cfg["DNODE_IPS"]
+    all_ok = True
     with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
         futures = {}
         for ip in all_ips:
-            futures[pool.submit(distribute_to_node, cfg, ip, local_script_dir, remote_dir)] = ip
-        all_ok = True
+            futures[pool.submit(ssh_docker_cmd, cfg, ip, f"test -d {remote_dir} && ls {remote_dir}/ | wc -l", 15)] = ip
         for future in as_completed(futures):
             ip = futures[future]
-            success, msg = future.result()
-            if success:
-                ok(f"{ip}: 脚本分发完成 ({msg})")
+            rc, stdout, _ = future.result()
+            if rc == 0 and stdout.strip().isdigit() and int(stdout.strip()) > 0:
+                ok(f"{ip}: 脚本可访问 ({stdout.strip()} 文件)")
             else:
-                fail(f"{ip}: 脚本分发失败 - {msg}")
+                fail(f"{ip}: 脚本目录不可访问: {remote_dir}")
                 all_ok = False
     return all_ok
 
 
 def distribute_to_node(cfg, ip, local_dir, remote_dir):
-    """向单个节点分发脚本目录。"""
-    # 1. 在宿主机创建目标目录
-    rc, _, err = ssh_cmd(cfg, ip, f"mkdir -p {remote_dir}", timeout=30)
-    if rc != 0:
-        return False, f"mkdir 失败: {err}"
-
-    # 2. SCP 每个文件（排除 __pycache__）
-    for f in sorted(local_dir.iterdir()):
-        if f.name.startswith("__pycache__") or f.name.startswith("."):
-            continue
-        rc, err = scp_to_remote(cfg, str(f), ip, f"{remote_dir}/{f.name}")
-        if rc != 0:
-            return False, f"scp {f.name} 失败: {err}"
-
-    # 3. 设置执行权限
-    rc, _, err = ssh_cmd(cfg, ip, f"chmod +x {remote_dir}/*.sh", timeout=15)
-    if rc != 0:
-        return False, f"chmod 失败: {err}"
-
-    # 4. 验证文件列表
-    rc, stdout, _ = ssh_cmd(cfg, ip, f"ls {remote_dir}/", timeout=15)
-    file_count = len([l for l in stdout.strip().splitlines() if l.strip()])
-    return True, f"{file_count} 个文件"
+    """共享存储环境无需分发，仅验证目录可达。"""
+    rc, _, _ = ssh_docker_cmd(cfg, ip, f"test -d {remote_dir}", 15)
+    return rc == 0, "共享存储" if rc == 0 else "不可达"
 
 
 def _try_start_node(cfg, node_index, ip, role, port, timeout, interval):
@@ -1125,67 +1043,40 @@ def step_start_all_nodes(cfg):
     ok("所有节点就绪")
     return True
 
-def step_start_pnode(cfg):
-    """启动所有 PNode（供 start-pnode 子命令使用）。"""
-    log("========== 启动所有 PNode ==========", "bold")
-    pnodes = cfg["PNODE_IPS"]
+def _step_start_role(cfg, role):
+    """启动所有 PNode 或 DNode。role='pnode' 或 'dnode'。"""
+    label = role.title()
+    log(f"========== 启动所有 {label} ==========", "bold")
+    ips = cfg[f"{role.upper()}_IPS"]
     remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    for i, ip in enumerate(pnodes):
-        cmd = f"cd {remote_dir} && nohup bash start_pnode.sh {i} > /tmp/pnode_{i}.log 2>&1 &"
+    port_key = "P_VLLM_START_PORT" if role == "pnode" else "D_VLLM_START_PORT"
+    default_port = "9081" if role == "pnode" else "9900"
+
+    for i, ip in enumerate(ips):
+        cmd = f"cd {remote_dir} && nohup bash start_{role}.sh {i} > /tmp/{role}_{i}.log 2>&1 &"
         rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
         if rc != 0:
-            fail(f"PNode {i} ({ip}) 启动失败: {err}")
+            fail(f"{label} {i} ({ip}) 启动失败: {err}")
             return False
-        ok(f"PNode {i} ({ip}): 启动命令已发送")
+        ok(f"{label} {i} ({ip}): 启动命令已发送")
 
-    log("--- 等待 PNode 健康检查 ---", "bold")
+    log(f"--- 等待 {label} 健康检查 ---", "bold")
     timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
     interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
+    port = int(cfg.get(port_key, default_port))
     all_healthy = True
-    with ThreadPoolExecutor(max_workers=len(pnodes)) as pool:
+    with ThreadPoolExecutor(max_workers=len(ips)) as pool:
         futures = {}
-        for i, ip in enumerate(pnodes):
-            futures[pool.submit(wait_for_health_with_log, cfg, ip, int(cfg.get("P_VLLM_START_PORT", "9081")), f"PNode{i}", i, "pnode", timeout, interval)] = i
+        for i, ip in enumerate(ips):
+            futures[pool.submit(wait_for_health_with_log, cfg, ip, port, f"{label}{i}", i, role, timeout, interval)] = i
         for future in as_completed(futures):
             i = futures[future]
             if not future.result():
-                fail(f"PNode {i} 在 {timeout}s 内未就绪")
+                fail(f"{label} {i} 在 {timeout}s 内未就绪")
                 all_healthy = False
     if not all_healthy:
         return False
-    ok("所有 PNode 就绪")
-    return True
-
-
-def step_start_dnode(cfg):
-    """启动所有 DNode（供 start-dnode 子命令使用）。"""
-    log("========== 启动所有 DNode ==========", "bold")
-    dnodes = cfg["DNODE_IPS"]
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    for i, ip in enumerate(dnodes):
-        cmd = f"cd {remote_dir} && nohup bash start_dnode.sh {i} > /tmp/dnode_{i}.log 2>&1 &"
-        rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
-        if rc != 0:
-            fail(f"DNode {i} ({ip}) 启动失败: {err}")
-            return False
-        ok(f"DNode {i} ({ip}): 启动命令已发送")
-
-    log("--- 等待 DNode 健康检查 ---", "bold")
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-    all_healthy = True
-    with ThreadPoolExecutor(max_workers=len(dnodes)) as pool:
-        futures = {}
-        for i, ip in enumerate(dnodes):
-            futures[pool.submit(wait_for_health_with_log, cfg, ip, int(cfg.get("D_VLLM_START_PORT", "9900")), f"DNode{i}", i, "dnode", timeout, interval)] = i
-        for future in as_completed(futures):
-            i = futures[future]
-            if not future.result():
-                fail(f"DNode {i} 在 {timeout}s 内未就绪")
-                all_healthy = False
-    if not all_healthy:
-        return False
-    ok("所有 DNode 就绪")
+    ok(f"所有 {label} 就绪")
     return True
 
 
@@ -1502,107 +1393,66 @@ def cmd_stop(cfg, node_index=None):
     return 0 if all_ok else 1
 
 
-def cmd_stop_pnode(cfg, node_index=None):
-    """停止 PNode。指定 node_index 则停单个节点，否则停所有 PNode。"""
+def _cmd_stop_role(cfg, role, node_index=None):
+    """停止节点。role='pnode'/'dnode'。node_index=None 停止全部。"""
     if node_index is not None:
-        return _stop_single_node(cfg, "pnode", node_index)
-    log("停止所有 PNode", "bold")
+        return _stop_single_node(cfg, role, node_index)
+    label = role.title()
+    log(f"停止所有 {label}", "bold")
+    ips = cfg[f"{role.upper()}_IPS"]
     all_ok = True
-    for i in range(len(cfg["PNODE_IPS"])):
-        all_ok &= (_stop_single_node(cfg, "pnode", i) == 0)
+    for i in range(len(ips)):
+        all_ok &= (_stop_single_node(cfg, role, i) == 0)
     return 0 if all_ok else 1
 
 
-def cmd_stop_dnode(cfg, node_index=None):
-    """停止 DNode。指定 node_index 则停单个节点，否则停所有 DNode。"""
-    if node_index is not None:
-        return _stop_single_node(cfg, "dnode", node_index)
-    log("停止所有 DNode", "bold")
-    all_ok = True
-    for i in range(len(cfg["DNODE_IPS"])):
-        all_ok &= (_stop_single_node(cfg, "dnode", i) == 0)
-    return 0 if all_ok else 1
-
-
-def cmd_distribute(cfg):
-    """仅分发脚本。
-
-    设置环境变量可跳过特定检查:
-        SKIP_MODEL_CHECK=1    跳过模型权重检查
-        SKIP_PORT_CHECK=1     跳过端口占用检查
-    示例:
-        SKIP_MODEL_CHECK=1 SKIP_PORT_CHECK=1 ./remote_launch_deploy_pd_seg.sh distribute
-    """
-    skip_model = os.environ.get("SKIP_MODEL_CHECK", "").strip() in ("1", "true", "yes")
-    skip_port = os.environ.get("SKIP_PORT_CHECK", "").strip() in ("1", "true", "yes")
-    prereq_ok, conflicting = step_check_prerequisites(cfg, skip_model_check=skip_model, skip_port_check=skip_port)
-    if not prereq_ok:
-        if conflicting:
-            warn("检测到有冲突节点，分发脚本前建议清理环境")
-            if not confirm_action("是否继续分发？", default_yes=False):
-                return 1
-        else:
-            return 1
-    print()
-    if not step_distribute(cfg):
-        return 1
-    return 0
-
-
+# ---- 子命令入口（薄封装 _cmd_start_role，以适配调度器签名）-------------------
 def cmd_start_pnode(cfg, node_index=None):
-    """启动 PNode。指定 node_index 则启动单个节点，否则启动全部。"""
-    if node_index is not None:
-        return _start_single_pnode(cfg, node_index)
-    prereq_ok, conflicting = step_check_prerequisites(cfg, roles="pnode")
-    if not prereq_ok:
-        if conflicting:
-            warn("检测到有冲突节点，启动前建议清理环境")
-            if confirm_action("是否重启冲突节点的 Docker 容器？", default_yes=True):
-                for ip in conflicting:
-                    restart_container(cfg, ip)
-                time.sleep(5)
-            else:
-                return 1
-        else:
-            # 容器未运行 — 自动启动容器
-            warn("部分节点容器未运行，自动启动 Docker 容器...")
-            if not step_start_docker(cfg):
-                return 1
-    print()
-    return 0 if step_start_pnode(cfg) else 1
-
-
-def _start_single_pnode(cfg, node_index):
-    """启动单个 PNode 节点。"""
-    pnodes = cfg["PNODE_IPS"]
-    if node_index < 0 or node_index >= len(pnodes):
-        fail(f"PNode index {node_index} 超出范围 (0-{len(pnodes)-1})")
-        return 1
-    ip = pnodes[node_index]
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    log(f"启动 PNode {node_index} ({ip})...", "bold")
-    cmd = f"cd {remote_dir} && nohup bash start_pnode.sh {node_index} > /tmp/pnode_{node_index}.log 2>&1 &"
-    rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
-    if rc != 0:
-        fail(f"PNode {node_index} ({ip}) 启动失败: {err}")
-        return 1
-    ok(f"PNode {node_index} ({ip}) 启动命令已发送")
-    # 等待健康（带日志回传）
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-    if wait_for_health_with_log(cfg, ip, int(cfg.get("P_VLLM_START_PORT", "9081")), f"PNode{node_index}", node_index, "pnode", timeout, interval):
-        ok(f"PNode {node_index} 就绪")
-        return 0
-    else:
-        fail(f"PNode {node_index} 在 {timeout}s 内未就绪")
-        return 1
-
-
+    return _cmd_start_role(cfg, "pnode", node_index)
 def cmd_start_dnode(cfg, node_index=None):
-    """启动 DNode。指定 node_index 则启动单个节点，否则启动全部。"""
+    return _cmd_start_role(cfg, "dnode", node_index)
+
+def cmd_stop_pnode(cfg, node_index=None):
+    return _cmd_stop_role(cfg, "pnode", node_index)
+def cmd_stop_dnode(cfg, node_index=None):
+    return _cmd_stop_role(cfg, "dnode", node_index)
+
+
+def _start_single_role(cfg, role, node_index):
+    """启动单个节点。role='pnode' 或 'dnode'。"""
+    label = role.title()
+    ips = cfg[f"{role.upper()}_IPS"]
+    port_key = "P_VLLM_START_PORT" if role == "pnode" else "D_VLLM_START_PORT"
+    default_port = "9081" if role == "pnode" else "9900"
+
+    if node_index < 0 or node_index >= len(ips):
+        fail(f"{label} index {node_index} 超出范围 (0-{len(ips)-1})")
+        return 1
+    ip = ips[node_index]
+    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
+    log(f"启动 {label} {node_index} ({ip})...", "bold")
+    cmd = f"cd {remote_dir} && nohup bash start_{role}.sh {node_index} > /tmp/{role}_{node_index}.log 2>&1 &"
+    rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
+    if rc != 0:
+        fail(f"{label} {node_index} ({ip}) 启动失败: {err}")
+        return 1
+    ok(f"{label} {node_index} ({ip}) 启动命令已发送")
+
+    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
+    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
+    port = int(cfg.get(port_key, default_port))
+    if wait_for_health_with_log(cfg, ip, port, f"{label}{node_index}", node_index, role, timeout, interval):
+        ok(f"{label} {node_index} 就绪")
+        return 0
+    fail(f"{label} {node_index} 在 {timeout}s 内未就绪")
+    return 1
+
+
+def _cmd_start_role(cfg, role, node_index=None):
+    """启动节点。role='pnode'/'dnode'。node_index=None 启动全部，否则启动单个。"""
     if node_index is not None:
-        return _start_single_dnode(cfg, node_index)
-    prereq_ok, conflicting = step_check_prerequisites(cfg, roles="dnode")
+        return _start_single_role(cfg, role, node_index)
+    prereq_ok, conflicting = step_check_prerequisites(cfg, roles=role)
     if not prereq_ok:
         if conflicting:
             warn("检测到有冲突节点，启动前建议清理环境")
@@ -1613,38 +1463,11 @@ def cmd_start_dnode(cfg, node_index=None):
             else:
                 return 1
         else:
-            # 容器未运行 — 自动启动容器
             warn("部分节点容器未运行，自动启动 Docker 容器...")
             if not step_start_docker(cfg):
                 return 1
     print()
-    return 0 if step_start_dnode(cfg) else 1
-
-
-def _start_single_dnode(cfg, node_index):
-    """启动单个 DNode 节点。"""
-    dnodes = cfg["DNODE_IPS"]
-    if node_index < 0 or node_index >= len(dnodes):
-        fail(f"DNode index {node_index} 超出范围 (0-{len(dnodes)-1})")
-        return 1
-    ip = dnodes[node_index]
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    log(f"启动 DNode {node_index} ({ip})...", "bold")
-    cmd = f"cd {remote_dir} && nohup bash start_dnode.sh {node_index} > /tmp/dnode_{node_index}.log 2>&1 &"
-    rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
-    if rc != 0:
-        fail(f"DNode {node_index} ({ip}) 启动失败: {err}")
-        return 1
-    ok(f"DNode {node_index} ({ip}) 启动命令已发送")
-    # 等待健康（带日志回传）
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-    if wait_for_health_with_log(cfg, ip, int(cfg.get("D_VLLM_START_PORT", "9900")), f"DNode{node_index}", node_index, "dnode", timeout, interval):
-        ok(f"DNode {node_index} 就绪")
-        return 0
-    else:
-        fail(f"DNode {node_index} 在 {timeout}s 内未就绪")
-        return 1
+    return 0 if _step_start_role(cfg, role) else 1
 
 
 def cmd_start_proxy(cfg):
@@ -1709,7 +1532,7 @@ def cmd_clean(cfg):
 
 # ---- Docker 集群管理（委托给 manage_docker_containers.sh）-----------------------
 # manage_docker_containers.sh 路径：相对于 EasyInfer 项目根目录
-_MANAGE_DOCKER_SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "docker" / "manage_docker_containers.sh")
+_MANAGE_DOCKER_SCRIPT = str(Path(__file__).resolve().parent.parent.parent / "scripts" / "docker" / "manage_docker_containers.sh")
 
 
 def _docker_run(cfg, ips, action="restart"):
@@ -1739,25 +1562,11 @@ def _docker_run(cfg, ips, action="restart"):
         if image_name:
             cmd += ["--image", image_name]
 
-        log(f"调用 manage_docker_containers.sh {action} ({len(ips)} 节点)...", "cyan")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+        info(f"manage_docker_containers.sh {action} ({len(ips)} 节点)")
+        result = subprocess.run(cmd, timeout=300,
                                 env={**os.environ, "PARALLELISM": str(min(len(ips), 8))})
-
-        # 打印脚本输出（日志行以 [INFO]/[ERROR] 等标记开头）
-        for line in result.stdout.splitlines():
-            stripped = line.strip()
-            if stripped:
-                if "[ERROR]" in stripped or "失败" in stripped:
-                    fail(stripped)
-                elif "成功" in stripped or "✓" in stripped or "ready" in stripped.lower():
-                    ok(stripped)
-                else:
-                    info(stripped)
-
         if result.returncode != 0:
             fail(f"manage_docker_containers.sh {action} 失败 (exit={result.returncode})")
-            if result.stderr.strip():
-                info(f"stderr: {result.stderr.strip()[-500:]}")
             return False
         return True
     except subprocess.TimeoutExpired:
@@ -1784,36 +1593,11 @@ def step_start_docker(cfg):
     return True
 
 
-def _stop_docker_ips(cfg, ips, role_label):
-    """停止指定 IP 列表的 Docker 容器。"""
-    docker_name = cfg.get("DOCKER_NAME", "vllm-ascend-env")
-    log(f"停止 {role_label} Docker 容器 ({len(ips)} 节点)...", "bold")
-    _docker_run(cfg, ips, "stop")
-    for ip in ips:
-        idx = (cfg.get("PNODE_IPS", []).index(ip) if ip in cfg.get("PNODE_IPS", [])
-               else cfg.get("DNODE_IPS", []).index(ip) if ip in cfg.get("DNODE_IPS", []) else 0)
-        ok(f"{role_label}{idx} ({ip}): 容器 {docker_name} 已停止")
-
-
 def cmd_stop_docker(cfg):
     """停止所有节点的 Docker 容器。"""
     log("停止所有节点 Docker 容器", "bold")
     all_ips = cfg["PNODE_IPS"] + cfg["DNODE_IPS"]
     _docker_run(cfg, all_ips, "stop")
-    return 0
-
-
-def cmd_stop_docker_pnode(cfg):
-    """仅停止 PNode 节点的 Docker 容器。"""
-    log("停止 PNode 节点 Docker 容器", "bold")
-    _stop_docker_ips(cfg, cfg["PNODE_IPS"], "PNode")
-    return 0
-
-
-def cmd_stop_docker_dnode(cfg):
-    """仅停止 DNode 节点的 Docker 容器。"""
-    log("停止 DNode 节点 Docker 容器", "bold")
-    _stop_docker_ips(cfg, cfg["DNODE_IPS"], "DNode")
     return 0
 
 
@@ -1829,19 +1613,6 @@ def cmd_restart_docker(cfg):
     return 0 if _docker_run(cfg, all_ips, "restart") else 1
 
 
-def _cmd_docker_subset(cfg, ips, role_label, action):
-    """对指定 IP 子集执行 docker 操作。"""
-    log(f"{action} {role_label} Docker 容器 ({len(ips)} 节点)", "bold")
-    return 0 if _docker_run(cfg, ips, action) else 1
-
-
-def cmd_start_docker_pnode(cfg):
-    return _cmd_docker_subset(cfg, cfg["PNODE_IPS"], "PNode", "restart")
-
-def cmd_start_docker_dnode(cfg):
-    return _cmd_docker_subset(cfg, cfg["DNODE_IPS"], "DNode", "restart")
-
-
 def cmd_restart(cfg):
     """一键重启：stop + deploy。"""
     model_display = {"glm52": "GLM-5.2", "glm5.2": "GLM-5.2", "deepseek-v4-pro": "DeepSeek-V4-Pro"}.get(cfg.get("MODEL_TYPE", "glm52"), cfg.get("MODEL_TYPE", "glm52"))
@@ -1853,25 +1624,20 @@ def cmd_restart(cfg):
 
 # ---- 主入口 -----------------------------------------------------------------
 SUBCOMMANDS = {
-    "deploy":       cmd_deploy,
-    "status":       cmd_status,
-    "stop":         cmd_stop,
-    "stop-pnode":   cmd_stop_pnode,
-    "stop-dnode":   cmd_stop_dnode,
-    "restart":          cmd_restart,
-    "restart-docker":   cmd_restart_docker,
-    "distribute":   cmd_distribute,
-    "start-docker": cmd_start_docker,
-    "start-pnode":  cmd_start_pnode,
-    "start-dnode":  cmd_start_dnode,
-    "start-proxy":  cmd_start_proxy,
-    "stop-proxy":   cmd_stop_proxy,
-    "stop-docker":      cmd_stop_docker,
-    "start-docker-pnode": cmd_start_docker_pnode,
-    "stop-docker-pnode":  cmd_stop_docker_pnode,
-    "start-docker-dnode": cmd_start_docker_dnode,
-    "stop-docker-dnode":  cmd_stop_docker_dnode,
-    "clean":            cmd_clean,
+    "deploy":         cmd_deploy,
+    "status":         cmd_status,
+    "stop":           cmd_stop,
+    "stop-pnode":     cmd_stop_pnode,
+    "stop-dnode":     cmd_stop_dnode,
+    "restart":        cmd_restart,
+    "restart-docker": cmd_restart_docker,
+    "start-docker":   cmd_start_docker,
+    "start-pnode":    cmd_start_pnode,
+    "start-dnode":    cmd_start_dnode,
+    "start-proxy":    cmd_start_proxy,
+    "stop-proxy":     cmd_stop_proxy,
+    "stop-docker":    cmd_stop_docker,
+    "clean":          cmd_clean,
 }
 
 
