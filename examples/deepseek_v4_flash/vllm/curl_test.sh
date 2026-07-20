@@ -15,13 +15,9 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 MODEL_NAME="${MODEL_NAME:-deepseek-v4-flash}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../scripts/common.sh
-source "${SCRIPT_DIR}/../../scripts/common.sh"
-
-pass() { log_info "[PASS] $1"; }
-fail() { log_err "[FAIL] $1"; }
-info() { log_info "[INFO] $1"; }
+pass() { echo "[PASS] $1"; }
+fail() { echo "[FAIL] $1"; }
+info() { echo "[INFO] $1"; }
 
 # -----------------------------------------------------------------------------
 # 测试 1: 服务健康检查
@@ -94,7 +90,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 测试 5: Tool Calling (Claude Code 集成必需)
+# 测试 5: Tool Calling
 # -----------------------------------------------------------------------------
 info "Testing tool calling..."
 tool_response=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \

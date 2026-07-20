@@ -35,9 +35,9 @@ readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8015}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 readonly ENABLE_MTP="${ENABLE_MTP:-0}"
 # Note: Step-3.7-Flash's config.json has no num_nextn_predict_layers.
 # MTP is disabled by default; vLLM 0.22.1 does not support method='mtp' for
@@ -93,6 +93,7 @@ vllm serve "$MODEL_PATH" \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser step3p5 \
+    --language-model-only \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \

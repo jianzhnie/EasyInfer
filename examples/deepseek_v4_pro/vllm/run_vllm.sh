@@ -17,12 +17,12 @@ set -u
 BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/DeepSeek-V4-Pro-w4a8-mtp}"
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-8005}"
 TP="${TP:-8}"
-PP="${PP:-1}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
+PP="${PP:-2}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU optimizations
 export HCCL_OP_EXPANSION_MODE="${HCCL_OP_EXPANSION_MODE:-AIV}"
@@ -59,7 +59,6 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enforce-eager \
-    --speculative-config "{\"num_speculative_tokens\": 1, \"method\": \"mtp\", \"enforce_eager\": true}" \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v4 \
     --seed 1024 \

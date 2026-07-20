@@ -32,10 +32,10 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/MiniMax-M2.7-w8a8-QuaRot}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8004}"
-readonly TP="${TP:-4}"
+readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables

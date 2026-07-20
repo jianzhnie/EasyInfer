@@ -65,15 +65,15 @@ find "${TRITON_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -r
 find "${TORCHINDUCTOR_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -rf {} + 2>/dev/null || true
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-48}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 

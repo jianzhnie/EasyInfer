@@ -27,7 +27,7 @@ TP="${TP:-8}"
 PP="${PP:-1}"
 
 # Optional configurations for compilation and speculative decoding
-DEFAULT_COMPILATION_CONFIG='{"cudagraph_mode":"FULL_AND_PIECEWISE", "custom_ops":["all"]}'
+DEFAULT_COMPILATION_CONFIG=''
 DEFAULT_SPECULATIVE_CONFIG='{"method":"mtp","num_speculative_tokens":1}'
 
 COMPILATION_CONFIG="${COMPILATION_CONFIG:-$DEFAULT_COMPILATION_CONFIG}"
@@ -71,6 +71,7 @@ vllm serve "$MODEL_PATH" \
     --tokenizer-mode deepseek_v4 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
+    --enforce-eager \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v4 \
     --reasoning-parser deepseek_v4 \
