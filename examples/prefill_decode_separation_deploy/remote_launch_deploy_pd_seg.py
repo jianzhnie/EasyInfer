@@ -30,7 +30,6 @@
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -595,25 +594,12 @@ def check_model_exists(cfg, ip, model_path):
 
 
 def step_clean(cfg):
-    """清理所有节点上已有的 vLLM 进程。
-    作为双重保障：环境检查确认无进程后，再执行一次兜底清理，
-    防止容器重启后仍有残留进程（如 docker restart 后自愈进程仍在）。"""
+    """委托 manage_nodes.sh clean 清理所有节点 vLLM 进程。"""
     if cfg.get("CLEAN_BEFORE_DEPLOY", "true").lower() != "true":
         info("跳过清理（CLEAN_BEFORE_DEPLOY=false）")
         return
     log("========== 预清理: 停止已有 vLLM 进程 ==========", "bold")
-    all_ips = cfg["PNODE_IPS"] + cfg["DNODE_IPS"]
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-
-    with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
-        futures = {}
-        for ip in all_ips:
-            cmd = f"cd {remote_dir} && bash stop_node.sh all 2>/dev/null || true"
-            futures[pool.submit(ssh_docker_cmd, cfg, ip, cmd, 30)] = ip
-        for future in as_completed(futures):
-            ip = futures[future]
-            rc, _, _ = future.result()
-            ok(f"{ip}: 已清理")
+    _manage_nodes(cfg, "clean")
 
 
 def update_deploy_conf(cfg):
@@ -714,293 +700,16 @@ def distribute_to_node(cfg, ip, local_dir, remote_dir):
     """共享存储环境无需分发，仅验证目录可达。"""
     rc, _, _ = ssh_docker_cmd(cfg, ip, f"test -d {remote_dir}", 15)
     return rc == 0, "共享存储" if rc == 0 else "不可达"
-
-
-def _try_start_node(cfg, node_index, ip, role, port, timeout, interval):
-    """尝试启动单个节点并等待健康，返回是否成功。"""
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    script = f"start_{role}.sh"
-    name = f"{role.title()}{node_index}"
-    cmd = f"cd {remote_dir} && nohup bash {script} {node_index} > /tmp/{role}_{node_index}.log 2>&1 &"
-    rc, _, err = ssh_docker_cmd(cfg, ip, cmd, 30)
-    if rc != 0:
-        return False, f"启动命令失败: {err}"
-    if wait_for_health_with_log(cfg, ip, port, name, node_index, role, timeout, interval):
-        return True, None
-    return False, "健康检查超时"
-
-
-def _try_start_node_with_failover(cfg, node_index, ip, role, port, pnodes, dnodes):
-    """启动单个节点，失败时立即用备用替换或重试。
-    master 故障时替换 master 并重启整组节点。
-    返回 (成功, 最终IP)。"""
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    label = role.title()
-    name = f"{label}{node_index}"
-    ips = pnodes if role == "pnode" else dnodes
-    backups = cfg.get("BACKUP_IPS", [])
-
-    success, _ = _try_start_node(cfg, node_index, ip, role, port, timeout, interval)
-    if success:
-        return True, ip
-
-    fail(f"{name} ({ip}): 健康检查超时")
-
-    # ---- 非 master 故障：单独替换 ----
-    if backups and node_index > 0:
-        backup_ip = backups.pop(0)
-        warn(f"尝试备用节点 {backup_ip} 替换 {name}...")
-        ips[node_index] = backup_ip
-        if not update_deploy_conf(cfg):
-            fail("deploy.conf 更新失败")
-            return False, ip
-        local_script_dir = Path(cfg["LOCAL_SCRIPT_DIR"])
-        distribute_to_node(cfg, backup_ip, local_script_dir, remote_dir)
-        success2, _ = _try_start_node(cfg, node_index, backup_ip, role, port, timeout, interval)
-        if success2:
-            ok(f"{name} ({backup_ip}): 已就绪（备用）")
-            return True, backup_ip
-        else:
-            fail(f"{name} ({backup_ip}): 备用节点也失败")
-            return False, backup_ip
-
-    # 注: master 故障由 step_start_all_nodes 内 _restart_node_group 处理
-
-    # ---- 无备用节点：重试 ----
-    warn(f"{name} ({ip}): 无可用备用节点，稍后重试...")
-    time.sleep(5)
-    success2, _ = _try_start_node(cfg, node_index, ip, role, port, timeout // 2, interval)
-    if success2:
-        ok(f"{name} ({ip}): 重试后已就绪")
-        return True, ip
-    else:
-        fail(f"{name} ({ip}): 重试后仍失败")
-        return False, ip
-
-
-def _start_node(cfg, node_index, ip, role):
-    """发送单节点启动命令（不等待）。返回 True/False。"""
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    script = f"start_{role}.sh"
-    cmd = f"cd {remote_dir} && nohup bash {script} {node_index} > /tmp/{role}_{node_index}.log 2>&1 &"
-    rc, _, err = ssh_docker_cmd(cfg, ip, cmd, 30)
-    if rc == 0:
-        return True
-    else:
-        fail(f"{role.title()}{node_index} ({ip}): 启动命令失败: {err}")
-        return False
-
-
 def step_start_all_nodes(cfg):
-    """启动所有 PNode 和 DNode。
-    时序: master (PNode0/DNode0) 先启动 -> 4s 后从节点启动 -> 先等 master 健康 -> 再从节点健康。
-    master 故障时替换并用 stop_node + 重启整组。"""
-    pnodes = list(cfg["PNODE_IPS"])
-    dnodes = list(cfg["DNODE_IPS"])
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    p_port = int(cfg.get("P_VLLM_START_PORT", "9081"))
-    d_port = int(cfg.get("D_VLLM_START_PORT", "9900"))
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-
+    """步骤 3：委托 manage_nodes.sh 并行启动所有节点。"""
     log("========== 步骤 3/6: 启动所有节点 ==========", "bold")
+    return _manage_nodes(cfg, "start", "all")
 
-    # ---- 阶段 1: 发启动命令（master 先，从节点后）----
-    log("--- 阶段 1: 发送启动命令 ---", "bold")
-
-    # 1.1 先发 master 节点
-    masters = [(0, pnodes[0], "pnode", p_port), (0, dnodes[0], "dnode", d_port)]
-    for node_index, ip, role, port in masters:
-        ok_msg = f"{role.title()}0 ({ip}): 启动命令已发送"
-        fail_msg = f"{role.title()}0 ({ip}): 启动命令失败"
-        if _start_node(cfg, node_index, ip, role):
-            ok(ok_msg)
-        else:
-            fail(fail_msg)
-
-    info("等待 4s 让 master 节点先启动...")
-    time.sleep(4)
-
-    # 1.2 再发从节点
-    slaves = [(i, ip, "pnode", p_port) for i, ip in enumerate(pnodes) if i > 0] + \
-             [(i, ip, "dnode", d_port) for i, ip in enumerate(dnodes) if i > 0]
-    if slaves:
-        with ThreadPoolExecutor(max_workers=len(slaves)) as pool:
-            futs = {}
-            for node_index, ip, role, port in slaves:
-                futs[pool.submit(_start_node, cfg, node_index, ip, role)] = (ip, role.title(), node_index)
-            for fut in as_completed(futs):
-                ip, label, idx = futs[fut]
-                if fut.result():
-                    ok(f"{label}{idx} ({ip}): 启动命令已发送")
-                else:
-                    fail(f"{label}{idx} ({ip}): 启动命令失败")
-
-    # ---- 阶段 2: 健康检查（所有节点并行）----
-    log("--- 阶段 2: 健康检查 ---", "bold")
-    all_healthy = True
-    has_replaced = False
-
-    def _wait_node_health_with_retry(cfg, node_index, ip, role, port, timeout, interval, max_retries=3):
-        """等待单节点健康。只做健康检查，不发启动命令。
-        失败后由外部异常处理流程负责 stop + start（节点/整组重启）。"""
-        name = f"{role.title()}{node_index}"
-        for retry in range(max_retries):
-            if wait_for_health_with_log(cfg, ip, port, f"{role.title()}{node_index}", node_index, role, timeout, interval):
-                return True
-            if retry < max_retries - 1:
-                warn(f"{name} ({ip}): 健康检查失败，等待重试 ({max_retries - 1 - retry} 次剩余)...")
-                time.sleep(3)
-        return False
-
-    def _restart_node_group(cfg, role, ips, node_index, new_ip):
-        """替换 master 并重启整组节点。"""
-        label = role.title()
-        start_port = int(cfg.get("P_VLLM_START_PORT", "9081")) if role == "pnode" else int(cfg.get("D_VLLM_START_PORT", "9900"))
-        all_ips = list(ips)
-
-        ips[node_index] = new_ip
-        if role == "pnode":
-            cfg["P_DP_ADDRESS"] = new_ip
-        else:
-            cfg["D_DP_ADDRESS"] = new_ip
-        if not update_deploy_conf(cfg):
-            return False
-
-        local_script_dir = Path(cfg["REMOTE_SCRIPT_DIR"]).parent
-        info(f"重新分发配置到所有 {label} 节点...")
-        for nip in all_ips:
-            distribute_to_node(cfg, nip, local_script_dir, cfg["REMOTE_SCRIPT_DIR"])
-
-        info(f"停止所有 {label} 节点 vLLM 进程...")
-        for nip in all_ips:
-            ssh_docker_cmd(cfg, nip, f"cd {remote_dir} && bash stop_node.sh {role} 2>/dev/null || true", 30)
-
-        info(f"并行启动所有 {label} 节点...")
-        with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
-            futs = {}
-            for nid, nip in enumerate(all_ips):
-                futs[pool.submit(_start_node, cfg, nid, nip, role)] = (nip, nid)
-            for fut in as_completed(futs):
-                nip, nid = futs[fut]
-                if fut.result():
-                    ok(f"{label}{nid} ({nip}): 启动命令已发送")
-                else:
-                    fail(f"{label}{nid} ({nip}): 启动命令失败")
-
-        all_ok = True
-        time.sleep(3)
-        with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
-            futs = {}
-            for nid, nip in enumerate(all_ips):
-                futs[pool.submit(_wait_node_health_with_retry, cfg, nid, nip, role, start_port, timeout, interval)] = (nip, nid)
-            for fut in as_completed(futs):
-                nip, nid = futs[fut]
-                if not fut.result():
-                    fail(f"{label}{nid} ({nip}): 整组重启后仍未就绪")
-                    all_ok = False
-        return all_ok
-
-    # 所有节点（master + slave）并行健康检查
-    all_nodes = masters + (slaves if slaves else [])
-    node_futures = {}
-
-    with ThreadPoolExecutor(max_workers=len(all_nodes)) as pool:
-        for node_index, ip, role, port in all_nodes:
-            label = role.title()
-            name = f"{label}{node_index}"
-            f = pool.submit(_wait_node_health_with_retry, cfg, node_index, ip, role, port, timeout, interval)
-            node_futures[f] = (label, node_index, ip, role, port)
-
-        for fut in as_completed(node_futures):
-            label, idx, ip, role, port = node_futures[fut]
-            name = f"{label}{idx}"
-            healthy = fut.result()
-
-            if healthy:
-                ok(f"{name} ({ip}): 已就绪")
-                continue
-
-            # 失败处理: master 走替换整组, 从节点走原有 failover
-            if idx == 0:
-                # master 节点失败
-                backups = cfg.get("BACKUP_IPS", [])
-                if backups:
-                    backup_ip = backups.pop(0)
-                    warn(f"{name} ({ip}): 启动失败，尝试替换 master 为 {backup_ip} 并重启整组 {label}")
-                    if confirm_action(f"替换 master {name} ({ip}) 为 {backup_ip} 并重启整组 {label}？", default_yes=True):
-                        if _restart_node_group(cfg, role, pnodes if role == "pnode" else dnodes, idx, backup_ip):
-                            ok(f"整组 {label} 通过备用 master {backup_ip} 恢复")
-                            has_replaced = True
-                            continue
-                        else:
-                            fail(f"整组 {label} 替换 master 后仍有节点未就绪")
-                    else:
-                        info(f"跳过 {name} 替换，请后续手动处理")
-                else:
-                    fail(f"{name} ({ip}): 无可用备用节点，启动失败")
-                all_healthy = False
-            else:
-                # 从节点失败 — 走原有 failover 逻辑（含备用替换）
-                success, final_ip = _try_start_node_with_failover(cfg, idx, ip, role, port, pnodes, dnodes)
-                if success:
-                    ok(f"{name} ({final_ip}): 已就绪")
-                    if final_ip != ip:
-                        has_replaced = True
-                else:
-                    fail(f"{name} ({final_ip}): 启动失败")
-                    all_healthy = False
-                    if final_ip != ip:
-                        has_replaced = True
-
-    if has_replaced:
-        print()
-        info(f"最终分配: PNode={pnodes}, DNode={dnodes}")
-
-    if not all_healthy:
-        fail("部分节点未就绪，请检查日志")
-        return False
-    ok("所有节点就绪")
-    return True
 
 def _step_start_role(cfg, role):
-    """启动所有 PNode 或 DNode。role='pnode' 或 'dnode'。"""
-    label = role.title()
-    log(f"========== 启动所有 {label} ==========", "bold")
-    ips = cfg[f"{role.upper()}_IPS"]
-    remote_dir = cfg["REMOTE_SCRIPT_DIR"]
-    port_key = "P_VLLM_START_PORT" if role == "pnode" else "D_VLLM_START_PORT"
-    default_port = "9081" if role == "pnode" else "9900"
-
-    for i, ip in enumerate(ips):
-        cmd = f"cd {remote_dir} && nohup bash start_{role}.sh {i} > /tmp/{role}_{i}.log 2>&1 &"
-        rc, _, err = ssh_docker_cmd(cfg, ip, cmd, timeout=30)
-        if rc != 0:
-            fail(f"{label} {i} ({ip}) 启动失败: {err}")
-            return False
-        ok(f"{label} {i} ({ip}): 启动命令已发送")
-
-    log(f"--- 等待 {label} 健康检查 ---", "bold")
-    timeout = int(cfg.get("HEALTH_CHECK_TIMEOUT", "600"))
-    interval = int(cfg.get("HEALTH_CHECK_INTERVAL", "10"))
-    port = int(cfg.get(port_key, default_port))
-    all_healthy = True
-    with ThreadPoolExecutor(max_workers=len(ips)) as pool:
-        futures = {}
-        for i, ip in enumerate(ips):
-            futures[pool.submit(wait_for_health_with_log, cfg, ip, port, f"{label}{i}", i, role, timeout, interval)] = i
-        for future in as_completed(futures):
-            i = futures[future]
-            if not future.result():
-                fail(f"{label} {i} 在 {timeout}s 内未就绪")
-                all_healthy = False
-    if not all_healthy:
-        return False
-    ok(f"所有 {label} 就绪")
-    return True
-
+    """启动所有 PNode 或 DNode。委托 manage_nodes.sh。"""
+    log(f"========== 启动所有 {role.title()} ==========", "bold")
+    return _manage_nodes(cfg, "start", role)
 
 def step_start_proxy(cfg):
     """启动负载均衡代理。"""
@@ -1039,7 +748,10 @@ def step_start_proxy(cfg):
     # 启动 proxy（在控制节点本地运行）
     log_level = cfg.get("PROXY_LOG_LEVEL", "INFO")
     log_file = os.path.join(proxy_dir, "proxy.log")
-    proxy_python = cfg.get("PROXY_PYTHON", shutil.which("python3") or "python3")
+    proxy_python = cfg.get("PROXY_PYTHON", sys.executable)
+    if not os.path.isfile(proxy_python) or not os.access(proxy_python, os.X_OK):
+        fail(f"PROXY_PYTHON 不可执行: {proxy_python}")
+        return False
     cmd = (
         f"cd {proxy_dir} && "
         f"http_proxy='' https_proxy='' no_proxy='*' "
@@ -1437,7 +1149,9 @@ def cmd_clean(cfg):
 
 # ---- Docker 集群管理（委托给 manage_docker_containers.sh）-----------------------
 # manage_docker_containers.sh 路径：相对于 EasyInfer 项目根目录
-_MANAGE_DOCKER_SCRIPT = str(Path(__file__).resolve().parent.parent.parent / "scripts" / "docker" / "manage_docker_containers.sh")
+_SCRIPT_ROOT = Path(__file__).resolve().parent.parent.parent / "scripts"
+_MANAGE_DOCKER_SCRIPT = str(_SCRIPT_ROOT / "docker" / "manage_docker_containers.sh")
+_MANAGE_NODES_SCRIPT = str(_SCRIPT_ROOT / "deploy" / "manage_nodes.sh")
 
 
 def _docker_run(cfg, ips, action="restart"):
@@ -1485,6 +1199,26 @@ def _docker_run(cfg, ips, action="restart"):
             os.unlink(nodes_file)
         except OSError:
             pass
+
+
+def _manage_nodes(cfg, action, role="all"):
+    """调用 manage_nodes.sh 管理节点进程（委托 shell 脚本）。
+
+    利用 common.sh 的 ssh_run/limit_jobs/wait_for_server 替代 Python SSH/并发/健康轮询。"""
+    deploy_dir = cfg["REMOTE_SCRIPT_DIR"]
+    cmd = ["bash", _MANAGE_NODES_SCRIPT, action,
+           "--deploy", deploy_dir, "--role", role]
+    container = cfg.get("DOCKER_NAME", "vllm-ascend-env")
+    env = {**os.environ, "CONTAINER_NAME": container,
+           "PARALLELISM": str(min(len(cfg["PNODE_IPS"]) + len(cfg["DNODE_IPS"]), 8)),
+           "http_proxy": "", "https_proxy": "", "no_proxy": "*"}
+
+    info(f"manage_nodes.sh {action} (role={role})")
+    result = subprocess.run(cmd, timeout=600, env=env)
+    if result.returncode != 0:
+        fail(f"manage_nodes.sh {action} 失败 (exit={result.returncode})")
+        return False
+    return True
 
 
 def step_start_docker(cfg):
