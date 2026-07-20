@@ -26,7 +26,7 @@ check_node() {
 
     printf "  %-12s %-16s :%-6s  " "$name" "$ip" "$port"
 
-    response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$timeout" "$url" 2>/dev/null) || response="000"
+    response=$(curl -s --noproxy '*' -o /dev/null -w "%{http_code}" --connect-timeout "$timeout" --max-time "$((timeout + 5))" "$url" 2>/dev/null) || response="000"
 
     if [ "$response" = "200" ]; then
         echo "OK (200)"
@@ -38,7 +38,7 @@ check_node() {
 }
 
 echo "============================================================"
-echo "  GLM-5.2 部署状态检查  $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  ${SERVED_MODEL_NAME^^} 部署状态检查  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 echo ""
 

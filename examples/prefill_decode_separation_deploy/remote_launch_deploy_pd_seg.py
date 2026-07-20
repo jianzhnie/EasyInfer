@@ -163,9 +163,10 @@ def resolve_model_config(cfg):
         # PNode 本地 DP 数
         if "P_DP_SIZE_LOCAL" not in cfg:
             cfg["P_DP_SIZE_LOCAL"] = deploy_cfg.get("P_DP_SIZE_LOCAL", "1")
-        # 日志目录
+        # 日志目录 / 模型路径
         if "LOG_DIR" not in cfg:
             cfg["LOG_DIR"] = deploy_cfg.get("LOG_DIR", "/data/scripts")
+        cfg["MODEL_PATH"] = deploy_cfg.get("MODEL_PATH", "")
     else:
         info(f"deploy.conf 不存在: {deploy_conf_path}，使用默认参数")
         cfg.setdefault("P_VLLM_START_PORT", "9081")
@@ -521,7 +522,7 @@ def step_check_prerequisites(cfg, roles=None, skip_model_check=False, skip_port_
     else:
         log("--- 检查模型权重 ---", "bold")
         model_ok = True
-        model_path = _get_model_path(cfg)
+        model_path = cfg.get("MODEL_PATH", "")
         if model_path:
             with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
                 futures = {}
@@ -577,23 +578,6 @@ def check_ports(cfg, ip, ports):
         except Exception:
             pass
     return busy
-
-
-def _get_model_path(cfg):
-    """从对应 MODEL_TYPE 的 deploy.conf 中读取模型路径。"""
-    local_dir = cfg.get("LOCAL_SCRIPT_DIR")
-    if not local_dir:
-        return None
-    deploy_conf_path = Path(local_dir) / "deploy.conf"
-    if not deploy_conf_path.exists():
-        return None
-    with open(deploy_conf_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("MODEL_PATH="):
-                val = line.split("=", 1)[1].strip().strip('"')
-                return val
-    return None
 
 
 def check_model_exists(cfg, ip, model_path):
@@ -782,63 +766,7 @@ def _try_start_node_with_failover(cfg, node_index, ip, role, port, pnodes, dnode
             fail(f"{name} ({backup_ip}): 备用节点也失败")
             return False, backup_ip
 
-    # ---- master 故障：替换 master + 重启整组 ----
-    if backups and node_index == 0:
-        warn(f"{name} 是 master 节点，替换后需重启整组 {label}")
-        if confirm_action(f"替换 master 节点 {name} ({ip}) 并重启整组 {label}？", default_yes=True):
-            backup_ip = backups.pop(0)
-            info(f"备用节点: {backup_ip}")
-            ips[node_index] = backup_ip
-            if role == "pnode":
-                cfg["P_DP_ADDRESS"] = backup_ip
-                all_ips = list(ips)
-            else:
-                cfg["D_DP_ADDRESS"] = backup_ip
-                all_ips = list(ips)
-            if not update_deploy_conf(cfg):
-                fail("deploy.conf 更新失败")
-                return False, ip
-            local_script_dir = Path(cfg["LOCAL_SCRIPT_DIR"])
-            info(f"重新分发配置到所有 {label} 节点...")
-            for nip in all_ips:
-                distribute_to_node(cfg, nip, local_script_dir, remote_dir)
-            info(f"停止所有 {label} 节点 vLLM 进程...")
-            for nip in all_ips:
-                ssh_docker_cmd(cfg, nip, f"cd {remote_dir} && bash stop_node.sh {role} 2>/dev/null || true", 30)
-            info(f"并行启动所有 {label} 节点...")
-            start_port = int(cfg.get("P_VLLM_START_PORT", "9081")) if role == "pnode" else int(cfg.get("D_VLLM_START_PORT", "9900"))
-            with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
-                futs = {}
-                for nid, nip in enumerate(all_ips):
-                    script = f"start_{role}.sh"
-                    cmd = f"cd {remote_dir} && nohup bash {script} {nid} > /tmp/{role}_{nid}.log 2>&1 &"
-                    futs[pool.submit(ssh_docker_cmd, cfg, nip, cmd, 30)] = (nip, nid)
-                for fut in as_completed(futs):
-                    nip, nid = futs[fut]
-                    rc, _, err = fut.result()
-                    if rc == 0:
-                        ok(f"{label}{nid} ({nip}): 启动命令已发送")
-                    else:
-                        fail(f"{label}{nid} ({nip}): 启动失败: {err}")
-            all_restart_ok = True
-            with ThreadPoolExecutor(max_workers=len(all_ips)) as pool:
-                futs = {}
-                for nid, nip in enumerate(all_ips):
-                    futs[pool.submit(wait_for_health_with_log, cfg, nip, start_port, f"{label}{nid}", nid, role, timeout, interval)] = (nip, nid)
-                for fut in as_completed(futs):
-                    nip, nid = futs[fut]
-                    if not fut.result():
-                        fail(f"{label}{nid} ({nip}): 整组重启后仍未就绪")
-                        all_restart_ok = False
-            if all_restart_ok:
-                ok(f"整组 {label} 通过备用 master {backup_ip} 恢复")
-                return True, backup_ip
-            else:
-                fail(f"整组 {label} 重启后仍有节点未就绪")
-                return False, backup_ip
-        else:
-            info(f"跳过 {name} 替换，请后续手动处理")
-            return False, ip
+    # 注: master 故障由 step_start_all_nodes 内 _restart_node_group 处理
 
     # ---- 无备用节点：重试 ----
     warn(f"{name} ({ip}): 无可用备用节点，稍后重试...")
@@ -863,12 +791,6 @@ def _start_node(cfg, node_index, ip, role):
     else:
         fail(f"{role.title()}{node_index} ({ip}): 启动命令失败: {err}")
         return False
-
-
-def _health_check(cfg, node_index, ip, role, port, timeout, interval):
-    """轮询等待单节点健康检查。检测到 ERROR/Traceback 时立刻返回失败。"""
-    name = f"{role.title()}{node_index}"
-    return wait_for_health_with_log(cfg, ip, port, name, node_index, role, timeout, interval)
 
 
 def step_start_all_nodes(cfg):
@@ -926,7 +848,7 @@ def step_start_all_nodes(cfg):
         失败后由外部异常处理流程负责 stop + start（节点/整组重启）。"""
         name = f"{role.title()}{node_index}"
         for retry in range(max_retries):
-            if _health_check(cfg, node_index, ip, role, port, timeout, interval):
+            if wait_for_health_with_log(cfg, ip, port, f"{role.title()}{node_index}", node_index, role, timeout, interval):
                 return True
             if retry < max_retries - 1:
                 warn(f"{name} ({ip}): 健康检查失败，等待重试 ({max_retries - 1 - retry} 次剩余)...")
@@ -1150,17 +1072,11 @@ def step_start_proxy(cfg):
 def step_verify(cfg):
     """最终验证：汇总所有节点和 Proxy 状态，并测试推理可达性。"""
     log("========== 步骤 5/6: 最终验证 ==========", "bold")
-    pnodes = cfg["PNODE_IPS"]
-    dnodes = cfg["DNODE_IPS"]
     proxy_port = cfg.get("PROXY_PORT", "8000")
     proxy_ip = cfg.get("PROXY_NODE_IP", "127.0.0.1")
     proxy_dir = cfg.get("PROXY_SCRIPT_DIR", "") or str(Path(__file__).parent)
-    model_type = cfg.get("MODEL_TYPE", "glm52")
     served_model = cfg.get("SERVED_MODEL_NAME", "glm-52")
-    p_port = int(cfg.get("P_VLLM_START_PORT", "9081"))
-    d_port = int(cfg.get("D_VLLM_START_PORT", "9900"))
-
-    model_display = {"glm52": "GLM-5.2", "glm5.2": "GLM-5.2", "deepseek-v4-pro": "DeepSeek-V4-Pro"}.get(model_type, model_type)
+    model_display = {"glm52": "GLM-5.2", "glm5.2": "GLM-5.2", "deepseek-v4-pro": "DeepSeek-V4-Pro"}.get(cfg.get("MODEL_TYPE", "glm52"), cfg.get("MODEL_TYPE", "glm52"))
 
     print()
     print("  " + "=" * 60)
@@ -1169,26 +1085,15 @@ def step_verify(cfg):
 
     all_ok = True
 
-    # PNode
-    print("\n  [PNode]")
-    for i, ip in enumerate(pnodes):
-        code = http_get(ip, p_port)
-        status = "OK" if code == "200" else f"FAIL({code})"
-        if code != "200":
-            all_ok = False
-        print(f"    PNode{i}  {ip:16s} :{p_port}  {status}")
-
-    # DNode (检查 rank-0 实例)
-    print("\n  [DNode]")
-    for i, ip in enumerate(dnodes):
-        code = http_get(ip, d_port)
-        status = "OK" if code == "200" else f"FAIL({code})"
-        if code != "200":
-            all_ok = False
-        print(f"    DNode{i}  {ip:16s} :{d_port}  {status}")
+    # 节点健康检查 — 委托给 check_status.sh
+    check_script = os.path.join(cfg["REMOTE_SCRIPT_DIR"], "check_status.sh")
+    result = subprocess.run(["bash", check_script], capture_output=True, text=True, timeout=30)
+    print(result.stdout)
+    if result.returncode != 0 or "FAIL" in result.stdout or "UNREACHABLE" in result.stdout:
+        all_ok = False
 
     # Proxy
-    print("\n  [Proxy]")
+    print("  [Proxy]")
     code = http_get(proxy_ip, proxy_port, "/healthcheck")
     status = "OK" if code == "200" else f"FAIL({code})"
     if code != "200":
