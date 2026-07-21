@@ -7,8 +7,7 @@ ModelScope 权重下载由两个脚本配合完成：
 | 脚本 | 作用 |
 |------|------|
 | `tools/check_weights.py` | 校验本地权重是否 **100% 完整**（逐文件、逐 safetensors 字节级校验） |
-| `tools/ms_download.py` | 批量下载（Python 实现）：先校验 → 跳过完整模型 → 精准补下 → 复检 → 重试直至收敛 |
-| `tools/ms_download.sh` | 兼容包装器：选择正确的 python 解释器后 `exec ms_download.py`，用法与原 bash 版完全一致 |
+| `tools/ms_download.py` | 批量下载：先校验 → 跳过完整模型 → 精准补下 → 复检 → 重试直至收敛 |
 
 `ms_download.py` 直接 `import check_weights` 复用全部校验逻辑（无子进程/临时文件开销），
 模型表、并行校验、重试循环、信号处理都在一个文件内。
@@ -83,19 +82,19 @@ $PY tools/check_weights.py \
 
 ### 批量校验所有模型（不启动下载）
 
-下载脚本内置了全部模型表，把 `MAX_ROUNDS` 设为 0 即只做校验、不下载：
+下载脚本内置了全部模型表，`--max-rounds 0` 即只做校验、不下载：
 
 ```bash
-MAX_ROUNDS=0 bash tools/ms_download.sh
+$PY tools/ms_download.py --max-rounds 0
 ```
 
-## 二、批量下载权重（ms_download.sh）
+## 二、批量下载权重（ms_download.py）
 
 ### 基本用法
 
 ```bash
-export PATH=/home/jianzhnie/llmtuner/software/miniconda3/envs/vllm091/bin:$PATH
-bash tools/ms_download.sh
+PY=/home/jianzhnie/llmtuner/software/miniconda3/envs/vllm091/bin/python
+$PY tools/ms_download.py            # 或加 --help 查看全部参数
 ```
 
 工作流程：
@@ -130,34 +129,38 @@ bash tools/ms_download.sh
 | `--max-targeted-files N` | `MAX_TARGETED_FILES` | `500` | 缺失/损坏文件 ≤ 此数时按清单精准下载，否则整仓下载 |
 | `--local-dir-prefix PATH` | `LOCAL_DIR_PREFIX` | `/home/jianzhnie/llmtuner/hfhub/models` | 内置模型表的本地根目录，本地路径 = `前缀/repo_id`；也是安全删除的边界 |
 | `--log-dir PATH` | `LOG_DIR` | `tools/logs` | 每个模型一个日志文件 |
-| — | `PYTHON_BIN` | 自动推断 | （仅包装器）装了 modelscope 的 python；默认取 modelscope CLI 同目录的 python |
 
 完整说明见 `python tools/ms_download.py --help`。
 
 ### 常见场景
 
 ```bash
+PY=/home/jianzhnie/llmtuner/software/miniconda3/envs/vllm091/bin/python
+
 # 1. 只校验，不下载
-MAX_ROUNDS=0 bash tools/ms_download.sh
+$PY tools/ms_download.py --max-rounds 0
 
 # 2. 正常批量下载（跳过已完整模型，自动修复重试）
-bash tools/ms_download.sh
+$PY tools/ms_download.py
 
 # 3. 顺序下载（磁盘/带宽受限时）
-RUN_IN_BACKGROUND=false bash tools/ms_download.sh
+$PY tools/ms_download.py --sequential
 
 # 4. 只下载配置文件（部署前准备）
-SKIP_WEIGHTS=true bash tools/ms_download.sh
+$PY tools/ms_download.py --skip-weights
 
 # 5. 某个模型彻底重下：先编辑模型表只保留它（注释掉其他条目），再：
-FORCE_OVERWRITE=true bash tools/ms_download.sh
+$PY tools/ms_download.py --force-overwrite
 
 # 6. 最严格的全量校验（sha256 哈希比对，5.7TB 约 25 分钟，不下载）
-VERIFY_SHA256=true MAX_ROUNDS=0 bash tools/ms_download.sh
+$PY tools/ms_download.py --sha256 --max-rounds 0
 
 # 7. 下载并在每个模型校验完整后自动清理其 ._____temp
-CLEAN_TEMP=true bash tools/ms_download.sh
+$PY tools/ms_download.py --clean-temp
 ```
+
+以上所有参数都有对应的环境变量（见上表），如 `MAX_ROUNDS=0 $PY tools/ms_download.py`，
+命令行参数优先于环境变量。
 
 FORCE_OVERWRITE 会清空模型表内**所有**启用的模型目录，如只想重下一个模型，
 请先编辑 `tools/ms_download.py` 中的 `MODEL_REPOS` 表，注释掉其他条目。
@@ -193,7 +196,7 @@ modelscope 客户端会跳过本地已存在的文件，不会自动替换损坏
 
 ```bash
 $PY tools/check_weights.py --fix "Eco-Tech/GLM-5.1-w8a8:/path/to/dir"
-bash tools/ms_download.sh
+$PY tools/ms_download.py
 ```
 
 **Q: `._____temp/` 目录占了大量空间，能删吗？**

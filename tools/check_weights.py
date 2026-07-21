@@ -35,7 +35,7 @@ import socket
 import struct
 import sys
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 warnings.filterwarnings("ignore")
 # torch_npu (present in some vllm envs) breaks "import torch" unless backend
@@ -52,6 +52,15 @@ TEMP_DIR_NAME = "._____temp"
 # them would always fail. They are not needed to load a model.
 IGNORE_FILES = {".msc", ".mv"}
 HASH_CHUNK = 64 * 1024 * 1024
+
+# Problem categories in report order: (category, label). Files in FIXABLE
+# categories exist locally but failed verification, so --fix deletes them
+# ("missing" files have nothing to delete).
+BAD_CATEGORIES = [("missing", "missing"),
+                  ("bad_size", "size mismatch"),
+                  ("corrupt", "corrupt safetensors"),
+                  ("bad_hash", "sha256 mismatch")]
+FIXABLE = ("bad_size", "corrupt", "bad_hash")
 
 
 def human_size(n):
@@ -119,24 +128,25 @@ def fetch_remote_files(repo_id):
     }
 
 
-def local_expected_files_offline(local_dir):
-    """Best-effort expected weight-file set without network access.
-    Returns (expected_relative_paths_or_None, note)."""
+def expected_files_offline(local_dir):
+    """Best-effort expected weight-file list without network access.
+    Returns (relative_paths_or_None, note); None means "no index/shard
+    pattern found" and the caller falls back to all local weight files."""
     for fname in sorted(os.listdir(local_dir)):
-        if fname.endswith(".safetensors.index.json"):
-            try:
-                with open(os.path.join(local_dir, fname)) as f:
-                    idx = json.load(f)
-                expected = sorted(set(idx.get("weight_map", {}).values()))
-                if expected:
-                    return expected, f"index file {fname} ({len(expected)} shards)"
-            except (OSError, json.JSONDecodeError):
-                pass
-    shards = [f for f in os.listdir(local_dir) if f.endswith(".safetensors")]
-    for f in sorted(shards):
-        m = re.match(r"^(.+-)(\d+)-of-0*(\d+)\.safetensors$", f)
+        if not fname.endswith(".safetensors.index.json"):
+            continue
+        try:
+            with open(os.path.join(local_dir, fname)) as f:
+                expected = sorted(set(json.load(f).get("weight_map", {}).values()))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if expected:
+            return expected, f"index file {fname} ({len(expected)} shards)"
+    for fname in sorted(f for f in os.listdir(local_dir) if f.endswith(".safetensors")):
+        m = re.match(r"^(.+-)(\d+)-of-0*(\d+)\.safetensors$", fname)
         if m:
-            prefix, _, total, digits = m.group(1), m.group(2), int(m.group(3)), len(m.group(2))
+            prefix, num, total_s = m.groups()
+            total, digits = int(total_s), len(num)
             expected = [f"{prefix}{i:0{digits}d}-of-{total:0{digits}d}.safetensors"
                         for i in range(1, total + 1)]
             return expected, f"shard pattern ({total} shards)"
@@ -144,135 +154,116 @@ def local_expected_files_offline(local_dir):
 
 
 def temp_dir_info(local_dir):
+    """(nfiles, total_bytes) of leftover modelscope resume data, else None."""
     temp = os.path.join(local_dir, TEMP_DIR_NAME)
     if not os.path.isdir(temp):
         return None
     nfiles, total = 0, 0
     for root, _, files in os.walk(temp):
-        for f in files:
+        for fname in files:
             nfiles += 1
             try:
-                total += os.path.getsize(os.path.join(root, f))
+                total += os.path.getsize(os.path.join(root, fname))
             except OSError:
                 pass
-    if nfiles == 0:
-        return None
-    return nfiles, total
+    return (nfiles, total) if nfiles else None
 
 
-def check_one_file(local_dir, rel, expected_size, want_sha256, remote_sha256):
+def check_one_file(local_dir, rel, info, want_sha256):
     """Worker: size + structure (+ optional hash) for one file.
-    Returns (category, rel, detail) with category in ok/missing/bad_size/corrupt/bad_hash."""
+    info = {"size": int|None, "sha256": str}. Returns (category, detail)."""
     path = os.path.join(local_dir, rel)
     if not os.path.isfile(path):
-        return ("missing", rel, "")
+        return "missing", ""
     try:
         actual = os.path.getsize(path)
     except OSError as exc:
-        return ("missing", rel, f"stat failed: {exc}")
-    if expected_size is not None and actual != expected_size:
-        return ("bad_size", rel, f"local={actual} expected={expected_size}")
+        return "missing", f"stat failed: {exc}"
+    if info["size"] is not None and actual != info["size"]:
+        return "bad_size", f"local={actual} expected={info['size']}"
     if rel.endswith(".safetensors"):
         problem = validate_safetensors(path)
         if problem:
-            return ("corrupt", rel, problem)
-    if want_sha256 and remote_sha256:
+            return "corrupt", problem
+    if want_sha256 and info["sha256"]:
         try:
-            if sha256_file(path) != remote_sha256:
-                return ("bad_hash", rel, "sha256 mismatch")
+            if sha256_file(path) != info["sha256"]:
+                return "bad_hash", "sha256 mismatch"
         except OSError as exc:
-            return ("bad_hash", rel, f"read failed: {exc}")
-    return ("ok", rel, "")
+            return "bad_hash", f"read failed: {exc}"
+    return "ok", ""
 
 
-def check_model(repo_id, local_dir, args):
-    """Returns (status, lines, bad_files):
+def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights=False,
+                workers=8, show=10, fix=False, list_bad=None):
+    """Verify one model. Returns (status, lines, bad_files):
     status in ok/incomplete/error; lines = human-readable report;
     bad_files = relative paths needing (re)download (empty when ok/error)."""
-    lines = []
     if not os.path.isdir(local_dir):
         return "incomplete", [f"  FAIL directory does not exist: {local_dir}"], []
 
-    expected = None  # rel -> {"size","sha256"}
-    note = ""
-    if repo_id and not args.offline:
+    # 1) Determine the expected file set: remote repo listing, or offline
+    #    heuristics (index file / shard pattern / all local weight files).
+    if repo_id and not offline:
         try:
             expected = fetch_remote_files(repo_id)
-            note = f"{len(expected)} remote files"
         except Exception as exc:  # network/API failure: cannot verify online
             return "error", [f"  ERROR failed to fetch remote file list for {repo_id}: {exc}"], []
+        note = f"{len(expected)} remote files"
     else:
-        rels, note = local_expected_files_offline(local_dir)
-        if rels is not None:
-            expected = {r: {"size": None, "sha256": ""} for r in rels}
-        else:
-            # Offline fallback: verify every local weight file structurally.
-            rels = []
-            for root, _, files in os.walk(local_dir):
-                if TEMP_DIR_NAME in root.split(os.sep):
-                    continue
-                for f in files:
-                    if f.endswith(WEIGHT_EXTS):
-                        rels.append(os.path.relpath(os.path.join(root, f), local_dir))
-            expected = {r: {"size": None, "sha256": ""} for r in sorted(rels)}
+        rels, note = expected_files_offline(local_dir)
+        if rels is None:  # offline fallback: verify every local weight file structurally
+            rels = [os.path.relpath(os.path.join(root, f), local_dir)
+                    for root, _, files in os.walk(local_dir)
+                    if TEMP_DIR_NAME not in root.split(os.sep)
+                    for f in files
+                    if f.endswith(WEIGHT_EXTS)]
+        expected = {r: {"size": None, "sha256": ""} for r in sorted(rels)}
 
-    if args.skip_weights:
-        expected = {r: v for r, v in expected.items() if not r.endswith(WEIGHT_EXTS)}
     expected = {r: v for r, v in expected.items()
-                if os.path.basename(r) not in IGNORE_FILES}
+                if os.path.basename(r) not in IGNORE_FILES
+                and not (skip_weights and r.endswith(WEIGHT_EXTS))}
 
-    results = {"ok": [], "missing": [], "bad_size": [], "corrupt": [], "bad_hash": []}
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [
-            pool.submit(check_one_file, local_dir, rel, v["size"], args.sha256, v["sha256"])
-            for rel, v in expected.items()
-        ]
-        for fut in as_completed(futures):
-            cat, rel, detail = fut.result()
+    # 2) Check every expected file in parallel (size + structure, + optional sha256).
+    results = {cat: [] for cat, _ in BAD_CATEGORIES}
+    results["ok"] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(check_one_file, local_dir, rel, info, sha256)
+                   for rel, info in expected.items()]
+        for (rel, _), future in zip(expected.items(), futures):
+            cat, detail = future.result()
             results[cat].append((rel, detail))
 
-    n_bad = sum(len(results[c]) for c in ("missing", "bad_size", "corrupt", "bad_hash"))
-    bad_files = sorted(rel for cat in ("missing", "bad_size", "corrupt", "bad_hash")
-                       for rel, _ in results[cat])
-    labels = {
-        "missing": "missing",
-        "bad_size": "size mismatch",
-        "corrupt": "corrupt safetensors",
-        "bad_hash": "sha256 mismatch",
-    }
-    for cat, label in labels.items():
+    bad_files = sorted(rel for cat, _ in BAD_CATEGORIES for rel, _ in results[cat])
+    lines = []
+    for cat, label in BAD_CATEGORIES:
         items = sorted(results[cat])
         if not items:
             continue
         lines.append(f"  FAIL {label}: {len(items)} file(s)")
-        for rel, detail in items[: args.show]:
-            lines.append(f"    - {rel}" + (f" ({detail})" if detail else ""))
-        if len(items) > args.show:
-            lines.append(f"    ... and {len(items) - args.show} more")
+        lines += [f"    - {rel}" + (f" ({detail})" if detail else "")
+                  for rel, detail in items[:show]]
+        if len(items) > show:
+            lines.append(f"    ... and {len(items) - show} more")
 
-    if args.fix and n_bad:
-        # Delete files that failed verification so the next download run
-        # re-fetches them (the modelscope client skips existing files and
-        # would otherwise never replace a corrupt/stale one).
-        fixed = 0
-        for cat in ("bad_size", "corrupt", "bad_hash"):
+    # 3) Optional fix: delete existing-but-bad files so the next download run
+    #    re-fetches them (the modelscope client never replaces existing files).
+    if fix:
+        deleted = 0
+        for cat in FIXABLE:
             for rel, _ in results[cat]:
                 try:
                     os.remove(os.path.join(local_dir, rel))
-                    fixed += 1
+                    deleted += 1
                 except OSError:
                     pass
-        if fixed:
-            lines.append(f"  FIX deleted {fixed} bad file(s); re-download will re-fetch them")
-            # They are now missing; the model stays incomplete until re-downloaded.
+        if deleted:
+            lines.append(f"  FIX deleted {deleted} bad file(s); re-download will re-fetch them")
 
-    if args.list_bad:
-        # Machine-readable list of files that need (re)downloading, one per line.
+    if list_bad:  # machine-readable list of files needing (re)download
         try:
-            with open(args.list_bad, "w") as f:
-                for cat in ("missing", "bad_size", "corrupt", "bad_hash"):
-                    for rel, _ in sorted(results[cat]):
-                        f.write(rel + "\n")
+            with open(list_bad, "w") as f:
+                f.writelines(f"{rel}\n" for rel in bad_files)
         except OSError as exc:
             lines.append(f"  WARN could not write bad-file list: {exc}")
 
@@ -281,13 +272,21 @@ def check_model(repo_id, local_dir, args):
         lines.append(f"  WARN temp leftovers: {TEMP_DIR_NAME}/ "
                      f"({temp[0]} files, {human_size(temp[1])}) - resumable partial downloads")
 
-    if n_bad:
-        parts = [f"{len(results[c])} {labels[c]}" for c in labels if results[c]]
+    if bad_files:
+        parts = [f"{len(results[cat])} {label}" for cat, label in BAD_CATEGORIES if results[cat]]
         lines.append(f"  => INCOMPLETE ({note}): {', '.join(parts)}")
         return "incomplete", lines, bad_files
-    mode = "sizes + safetensors structure" + (" + sha256" if args.sha256 else "")
+    mode = "sizes + safetensors structure" + (" + sha256" if sha256 else "")
     lines.append(f"  => OK: {len(results['ok'])}/{len(expected)} files verified ({mode}; {note})")
     return "ok", lines, []
+
+
+def parse_pair(pair, offline):
+    """Split 'REPO_ID:LOCAL_DIR'. With offline a plain LOCAL_DIR gives
+    (None, pair); anything else invalid gives (None, None)."""
+    if ":" in pair and not pair.startswith("/"):
+        return pair.split(":", 1)
+    return (None, pair) if offline else (None, None)
 
 
 def main():
@@ -310,43 +309,37 @@ def main():
     args = ap.parse_args()
 
     statuses = {}
-    exit_code = 0
     for i, pair in enumerate(args.pairs, 1):
-        if ":" in pair and not pair.startswith("/"):
-            repo_id, local_dir = pair.split(":", 1)
-        elif args.offline:
-            repo_id, local_dir = None, pair
-        else:
+        repo_id, local_dir = parse_pair(pair, args.offline)
+        if local_dir is None:
             print(f"[{i}/{len(args.pairs)}] SKIP {pair!r}: not a REPO_ID:LOCAL_DIR pair "
                   f"(use --offline for local-only checks)")
-            exit_code = 2
+            statuses[pair] = "error"
             continue
         print(f"[{i}/{len(args.pairs)}] {repo_id or 'local'} -> {local_dir}")
         try:
-            status, lines, _ = check_model(repo_id, local_dir, args)
+            status, lines, _ = check_model(repo_id, local_dir, offline=args.offline,
+                                           sha256=args.sha256, skip_weights=args.skip_weights,
+                                           workers=args.workers, show=args.show,
+                                           fix=args.fix, list_bad=args.list_bad)
         except Exception as exc:
             status, lines = "error", [f"  ERROR unexpected: {exc!r}"]
         for line in lines:
             print(line)
         statuses[pair] = status
-        if status == "incomplete" and exit_code == 0:
-            exit_code = 1
-        elif status == "error":
-            exit_code = 2
 
     print("=" * 60)
     print("SUMMARY")
-    ok = [p for p, s in statuses.items() if s == "ok"]
-    bad = [p for p, s in statuses.items() if s == "incomplete"]
-    err = [p for p, s in statuses.items() if s == "error"]
-    print(f"  OK:         {len(ok)}")
-    print(f"  INCOMPLETE: {len(bad)}")
-    for p in bad:
+    by_status = {s: [p for p, v in statuses.items() if v == s]
+                 for s in ("ok", "incomplete", "error")}
+    print(f"  OK:         {len(by_status['ok'])}")
+    print(f"  INCOMPLETE: {len(by_status['incomplete'])}")
+    for p in by_status["incomplete"]:
         print(f"    - {p}")
-    print(f"  ERROR:      {len(err)}")
-    for p in err:
+    print(f"  ERROR:      {len(by_status['error'])}")
+    for p in by_status["error"]:
         print(f"    - {p}")
-    sys.exit(exit_code)
+    sys.exit(2 if by_status["error"] else 1 if by_status["incomplete"] else 0)
 
 
 if __name__ == "__main__":
