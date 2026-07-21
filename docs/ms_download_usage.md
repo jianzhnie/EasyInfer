@@ -112,23 +112,27 @@ bash tools/ms_download.sh
 中断后重新执行同一命令即可断点续传（`._____temp/` 中的分片会被复用）。
 脚本收到 Ctrl-C/SIGTERM 时会自动杀掉所有后台下载/校验进程，不会留下孤儿进程。
 
-### 环境变量配置
+### 参数配置（命令行优先，环境变量兜底）
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `RUN_IN_BACKGROUND` | `true` | `false` 时改为逐个顺序下载 |
-| `MAX_ROUNDS` | `5` | 下载→校验最大轮数；`0` 表示只校验不下载 |
-| `RETRY_DELAY` | `10` | 轮次间隔秒数 |
-| `MS_MAX_WORKERS` | `16` | 传给 modelscope 的 `--max-workers` |
-| `SKIP_WEIGHTS` | `false` | `true` 时只下载/校验配置文件（不下权重） |
-| `FORCE_OVERWRITE` | `false` | `true` 时先清空模型目录再重下（危险，仅限 `$MODELS_BASE` 内） |
-| `CHECK_BEFORE_DOWNLOAD` | `true` | `false` 时跳过前置校验，直接全量下载 |
-| `VERIFY_SHA256` | `false` | `true` 时所有校验追加全量 SHA-256（最严格；慢，需读完全部数据） |
-| `CLEAN_TEMP` | `false` | `true` 时模型校验完整后自动删除其 `._____temp` 目录（释放空间，续传数据不保留） |
-| `MAX_TARGETED_FILES` | `500` | 缺失/损坏文件 ≤ 此数时按文件清单精准下载，否则整仓下载 |
-| `MODELS_FILE` | 无 | 从文件读取模型表（每行 `repo_id|本地目录`，`#` 为注释），替代内置 `MODELS` 表 |
-| `LOG_DIR` | `tools/logs` | 每个模型一个日志文件 |
-| `PYTHON_BIN` | 自动推断 | 装了 modelscope 的 python；默认取 modelscope CLI 同目录的 python |
+所有选项都既可用命令行参数也可用环境变量设置，**命令行优先于环境变量**：
+
+| 命令行参数 | 环境变量 | 默认值 | 说明 |
+|-----------|---------|--------|------|
+| `--sequential` | `RUN_IN_BACKGROUND=false` | 并行 | 改为逐个顺序下载 |
+| `--max-rounds N` | `MAX_ROUNDS` | `5` | 下载→校验最大轮数；`0` 表示只校验不下载 |
+| `--retry-delay N` | `RETRY_DELAY` | `10` | 轮次间隔秒数 |
+| `--max-workers N` | `MS_MAX_WORKERS` | `16` | 传给 modelscope 的 `--max-workers` |
+| `--skip-weights` | `SKIP_WEIGHTS=true` | `false` | 只下载/校验配置文件（不下权重） |
+| `--force-overwrite` | `FORCE_OVERWRITE=true` | `false` | 先清空模型目录再重下（危险，仅限 `--local-dir-prefix` 内） |
+| `--no-check-first` | `CHECK_BEFORE_DOWNLOAD=false` | `false` | 跳过前置校验，直接全量下载 |
+| `--sha256` | `VERIFY_SHA256=true` | `false` | 所有校验追加全量 SHA-256（最严格；慢，需读完全部数据） |
+| `--clean-temp` | `CLEAN_TEMP=true` | `false` | 模型校验完整后自动删除其 `._____temp` 目录 |
+| `--max-targeted-files N` | `MAX_TARGETED_FILES` | `500` | 缺失/损坏文件 ≤ 此数时按清单精准下载，否则整仓下载 |
+| `--local-dir-prefix PATH` | `LOCAL_DIR_PREFIX` | `/home/jianzhnie/llmtuner/hfhub/models` | 内置模型表的本地根目录，本地路径 = `前缀/repo_id`；也是安全删除的边界 |
+| `--log-dir PATH` | `LOG_DIR` | `tools/logs` | 每个模型一个日志文件 |
+| — | `PYTHON_BIN` | 自动推断 | （仅包装器）装了 modelscope 的 python；默认取 modelscope CLI 同目录的 python |
+
+完整说明见 `python tools/ms_download.py --help`。
 
 ### 常见场景
 
@@ -145,37 +149,30 @@ RUN_IN_BACKGROUND=false bash tools/ms_download.sh
 # 4. 只下载配置文件（部署前准备）
 SKIP_WEIGHTS=true bash tools/ms_download.sh
 
-# 5. 某个模型彻底重下
-FORCE_OVERWRITE=true MODELS_FILE=/tmp/one_model.txt bash tools/ms_download.sh
+# 5. 某个模型彻底重下：先编辑模型表只保留它（注释掉其他条目），再：
+FORCE_OVERWRITE=true bash tools/ms_download.sh
 
-# 6. 用自定义模型表（每行 repo_id|本地目录，# 为注释）
-cat > /tmp/my_models.txt <<'EOF'
-Eco-Tech/GLM-5-w8a8|/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w8a8
-EOF
-MODELS_FILE=/tmp/my_models.txt bash tools/ms_download.sh
-
-# 7. 最严格的全量校验（sha256 哈希比对，5.7TB 约 25 分钟，不下载）
+# 6. 最严格的全量校验（sha256 哈希比对，5.7TB 约 25 分钟，不下载）
 VERIFY_SHA256=true MAX_ROUNDS=0 bash tools/ms_download.sh
 
-# 8. 下载并在每个模型校验完整后自动清理其 ._____temp
+# 7. 下载并在每个模型校验完整后自动清理其 ._____temp
 CLEAN_TEMP=true bash tools/ms_download.sh
 ```
 
 FORCE_OVERWRITE 会清空模型表内**所有**启用的模型目录，如只想重下一个模型，
-请配合 `MODELS_FILE` 只列出该模型，或先编辑脚本中的 `MODELS` 表注释掉其他条目。
+请先编辑 `tools/ms_download.py` 中的 `MODEL_REPOS` 表，注释掉其他条目。
 
 ### 增删模型
 
-方式一：编辑 `tools/ms_download.py` 顶部的 `MODELS` 表，每行一个 `(repo_id, 本地目录)` 元组：
+编辑 `tools/ms_download.py` 顶部的 `MODEL_REPOS` 表，每行一个 repo id，
+本地目录自动推导为 `--local-dir-prefix/repo_id`：
 
 ```python
-MODELS = [
-    ("Eco-Tech/GLM-5-w8a8", f"{MODELS_BASE}/Eco-Tech/GLM-5-w8a8"),
-    # ("meituan-longcat/LongCat-Flash-Lite", f"{MODELS_BASE}/meituan-longcat/LongCat-Flash-Lite"),
+MODEL_REPOS = [
+    "Eco-Tech/GLM-5-w8a8",
+    # "meituan-longcat/LongCat-Flash-Lite",
 ]
 ```
-
-方式二（不改脚本）：`MODELS_FILE=/path/to/list.txt`，每行 `repo_id|本地目录`，`#` 开头为注释。
 
 ### 手动精准补下（不跑脚本）
 

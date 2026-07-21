@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import struct
 import sys
 import warnings
@@ -40,6 +41,9 @@ warnings.filterwarnings("ignore")
 # torch_npu (present in some vllm envs) breaks "import torch" unless backend
 # autoload is disabled; modelscope imports torch at module import time.
 os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
+# Bound every blocking socket op (the modelscope API client issues requests
+# without an explicit timeout, so a stalled connection would hang forever).
+socket.setdefaulttimeout(60)
 
 WEIGHT_EXTS = (".safetensors", ".bin", ".pt", ".ckpt")
 TEMP_DIR_NAME = "._____temp"
