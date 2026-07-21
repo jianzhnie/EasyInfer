@@ -27,6 +27,7 @@ Exit code: 0 = all models complete, 1 = at least one incomplete, 2 = check error
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -37,7 +38,7 @@ import sys
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
 # torch_npu (present in some vllm envs) breaks "import torch" unless backend
 # autoload is disabled; modelscope imports torch at module import time.
 os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
@@ -56,19 +57,22 @@ HASH_CHUNK = 64 * 1024 * 1024
 # Problem categories in report order: (category, label). Files in FIXABLE
 # categories exist locally but failed verification, so --fix deletes them
 # ("missing" files have nothing to delete).
-BAD_CATEGORIES = [("missing", "missing"),
-                  ("bad_size", "size mismatch"),
-                  ("corrupt", "corrupt safetensors"),
-                  ("bad_hash", "sha256 mismatch")]
+BAD_CATEGORIES = [
+    ("missing", "missing"),
+    ("bad_size", "size mismatch"),
+    ("corrupt", "corrupt safetensors"),
+    ("bad_hash", "sha256 mismatch"),
+]
 FIXABLE = ("bad_size", "corrupt", "bad_hash")
 
 
-def human_size(n):
+def human_size(n: int) -> str:
+    """Return human-readable size string (e.g. '1.5 GB', '512 B')."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024 or unit == "TB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        if n < 1024:
+            return f"{n} B" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
-    return f"{n} B"
+    return f"{n:.1f} TB"
 
 
 def validate_safetensors(path):
@@ -101,17 +105,16 @@ def validate_safetensors(path):
         max_end = max(max_end, end)
     expected_size = 8 + header_len + max_end
     if expected_size != fsize:
-        return f"truncated/corrupt: header implies {expected_size} bytes, actual {fsize}"
+        return (
+            f"truncated/corrupt: header implies {expected_size} bytes, actual {fsize}"
+        )
     return None
 
 
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        while True:
-            chunk = f.read(HASH_CHUNK)
-            if not chunk:
-                break
+        for chunk in iter(lambda: f.read(HASH_CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -147,8 +150,10 @@ def expected_files_offline(local_dir):
         if m:
             prefix, num, total_s = m.groups()
             total, digits = int(total_s), len(num)
-            expected = [f"{prefix}{i:0{digits}d}-of-{total:0{digits}d}.safetensors"
-                        for i in range(1, total + 1)]
+            expected = [
+                f"{prefix}{i:0{digits}d}-of-{total:0{digits}d}.safetensors"
+                for i in range(1, total + 1)
+            ]
             return expected, f"shard pattern ({total} shards)"
     return None, "no index/shard pattern (size checks unavailable offline)"
 
@@ -162,10 +167,8 @@ def temp_dir_info(local_dir):
     for root, _, files in os.walk(temp):
         for fname in files:
             nfiles += 1
-            try:
+            with contextlib.suppress(OSError):
                 total += os.path.getsize(os.path.join(root, fname))
-            except OSError:
-                pass
     return (nfiles, total) if nfiles else None
 
 
@@ -194,8 +197,18 @@ def check_one_file(local_dir, rel, info, want_sha256):
     return "ok", ""
 
 
-def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights=False,
-                workers=8, show=10, fix=False, list_bad=None):
+def check_model(
+    repo_id,
+    local_dir,
+    *,
+    offline=False,
+    sha256=False,
+    skip_weights=False,
+    workers=8,
+    show=10,
+    fix=False,
+    list_bad=None,
+):
     """Verify one model. Returns (status, lines, bad_files):
     status in ok/incomplete/error; lines = human-readable report;
     bad_files = relative paths needing (re)download (empty when ok/error)."""
@@ -208,29 +221,42 @@ def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights
         try:
             expected = fetch_remote_files(repo_id)
         except Exception as exc:  # network/API failure: cannot verify online
-            return "error", [f"  ERROR failed to fetch remote file list for {repo_id}: {exc}"], []
+            return (
+                "error",
+                [f"  ERROR failed to fetch remote file list for {repo_id}: {exc}"],
+                [],
+            )
         note = f"{len(expected)} remote files"
     else:
         rels, note = expected_files_offline(local_dir)
-        if rels is None:  # offline fallback: verify every local weight file structurally
-            rels = [os.path.relpath(os.path.join(root, f), local_dir)
-                    for root, _, files in os.walk(local_dir)
-                    if TEMP_DIR_NAME not in root.split(os.sep)
-                    for f in files
-                    if f.endswith(WEIGHT_EXTS)]
+        if (
+            rels is None
+        ):  # offline fallback: verify every local weight file structurally
+            rels = [
+                os.path.relpath(os.path.join(root, f), local_dir)
+                for root, _, files in os.walk(local_dir)
+                if TEMP_DIR_NAME not in root.split(os.sep)
+                for f in files
+                if f.endswith(WEIGHT_EXTS)
+            ]
         expected = {r: {"size": None, "sha256": ""} for r in sorted(rels)}
 
-    expected = {r: v for r, v in expected.items()
-                if os.path.basename(r) not in IGNORE_FILES
-                and not (skip_weights and r.endswith(WEIGHT_EXTS))}
+    expected = {
+        r: v
+        for r, v in expected.items()
+        if os.path.basename(r) not in IGNORE_FILES
+        and not (skip_weights and r.endswith(WEIGHT_EXTS))
+    }
 
     # 2) Check every expected file in parallel (size + structure, + optional sha256).
     results = {cat: [] for cat, _ in BAD_CATEGORIES}
     results["ok"] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(check_one_file, local_dir, rel, info, sha256)
-                   for rel, info in expected.items()]
-        for (rel, _), future in zip(expected.items(), futures):
+        futures = [
+            pool.submit(check_one_file, local_dir, rel, info, sha256)
+            for rel, info in expected.items()
+        ]
+        for (rel, _), future in zip(expected.items(), futures, strict=False):
             cat, detail = future.result()
             results[cat].append((rel, detail))
 
@@ -241,8 +267,10 @@ def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights
         if not items:
             continue
         lines.append(f"  FAIL {label}: {len(items)} file(s)")
-        lines += [f"    - {rel}" + (f" ({detail})" if detail else "")
-                  for rel, detail in items[:show]]
+        lines += [
+            f"    - {rel}" + (f" ({detail})" if detail else "")
+            for rel, detail in items[:show]
+        ]
         if len(items) > show:
             lines.append(f"    ... and {len(items) - show} more")
 
@@ -256,9 +284,11 @@ def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights
                     os.remove(os.path.join(local_dir, rel))
                     deleted += 1
                 except OSError:
-                    pass
+                    pass  # best-effort: file already gone or permission denied
         if deleted:
-            lines.append(f"  FIX deleted {deleted} bad file(s); re-download will re-fetch them")
+            lines.append(
+                f"  FIX deleted {deleted} bad file(s); re-download will re-fetch them"
+            )
 
     if list_bad:  # machine-readable list of files needing (re)download
         try:
@@ -269,15 +299,23 @@ def check_model(repo_id, local_dir, *, offline=False, sha256=False, skip_weights
 
     temp = temp_dir_info(local_dir)
     if temp:
-        lines.append(f"  WARN temp leftovers: {TEMP_DIR_NAME}/ "
-                     f"({temp[0]} files, {human_size(temp[1])}) - resumable partial downloads")
+        lines.append(
+            f"  WARN temp leftovers: {TEMP_DIR_NAME}/ "
+            f"({temp[0]} files, {human_size(temp[1])}) - resumable partial downloads"
+        )
 
     if bad_files:
-        parts = [f"{len(results[cat])} {label}" for cat, label in BAD_CATEGORIES if results[cat]]
+        parts = [
+            f"{len(results[cat])} {label}"
+            for cat, label in BAD_CATEGORIES
+            if results[cat]
+        ]
         lines.append(f"  => INCOMPLETE ({note}): {', '.join(parts)}")
         return "incomplete", lines, bad_files
     mode = "sizes + safetensors structure" + (" + sha256" if sha256 else "")
-    lines.append(f"  => OK: {len(results['ok'])}/{len(expected)} files verified ({mode}; {note})")
+    lines.append(
+        f"  => OK: {len(results['ok'])}/{len(expected)} files verified ({mode}; {note})"
+    )
     return "ok", lines, []
 
 
@@ -290,38 +328,74 @@ def parse_pair(pair, offline):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("pairs", nargs="+",
-                    help="REPO_ID:LOCAL_DIR pairs, or plain LOCAL_DIR with --offline")
-    ap.add_argument("--offline", action="store_true",
-                    help="no network: verify via index/shard pattern + structure only")
-    ap.add_argument("--sha256", action="store_true",
-                    help="also verify full SHA-256 of every file (slow, reads all data)")
-    ap.add_argument("--fix", action="store_true",
-                    help="delete files that fail verification (size/structure/hash) so a "
-                         "re-download re-fetches them; missing files need no deletion")
-    ap.add_argument("--list-bad", metavar="PATH",
-                    help="write the files needing (re)download to PATH, one per line")
-    ap.add_argument("--skip-weights", action="store_true",
-                    help="exclude weight files (*.safetensors/*.bin/*.pt/*.ckpt) from the check")
-    ap.add_argument("--workers", type=int, default=8, help="per-model file check threads (default 8)")
-    ap.add_argument("--show", type=int, default=10, help="max problem files to list per category")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "pairs",
+        nargs="+",
+        help="REPO_ID:LOCAL_DIR pairs, or plain LOCAL_DIR with --offline",
+    )
+    ap.add_argument(
+        "--offline",
+        action="store_true",
+        help="no network: verify via index/shard pattern + structure only",
+    )
+    ap.add_argument(
+        "--sha256",
+        action="store_true",
+        help="also verify full SHA-256 of every file (slow, reads all data)",
+    )
+    ap.add_argument(
+        "--fix",
+        action="store_true",
+        help="delete files that fail verification (size/structure/hash) so a "
+        "re-download re-fetches them; missing files need no deletion",
+    )
+    ap.add_argument(
+        "--list-bad",
+        metavar="PATH",
+        help="write the files needing (re)download to PATH, one per line",
+    )
+    ap.add_argument(
+        "--skip-weights",
+        action="store_true",
+        help="exclude weight files (*.safetensors/*.bin/*.pt/*.ckpt) from the check",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="per-model file check threads (default 8)",
+    )
+    ap.add_argument(
+        "--show", type=int, default=10, help="max problem files to list per category"
+    )
     args = ap.parse_args()
 
     statuses = {}
     for i, pair in enumerate(args.pairs, 1):
         repo_id, local_dir = parse_pair(pair, args.offline)
         if local_dir is None:
-            print(f"[{i}/{len(args.pairs)}] SKIP {pair!r}: not a REPO_ID:LOCAL_DIR pair "
-                  f"(use --offline for local-only checks)")
+            print(
+                f"[{i}/{len(args.pairs)}] SKIP {pair!r}: not a REPO_ID:LOCAL_DIR pair "
+                f"(use --offline for local-only checks)"
+            )
             statuses[pair] = "error"
             continue
         print(f"[{i}/{len(args.pairs)}] {repo_id or 'local'} -> {local_dir}")
         try:
-            status, lines, _ = check_model(repo_id, local_dir, offline=args.offline,
-                                           sha256=args.sha256, skip_weights=args.skip_weights,
-                                           workers=args.workers, show=args.show,
-                                           fix=args.fix, list_bad=args.list_bad)
+            status, lines, _ = check_model(
+                repo_id,
+                local_dir,
+                offline=args.offline,
+                sha256=args.sha256,
+                skip_weights=args.skip_weights,
+                workers=args.workers,
+                show=args.show,
+                fix=args.fix,
+                list_bad=args.list_bad,
+            )
         except Exception as exc:
             status, lines = "error", [f"  ERROR unexpected: {exc!r}"]
         for line in lines:
@@ -330,8 +404,10 @@ def main():
 
     print("=" * 60)
     print("SUMMARY")
-    by_status = {s: [p for p, v in statuses.items() if v == s]
-                 for s in ("ok", "incomplete", "error")}
+    by_status = {
+        s: [p for p, v in statuses.items() if v == s]
+        for s in ("ok", "incomplete", "error")
+    }
     print(f"  OK:         {len(by_status['ok'])}")
     print(f"  INCOMPLETE: {len(by_status['incomplete'])}")
     for p in by_status["incomplete"]:
