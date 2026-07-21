@@ -48,7 +48,7 @@ elif [[ -z "${BLUE:-}" ]]; then
 fi
 
 # ==============================================================================
-# Internal helpers — 全部以下划线开头，不对外暴露
+# Internal helpers（ct_ 前缀：curl wrapper / builder / parser；log_ 前缀：日志；skip_if：跳过检测）
 # ==============================================================================
 
 # ---- logging ----------------------------------------------------------------
@@ -58,29 +58,29 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_sec()  { echo ""; log_info "--- $1 ---"; }
 
-# ---- skip guard: _skip SKIP_CHAT → 检查 ${SKIP_CHAT} 是否为 1 ----------------
-_skip() { [[ "${!1:-0}" == "1" ]]; }
+# ---- skip guard: skip_if SKIP_CHAT → 检查 ${SKIP_CHAT} 是否为 1 ----------------
+skip_if() { [[ "${!1:-0}" == "1" ]]; }
 
 # ---- curl wrappers -----------------------------------------------------------
-_curl()      { curl -sf --max-time "${CURL_TIMEOUT:-120}" "$@"; }
-_curl_post() { _curl -H "Content-Type: application/json" -d "$1" "$2"; }
-_curl_raw() {
+ct_curl()      { curl -sf --max-time "${CURL_TIMEOUT:-120}" "$@"; }
+ct_curl_post() { ct_curl -H "Content-Type: application/json" -d "$1" "$2"; }
+ct_curl_raw() {
     curl -s -w '\n%{http_code}' --max-time "${CURL_TIMEOUT:-120}" \
         -H "Content-Type: application/json" -d "$1" "$2" 2>/dev/null
 }
 
 # ---- JSON builders -----------------------------------------------------------
-_build_chat() {
+ct_build_chat() {
     printf '{"model":"%s","messages":[{"role":"user","content":"%s"}],' \
         "${MODEL_NAME}" "$1"
     printf '"max_tokens":%d,"stream":false}' "${2:-128}"
 }
-_build_stream() {
+ct_build_stream() {
     printf '{"model":"%s","messages":[{"role":"user","content":"%s"}],' \
         "${MODEL_NAME}" "$1"
     printf '"max_tokens":%d,"stream":true}' "${2:-100}"
 }
-_build_tools() {
+ct_build_tools() {
     local tool='[{"type":"function","function":{"name":"get_weather",'
     tool+='"description":"Get current weather","parameters":{'
     tool+='"type":"object","properties":{"city":{'
@@ -92,7 +92,7 @@ _build_tools() {
 }
 
 # ---- JSON parser（统一入口，底层是 curl_helper.py）-------------------------------
-_json() { python3 "${CT_DIR}/curl_helper.py" "$1" <<<"$2" 2>/dev/null || echo ""; }
+ct_json() { python3 "${CT_DIR}/curl_helper.py" "$1" <<<"$2" 2>/dev/null || echo ""; }
 
 # ==============================================================================
 # Public API (curl_test:: namespace)
@@ -109,12 +109,12 @@ curl_test::init() {
 }
 
 curl_test::wait() {
-    _skip SKIP_WAIT && { log_info "跳过等待"; return 0; }
+    skip_if SKIP_WAIT && { log_info "跳过等待"; return 0; }
     log_info "等待服务就绪: ${BASE_URL} ..."
     local start_ts elapsed
     start_ts=$(date +%s)
     while true; do
-        if _curl "${BASE_URL}/v1/models" -o /dev/null || _curl "${BASE_URL}/health" -o /dev/null; then
+        if ct_curl "${BASE_URL}/v1/models" -o /dev/null || ct_curl "${BASE_URL}/health" -o /dev/null; then
             log_ok "服务已就绪"; return 0
         fi
         elapsed=$(( $(date +%s) - start_ts ))
@@ -125,7 +125,7 @@ curl_test::wait() {
 }
 
 curl_test::health() {
-    _skip SKIP_HEALTH && return 0
+    skip_if SKIP_HEALTH && return 0
     log_sec "健康检查"
     local code ep
     for ep in "/health" "/v1/models"; do
@@ -136,27 +136,27 @@ curl_test::health() {
 }
 
 curl_test::models() {
-    _skip SKIP_MODELS && return 0
+    skip_if SKIP_MODELS && return 0
     log_sec "模型列表"
     local resp
-    resp=$(_curl "${BASE_URL}/v1/models") || { log_err "无法获取"; return 1; }
+    resp=$(ct_curl "${BASE_URL}/v1/models") || { log_err "无法获取"; return 1; }
     echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
     log_ok "获取成功"
 }
 
 curl_test::chat() {
-    _skip SKIP_CHAT && return 0
+    skip_if SKIP_CHAT && return 0
     local prompt="${1:-${PROMPTS[0]}}" max_tokens="${2:-128}"
     log_sec "非流式对话"
     log_info "Prompt: ${prompt}"
     local resp content usage
-    resp=$(_curl_post "$(_build_chat "$prompt" "$max_tokens")" "${BASE_URL}/v1/chat/completions") || {
+    resp=$(ct_curl_post "$(ct_build_chat "$prompt" "$max_tokens")" "${BASE_URL}/v1/chat/completions") || {
         log_err "请求失败"; return 1
     }
-    content=$(_json content "$resp")
+    content=$(ct_json content "$resp")
     if [[ -n "$content" ]]; then
         log_ok "回复: ${content:0:200}"
-        usage=$(_json usage "$resp")
+        usage=$(ct_json usage "$resp")
         [[ -n "$usage" ]] && log_info "Tokens: $usage"
     else
         log_err "空回复"
@@ -166,12 +166,12 @@ curl_test::chat() {
 }
 
 curl_test::stream() {
-    _skip SKIP_STREAM && return 0
+    skip_if SKIP_STREAM && return 0
     local prompt="${1:-${PROMPTS[2]}}" max_tokens="${2:-100}"
     log_sec "流式对话"
     log_info "Prompt: ${prompt}"
     local output
-    output=$(_curl_post "$(_build_stream "$prompt" "$max_tokens")" \
+    output=$(ct_curl_post "$(ct_build_stream "$prompt" "$max_tokens")" \
         "${BASE_URL}/v1/chat/completions" 2>/dev/null | head -10) || true
     if [[ -n "$output" ]]; then
         echo "$output" | head -5
@@ -182,14 +182,14 @@ curl_test::stream() {
 }
 
 curl_test::tools() {
-    _skip SKIP_TOOLS && return 0
+    skip_if SKIP_TOOLS && return 0
     log_sec "工具调用"
     local raw code resp info err
-    raw=$(_curl_raw "$(_build_tools "${PROMPTS[3]}")" "${BASE_URL}/v1/chat/completions")
+    raw=$(ct_curl_raw "$(ct_build_tools "${PROMPTS[3]}")" "${BASE_URL}/v1/chat/completions")
     code="${raw##*$'\n'}"
     resp="${raw%$'\n'*}"
     if [[ -z "$resp" || "$code" != "200" ]]; then
-        err=$(_json error "$resp")
+        err=$(ct_json error "$resp")
         if [[ "$err" == *"tool"* || "$err" == *"tool_choice"* ]]; then
             log_warn "服务未启用工具调用 (需 --enable-auto-tool-choice --tool-call-parser)"
         else
@@ -197,7 +197,7 @@ curl_test::tools() {
         fi
         return 0
     fi
-    info=$(_json tool "$resp")
+    info=$(ct_json tool "$resp")
     case "$info" in
         tool=*) log_ok   "工具调用: ${info}" ;;
         text=*) log_warn "返回文本: ${info}" ;;
@@ -206,7 +206,7 @@ curl_test::tools() {
 }
 
 curl_test::anthropic() {
-    _skip SKIP_ANTHROPIC && return 0
+    skip_if SKIP_ANTHROPIC && return 0
     log_sec "Anthropic Messages API"
     local resp content body
     body='{"model":"'"${MODEL_NAME}"'","max_tokens":100,'
@@ -214,7 +214,7 @@ curl_test::anthropic() {
     resp=$(curl -sf --max-time "$CURL_TIMEOUT" "${BASE_URL}/v1/messages" \
         -H "Content-Type: application/json" -H "x-api-key: dummy" \
         -d "$body" 2>/dev/null) || { log_warn "不可用（部分服务不支持）"; return 0; }
-    content=$(_json anthropic "$resp")
+    content=$(ct_json anthropic "$resp")
     if [[ -n "$content" ]]; then log_ok "Anthropic API: ${content}"; else log_warn "响应为空"; fi
     return 0
 }
