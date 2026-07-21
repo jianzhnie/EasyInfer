@@ -218,3 +218,5 @@ node_list.txt
 batch_remote_deploy_pd_seg/
 batch_remote_deploy_pd_seg.zip
 kernel_meta/
+.claude/
+claude_env_deepseek.sh
