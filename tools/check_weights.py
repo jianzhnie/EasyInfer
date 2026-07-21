@@ -182,10 +182,12 @@ def check_one_file(local_dir, rel, expected_size, want_sha256, remote_sha256):
 
 
 def check_model(repo_id, local_dir, args):
-    """Returns (status, lines): status in ok/incomplete/error."""
+    """Returns (status, lines, bad_files):
+    status in ok/incomplete/error; lines = human-readable report;
+    bad_files = relative paths needing (re)download (empty when ok/error)."""
     lines = []
     if not os.path.isdir(local_dir):
-        return "incomplete", [f"  FAIL directory does not exist: {local_dir}"]
+        return "incomplete", [f"  FAIL directory does not exist: {local_dir}"], []
 
     expected = None  # rel -> {"size","sha256"}
     note = ""
@@ -194,7 +196,7 @@ def check_model(repo_id, local_dir, args):
             expected = fetch_remote_files(repo_id)
             note = f"{len(expected)} remote files"
         except Exception as exc:  # network/API failure: cannot verify online
-            return "error", [f"  ERROR failed to fetch remote file list for {repo_id}: {exc}"]
+            return "error", [f"  ERROR failed to fetch remote file list for {repo_id}: {exc}"], []
     else:
         rels, note = local_expected_files_offline(local_dir)
         if rels is not None:
@@ -226,6 +228,8 @@ def check_model(repo_id, local_dir, args):
             results[cat].append((rel, detail))
 
     n_bad = sum(len(results[c]) for c in ("missing", "bad_size", "corrupt", "bad_hash"))
+    bad_files = sorted(rel for cat in ("missing", "bad_size", "corrupt", "bad_hash")
+                       for rel, _ in results[cat])
     labels = {
         "missing": "missing",
         "bad_size": "size mismatch",
@@ -276,10 +280,10 @@ def check_model(repo_id, local_dir, args):
     if n_bad:
         parts = [f"{len(results[c])} {labels[c]}" for c in labels if results[c]]
         lines.append(f"  => INCOMPLETE ({note}): {', '.join(parts)}")
-        return "incomplete", lines
+        return "incomplete", lines, bad_files
     mode = "sizes + safetensors structure" + (" + sha256" if args.sha256 else "")
     lines.append(f"  => OK: {len(results['ok'])}/{len(expected)} files verified ({mode}; {note})")
-    return "ok", lines
+    return "ok", lines, []
 
 
 def main():
@@ -315,7 +319,7 @@ def main():
             continue
         print(f"[{i}/{len(args.pairs)}] {repo_id or 'local'} -> {local_dir}")
         try:
-            status, lines = check_model(repo_id, local_dir, args)
+            status, lines, _ = check_model(repo_id, local_dir, args)
         except Exception as exc:
             status, lines = "error", [f"  ERROR unexpected: {exc!r}"]
         for line in lines:

@@ -7,7 +7,11 @@ ModelScope 权重下载由两个脚本配合完成：
 | 脚本 | 作用 |
 |------|------|
 | `tools/check_weights.py` | 校验本地权重是否 **100% 完整**（逐文件、逐 safetensors 字节级校验） |
-| `tools/ms_download.sh` | 批量下载：先校验 → 跳过完整模型 → 下载缺失 → 再校验 → 自动重试直至收敛 |
+| `tools/ms_download.py` | 批量下载（Python 实现）：先校验 → 跳过完整模型 → 精准补下 → 复检 → 重试直至收敛 |
+| `tools/ms_download.sh` | 兼容包装器：选择正确的 python 解释器后 `exec ms_download.py`，用法与原 bash 版完全一致 |
+
+`ms_download.py` 直接 `import check_weights` 复用全部校验逻辑（无子进程/临时文件开销），
+模型表、并行校验、重试循环、信号处理都在一个文件内。
 
 设计要点：**校验是唯一的完成判据**，不信任 modelscope CLI 的退出码。modelscope 客户端会跳过本地已存在的文件（即使已损坏），因此损坏文件必须先删除（`--fix`）再重下，否则重试永远无法收敛。
 
@@ -96,7 +100,7 @@ bash tools/ms_download.sh
 
 工作流程：
 
-1. **前置校验**：逐个校验模型表中的模型，已 100% 完整的直接跳过；
+1. **前置校验（并行）**：所有模型并发校验（每模型一个进程，报告按表顺序回放），已 100% 完整的直接跳过；
 2. **修复**：对不完整的模型执行 `--fix`，删除损坏/陈旧文件（modelscope 从不替换已存在文件，必须先删）；
 3. **精准下载**：checker 给出缺失/损坏文件清单，只补下这些文件（positional 文件参数），
    而不是整仓重下 —— 实测本环境 modelscope CLI 的 `--local_dir` 全量下载会重下所有文件，
@@ -106,6 +110,7 @@ bash tools/ms_download.sh
 5. **汇总**：打印每个模型最终状态，全部完整退出码为 0，否则为 1。
 
 中断后重新执行同一命令即可断点续传（`._____temp/` 中的分片会被复用）。
+脚本收到 Ctrl-C/SIGTERM 时会自动杀掉所有后台下载/校验进程，不会留下孤儿进程。
 
 ### 环境变量配置
 
@@ -118,6 +123,8 @@ bash tools/ms_download.sh
 | `SKIP_WEIGHTS` | `false` | `true` 时只下载/校验配置文件（不下权重） |
 | `FORCE_OVERWRITE` | `false` | `true` 时先清空模型目录再重下（危险，仅限 `$MODELS_BASE` 内） |
 | `CHECK_BEFORE_DOWNLOAD` | `true` | `false` 时跳过前置校验，直接全量下载 |
+| `VERIFY_SHA256` | `false` | `true` 时所有校验追加全量 SHA-256（最严格；慢，需读完全部数据） |
+| `CLEAN_TEMP` | `false` | `true` 时模型校验完整后自动删除其 `._____temp` 目录（释放空间，续传数据不保留） |
 | `MAX_TARGETED_FILES` | `500` | 缺失/损坏文件 ≤ 此数时按文件清单精准下载，否则整仓下载 |
 | `MODELS_FILE` | 无 | 从文件读取模型表（每行 `repo_id|本地目录`，`#` 为注释），替代内置 `MODELS` 表 |
 | `LOG_DIR` | `tools/logs` | 每个模型一个日志文件 |
@@ -146,6 +153,12 @@ cat > /tmp/my_models.txt <<'EOF'
 Eco-Tech/GLM-5-w8a8|/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5-w8a8
 EOF
 MODELS_FILE=/tmp/my_models.txt bash tools/ms_download.sh
+
+# 7. 最严格的全量校验（sha256 哈希比对，5.7TB 约 25 分钟，不下载）
+VERIFY_SHA256=true MAX_ROUNDS=0 bash tools/ms_download.sh
+
+# 8. 下载并在每个模型校验完整后自动清理其 ._____temp
+CLEAN_TEMP=true bash tools/ms_download.sh
 ```
 
 FORCE_OVERWRITE 会清空模型表内**所有**启用的模型目录，如只想重下一个模型，
@@ -153,13 +166,13 @@ FORCE_OVERWRITE 会清空模型表内**所有**启用的模型目录，如只想
 
 ### 增删模型
 
-方式一：编辑 `tools/ms_download.sh` 顶部的 `MODELS` 表，每行一个 `"repo_id|本地目录"`：
+方式一：编辑 `tools/ms_download.py` 顶部的 `MODELS` 表，每行一个 `(repo_id, 本地目录)` 元组：
 
-```bash
-MODELS=(
-    "Eco-Tech/GLM-5-w8a8|$MODELS_BASE/Eco-Tech/GLM-5-w8a8"
-    # "meituan-longcat/LongCat-Flash-Lite|$MODELS_BASE/meituan-longcat/LongCat-Flash-Lite"
-)
+```python
+MODELS = [
+    ("Eco-Tech/GLM-5-w8a8", f"{MODELS_BASE}/Eco-Tech/GLM-5-w8a8"),
+    # ("meituan-longcat/LongCat-Flash-Lite", f"{MODELS_BASE}/meituan-longcat/LongCat-Flash-Lite"),
+]
 ```
 
 方式二（不改脚本）：`MODELS_FILE=/path/to/list.txt`，每行 `repo_id|本地目录`，`#` 开头为注释。
