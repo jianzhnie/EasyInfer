@@ -79,7 +79,7 @@ vLLM 部署模式：
 | 脚本                    | 功能                                                            |
 | ----------------------- | --------------------------------------------------------------- |
 | `tools/hf_download.sh`  | HuggingFace 模型/数据集下载（默认使用 hf-mirror.com 国内镜像）  |
-| `tools/ms_download.sh`  | ModelScope 模型/数据集下载                                      |
+| `tools/ms_download.py`  | ModelScope 模型/数据集下载（含完整性校验、精准补下、自动重试）  |
 | `tools/docker_proxy.sh` | 容器内代理配置（自动检测宿主机代理，支持 host/bridge 网络模式） |
 | `tools/host_proxy.sh`   | 宿主机代理配置（`source && pon` 模式）                          |
 
