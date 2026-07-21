@@ -39,7 +39,6 @@ readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
-readonly SWAP_SPACE="${SWAP_SPACE:-32}"
 
 # NPU environment variables
 export HCCL_OP_EXPANSION_MODE=AIV
@@ -63,7 +62,7 @@ echo "[INFO] MiniMax-M3 W8A8 Deployment"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL SWAP_SPACE=$SWAP_SPACE"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] Note: requires vLLM with MiniMaxM3Sparse support (0.22.1 lacks it)"
 echo "============================================"
 
@@ -87,7 +86,6 @@ vllm serve "$MODEL_PATH" \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser minimax_m2 \
-    --swap-space "$SWAP_SPACE" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
     --seed 1024 \

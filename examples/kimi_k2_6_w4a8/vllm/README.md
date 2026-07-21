@@ -230,3 +230,11 @@ A: Kimi-K2.6 支持 Pipeline Parallelism，每层分配到不同节点。TP=8 PP
 ### Q: 384 专家对部署有什么影响？
 
 A: 专家数更多 (384 vs 256)，EP_SIZE 需能整除 384 (推荐 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 384)。384 专家的 MoE 层参数量更大，需要更大的 SWAP_SPACE。
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair2: 10.42.11.198/199 | TP=8 PP=2, PORT=8003 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/kimi-k2.6-w4a8_*.log` | `npu_quant_matmul` 算子错误 161002：`AclNN_Parameter_Error(EZ1001): QuantMatmul not support to process empty tensor currently` |
+
+- 该错误与 Kimi-K2.7-Code-w4a8 相同，说明当前 CANN/vLLM-Ascend 版本对 Kimi 系列 W4A8 量化路径不支持，需等版本修复。

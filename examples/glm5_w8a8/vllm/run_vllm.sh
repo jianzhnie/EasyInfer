@@ -30,10 +30,12 @@ set -u
 
 # =============================================================================
 # Cache directory layout:
-#   /dev/shm/... (tmpfs, noexec) → temp files, runtime logs, home
+#   <project>/.cache/glm5-w8a8 (shared NFS/home mount) → temp files, runtime logs, home
 #   /root/.cache/... (overlay, exec) → triton/torchinductor (need .so loading)
 # =============================================================================
-readonly CACHE_ROOT="${CACHE_ROOT:-/dev/shm/glm5-w8a8-cache}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+readonly CACHE_ROOT="${CACHE_ROOT:-$ROOT_DIR/.cache/glm5-w8a8}"
 readonly EXEC_CACHE_ROOT="${EXEC_CACHE_ROOT:-/root/.cache/glm5-w8a8-cache}"
 
 export PYTHONDONTWRITEBYTECODE=1

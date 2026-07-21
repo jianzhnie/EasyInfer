@@ -73,3 +73,11 @@ curl http://localhost:8015/v1/chat/completions \
 | 日期 | 环境 | 配置 | 结果 |
 |------|------|------|------|
 | 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=8 单节点 | 待验证（外层架构未注册，存疑） |
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair4: 10.42.11.202/203 | TP=8 PP=1, PORT=8015 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/step-3.7-flash_*.log` | `ValueError: Unrecognized configuration class Step3p7Config for this kind of AutoModel: AutoModel`，vLLM 0.22.1 未注册 Step-3.7-Flash 的 VL 配置类 |
+
+- 虽然内部文本模型 `Step3p5ForCausalLM` 在 vLLM 0.22.1 有注册，但外层 `Step3p7Config` VL wrapper 无法被 `AutoModel` 识别。

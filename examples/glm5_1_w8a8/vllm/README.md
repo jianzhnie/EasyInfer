@@ -96,3 +96,12 @@ curl http://localhost:8012/v1/chat/completions \
 | 日期 | 环境 | 配置 | 结果 |
 |------|------|------|------|
 | 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=16 2 节点 | 待验证 |
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair6: 10.42.11.206/207 | TP=16 PP=1, PORT=8012 | ❌ FAIL_SERVICE | `logs/parallel_deploy_v022_rerun/glm5.1-w8a8_*.log` | 权重文件损坏：`quant_model_weights-00071-of-00179.safetensors` 文件头不完整 |
+
+- 已通过 `safetensors.safe_open` 校验确认第 71 个 shard 损坏，其余 178 个 shard 正常。
+- 缓存目录已调整到项目共享路径 `.cache/glm5.1-w8a8`。

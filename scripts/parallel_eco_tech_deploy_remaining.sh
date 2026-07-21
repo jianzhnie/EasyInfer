@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# Eco-Tech 模型并行部署与测试 (8 个 2 节点 Ray 子集群)
+# Eco-Tech 剩余模型 + DeepSeek-V4-Pro 重试并行部署 (5 个 2 节点 Ray 子集群)
 # =============================================================================
-# 将 16 个 NPU 节点划分为 8 对，每对独立 Ray 集群，部署一个模型并运行 curl 测试。
+# 将 16 节点中的前 10 个节点划分为 5 对，每对独立 Ray 集群，部署一个模型并运行 curl 测试。
 #
 # Usage:
-#   bash scripts/parallel_eco_tech_deploy.sh
-#   LOG_DIR=/tmp/easyinfer_parallel bash scripts/parallel_eco_tech_deploy.sh
+#   bash scripts/parallel_eco_tech_deploy_remaining.sh
+#   LOG_DIR=/tmp/easyinfer_remaining bash scripts/parallel_eco_tech_deploy_remaining.sh
 # =============================================================================
 set -euo pipefail
 
@@ -22,7 +22,7 @@ export SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10 -o StrictHost
 
 readonly NODES_FILE="${NODES_FILE:-$ROOT_DIR/node_list3.txt}"
 readonly PAIRS_DIR="$ROOT_DIR/scripts/ray_cluster/nodes/pairs"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/parallel_deploy_$(date +%Y%m%d_%H%M%S)}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/parallel_deploy_remaining_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
 LOG_DIR="$(cd "$LOG_DIR" && pwd)"
@@ -32,28 +32,22 @@ readonly LOG_DIR
 # Task definitions: index maps to scripts/ray_cluster/nodes/pairs/pair_<idx>.txt
 # -----------------------------------------------------------------------------
 readonly NAMES=(
-    deepseek-v4-flash
-    glm5-w4a8
-    glm5.1-w4a8
-    minimax-m2.7
-    deepseek-v4-pro
-    glm5-w8a8
-    glm5.1-w8a8
-    kimi-k2.7-code
+    deepseek-v4-pro-retry
+    glm5.2-w8a8
+    kimi-k2.6-w4a8
+    minimax-m3
+    step-3.7-flash
 )
 
 readonly EXAMPLE_DIRS=(
-    examples/deepseek_v4_flash
-    examples/glm5_w4a8
-    examples/glm5_1_w4a8
-    examples/minimax_m2_7_w8a8
     examples/deepseek_v4_pro
-    examples/glm5_w8a8
-    examples/glm5_1_w8a8
-    examples/kimi_k2_7_code_w4a8
+    examples/glm5_2_w8a8
+    examples/kimi_k2_6_w4a8
+    examples/minimax_m3_w8a8
+    examples/step_3_7_flash_w8a8
 )
 
-readonly PORTS=(8000 8001 8002 8004 8005 8011 8012 8013)
+readonly PORTS=(8005 8007 8003 8014 8015)
 
 mapfile -t ALL_NODES < <(awk 'NF && !/^#/{print $1}' "$NODES_FILE")
 
@@ -144,7 +138,7 @@ deploy_and_test() {
 summarize() {
     echo ""
     log_info "=========================================="
-    log_info "并行部署结果汇总"
+    log_info "剩余模型并行部署结果汇总"
     log_info "日志目录: $LOG_DIR"
     log_info "=========================================="
 
@@ -166,15 +160,15 @@ summarize() {
 }
 
 # -----------------------------------------------------------------------------
-# Main: cleanup, then launch up to 8 parallel deployments
+# Main: cleanup, then launch up to 4 parallel deployments
 # -----------------------------------------------------------------------------
 main() {
     cleanup_global
 
-    log_info "开始 8 路并行部署 ..."
+    log_info "开始 5 路并行部署 (剩余模型 + DeepSeek-V4-Pro 重试) ..."
     local idx
     for idx in "${!NAMES[@]}"; do
-        limit_jobs 8
+        limit_jobs 5
         deploy_and_test "$idx" &
     done
     wait

@@ -84,3 +84,11 @@ curl http://localhost:8013/v1/chat/completions \
 | 日期 | 环境 | 配置 | 结果 |
 |------|------|------|------|
 | 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=8 PP=2 2 节点 | 待验证 |
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair7: 10.42.11.208/209 | TP=8 PP=2, PORT=8013 | ❌ FAIL_SERVICE | `logs/parallel_deploy_v022_rerun/kimi-k2.7-code_*.log` | `npu_quant_matmul` 算子错误 161002：`AclNN_Parameter_Error(EZ1001): QuantMatmul not support to process empty tensor currently` |
+
+- 该错误与 Kimi-K2.6-w4a8 相同，属于当前 CANN/vLLM-Ascend 版本对 Kimi W4A8 量化路径不支持，需等版本修复。

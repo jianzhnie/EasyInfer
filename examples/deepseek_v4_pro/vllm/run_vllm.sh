@@ -1,7 +1,7 @@
 #!/bin/bash
-# DeepSeek-V4-Pro W4A8 — vLLM Ascend 0.20.2 Deployment
+# DeepSeek-V4-Pro W4A8 — vLLM Ascend 0.22.1rc1 Deployment
 # Architecture: DeepseekV4ForCausalLM | 384 Experts | MoE | MTP=1
-# Max Position: 1048576 | Deploy: 32K context (single node default)
+# Max Position: 1048576 | Deploy: 4K context (2-node default to fit KV cache)
 set -eo pipefail
 
 # CANN environment
@@ -20,7 +20,7 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8005}"
 TP="${TP:-8}"
 PP="${PP:-2}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 

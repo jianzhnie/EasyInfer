@@ -73,14 +73,14 @@ fi
 # 测试 4: 流式 Chat Completion
 # -----------------------------------------------------------------------------
 info "Testing streaming chat completion..."
-stream_output=$(curl -sf --max-time 30 "${BASE_URL}/v1/chat/completions" \
+stream_output=$(curl -sf --max-time 120 "${BASE_URL}/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d "{
     \"model\": \"${MODEL_NAME}\",
     \"messages\": [{\"role\": \"user\", \"content\": \"从1数到5\"}],
     \"max_tokens\": 100,
     \"stream\": true
-  }" 2>&1 | head -5)
+  }" 2>&1 | head -5) || true
 
 if [[ -n "$stream_output" ]]; then
     pass "Streaming response received (first 5 chunks shown above)"

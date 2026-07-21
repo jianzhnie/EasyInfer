@@ -219,3 +219,15 @@ A: 不是必须的，但推荐启用。MTP (Multi-Token Prediction) 可显著加
 
 ### Q: 如何调整上下文长度？
 A: 通过 `MAX_MODEL_LEN` 环境变量。DeepSeek-V4-Pro 原生支持 1M 上下文，但实际可用长度受 NPU 显存限制。
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair4: 10.42.11.202/203 | TP=8 PP=2, MAX_MODEL_LEN=8192, PORT=8005 | ❌ FAIL_SERVICE | `logs/parallel_deploy_v022_rerun/deepseek-v4-pro_*.log` | KV cache 不足：8192 需要 3.14 GiB，仅 2.33 GiB 可用 |
+
+- 已根据报错将 `MAX_MODEL_LEN` 默认值从 31744 → 8192 → **4096** 进行重试。
+
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair0: 10.42.11.194/195 | TP=8 PP=2, MAX_MODEL_LEN=4096, PORT=8005 | ✅ PASS | `logs/parallel_deploy_remaining_v022/deepseek-v4-pro-retry_*.log` | 将 `MAX_MODEL_LEN` 降至 4096 后服务正常启动；模型列表、Chat、Tool Calling 测试通过 |
+
+- 注意：`curl_test.sh` 原默认端口为 8000，已修正为 8005，避免测试脚本连错端口。

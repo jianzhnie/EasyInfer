@@ -181,6 +181,7 @@ _remote_cleanup_containers() {
 
 _remote_load_and_run() {
     local image_name="$1" image_tar="$2" run_container_script="$3" container_name="$4"
+    local container_run_extra_args="${5:-}"
 
     if ! docker image inspect "${image_name}" >/dev/null 2>&1; then
         if [[ ! -f "${image_tar}" ]]; then
@@ -214,9 +215,9 @@ _remote_load_and_run() {
     _remote_cleanup_containers "${container_name}"
 
     echo "[INFO] Starting container: ${container_name}"
-    # CONTAINER_RUN_EXTRA_ARGS 经分词传递多个 flag（如 --daemon），有意不加引号
+    # container_run_extra_args 经分词传递多个 flag（如 --daemon），有意不加引号
     # shellcheck disable=SC2086
-    IMAGE_NAME="${image_name}" CONTAINER_NAME="${container_name}" bash "${run_container_script}" ${CONTAINER_RUN_EXTRA_ARGS}
+    IMAGE_NAME="${image_name}" CONTAINER_NAME="${container_name}" bash "${run_container_script}" ${container_run_extra_args}
 
     # 使用 docker inspect 验证容器状态（比 sleep + docker ps 更可靠，无竞态）
     if docker inspect -f '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -q "true"; then
@@ -254,6 +255,7 @@ _remote_check_status() {
 _remote_prepare_node() {
     local image_name="$1" image_tar="$2" run_container_script="$3" container_name="$4"
     local action="${5:-start}"
+    local container_run_extra_args="${6:-}"
 
     set -eo pipefail
     _remote_ensure_docker_running
@@ -265,10 +267,10 @@ _remote_prepare_node() {
             ;;
         restart)
             _remote_cleanup_containers
-            _remote_load_and_run "${image_name}" "${image_tar}" "${run_container_script}" "${container_name}"
+            _remote_load_and_run "${image_name}" "${image_tar}" "${run_container_script}" "${container_name}" "${container_run_extra_args}"
             ;;
         start)
-            _remote_load_and_run "${image_name}" "${image_tar}" "${run_container_script}" "${container_name}"
+            _remote_load_and_run "${image_name}" "${image_tar}" "${run_container_script}" "${container_name}" "${container_run_extra_args}"
             ;;
     esac
 }
@@ -373,8 +375,8 @@ prepare_node() {
     local func_code call_code b64
     func_code="$(declare -f _remote_ensure_docker_running _remote_cleanup_containers \
         _remote_load_and_run _remote_prepare_node)"
-    printf -v call_code '_remote_prepare_node %q %q %q %q %q' \
-        "${IMAGE_NAME}" "${IMAGE_TAR}" "${RUN_CONTAINER_SCRIPT}" "${CONTAINER_NAME}" "${ACTION}"
+    printf -v call_code '_remote_prepare_node %q %q %q %q %q %q' \
+        "${IMAGE_NAME}" "${IMAGE_TAR}" "${RUN_CONTAINER_SCRIPT}" "${CONTAINER_NAME}" "${ACTION}" "${CONTAINER_RUN_EXTRA_ARGS}"
     b64="$(printf '%s\n%s\n' "${func_code}" "${call_code}" | base64 | tr -d '\n')"
 
     if ! ssh_run_timeout "$SSH_TIMEOUT" "$node" "echo '${b64}' | base64 -d | bash -l"; then

@@ -96,3 +96,12 @@ curl http://localhost:8011/v1/chat/completions \
 | 日期 | 环境 | 配置 | 结果 |
 |------|------|------|------|
 | 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=16 2 节点 | 待验证 |
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 |
+|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair5: 10.42.11.204/205 | TP=16 PP=1, PORT=8011 | ✅ PASS | `logs/parallel_deploy_v022_rerun/glm5-w8a8_*.log` |
+
+- 缓存目录从 `/dev/shm` 调整到项目共享路径 `.cache/glm5-w8a8`，避免 worker 节点 `TMPDIR` 缺失导致 Triton 编译失败。
+- 模型列表、中英文 Chat Completion、Tool Calling、Anthropic Messages API、流式输出测试均通过。

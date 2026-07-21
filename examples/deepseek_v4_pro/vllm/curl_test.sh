@@ -2,7 +2,7 @@
 # DeepSeek-V4-Pro API Test Script
 set -euo pipefail
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-8005}"
 BASE_URL="${BASE_URL:-http://localhost:$PORT}"
 MODEL_NAME="${MODEL_NAME:-deepseek-v4-pro}"
 

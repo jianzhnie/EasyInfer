@@ -200,3 +200,11 @@ A: W8A8 QuaRot 使用 8-bit 权重和 8-bit 激活量化，精度更高但显存
 ### Q: VLLM_ASCEND_ENABLE_FUSED_MC2 是什么？
 
 A: MiniMax 架构专用的融合 MC2 算子优化，提升 MoE 专家路由效率。官方推荐启用。
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 |
+|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair3: 10.42.11.200/201 | PORT=8004 | ✅ PASS | `logs/parallel_deploy_v022_rerun/minimax-m2.7_*.log` |
+
+- 模型列表、中英文 Chat Completion、Tool Calling、Anthropic Messages API、流式输出测试均通过。

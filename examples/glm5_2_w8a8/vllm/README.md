@@ -332,3 +332,11 @@ A: GLM-5.2 的 MLA 注意力层维度 `num_kv_heads × head_dim = 3 × 192 = 576
 ### Q: `quant_model_description.json` 有什么问题？
 
 A: 官方发布的 W8A8 量化描述文件中，78 层只有 22 层（密集层 + 每第 4 个 MoE 层）包含 Indexer 量化条目，其余 56 个 MoE 层缺失。需要在加载前手动补充。详见「量化文件修复」章节。
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair1: 10.42.11.196/197 | TP=8 PP=1, PORT=8007 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/glm5.2-w8a8_*.log` | 权重加载失败：`KeyError: 'model.layers.3.self_attn.indexer.wq_b.weight'`，当前 vLLM-Ascend 量化配置未覆盖 GLM-5.2 的 `indexer` 权重结构 |
+
+- 该错误发生在 `vllm_ascend/quantization/modelslim_config.py` 解析量化描述时，说明模型权重 key 与当前 vLLM-Ascend 实现不匹配。
