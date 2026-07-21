@@ -19,15 +19,15 @@ set -euo pipefail
 export VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-"INFO"}
 
 # --- 模型路径 ---
-# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-combined}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Thinking-2601-combined}"
+# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-combined}"
 
 # --- 并行度 ---
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-64}"         # TP: 单层显存切分
 
 # --- 服务配置 ---
 HOST=${HOST:-"0.0.0.0"}
-PORT=${PORT:-"8000"}
+PORT=${PORT:-"8200"}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"longcat-flash"}
 
 # --- 显存/调度 ---

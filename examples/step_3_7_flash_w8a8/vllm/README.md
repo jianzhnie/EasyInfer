@@ -81,3 +81,18 @@ curl http://localhost:8015/v1/chat/completions \
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair4: 10.42.11.202/203 | TP=8 PP=1, PORT=8015 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/step-3.7-flash_*.log` | `ValueError: Unrecognized configuration class Step3p7Config for this kind of AutoModel: AutoModel`，vLLM 0.22.1 未注册 Step-3.7-Flash 的 VL 配置类 |
 
 - 虽然内部文本模型 `Step3p5ForCausalLM` 在 vLLM 0.22.1 有注册，但外层 `Step3p7Config` VL wrapper 无法被 `AutoModel` 识别。
+| 2026-07-21 | 同上 | pair4: 10.42.11.202/203 | TP=8 PP=1 + `--model-impl transformers`, PORT=8015 | ❌ FAIL_SERVICE | `logs/step37_tfimpl_vllm.log` | transformers fallback 在 worker 初始化时失败，原因同上 |
+
+### 2026-07-21 复查结论（确认当前镜像不可部署）
+
+1. **remote code 本身可用**：transformers 5.5.4 + `trust_remote_code=True` 可正常解析
+   `Step3p7Config` 和 `Step3p7ForConditionalGeneration`（auto_map 含 `AutoModelForCausalLM`）。
+2. **vLLM transformers 后端不兼容**：vLLM 0.22.1 的 transformers fallback 固定调用
+   `AutoModel.from_config()`（`vllm/model_executor/models/transformers/base.py`），
+   而模型 `auto_map` 只注册了 `AutoConfig` / `AutoModelForCausalLM` / `AutoProcessor`，
+   没有 `AutoModel` 条目 → `ValueError: Unrecognized configuration class ... for this kind of AutoModel: AutoModel`。
+3. **即使绕过第 2 点也无法正确推理**：checkpoint 为 msmodelslim ascend 格式 W8A8
+   （expert 权重 int8 + `weight_scale`/`weight_offset`，无标准 `quantization_config`），
+   transformers 后端不会反量化，数值必然错误；`--quantization ascend` 只作用于 vLLM 原生模型层。
+4. **结论**：需等待 vLLM / vllm-ascend 原生注册 `Step3p7ForConditionalGeneration`（文本侧
+   `Step3p5ForCausalLM` 已注册，外层 VL wrapper + MTP 待支持）。当前镜像无脚本级 workaround。

@@ -78,3 +78,19 @@ bash examples/minimax_m3_w8a8/vllm/curl_test.sh
 
 - 初次部署因脚本中包含当前版本不支持的 `--swap-space 32` 参数而直接退出，已移除该参数。
 - 移除后服务仍无法启动，核心原因为 vLLM 0.22.1 registry 未注册 `MiniMaxM3SparseForConditionalGeneration`，需等后续版本支持。
+
+### 2026-07-21 复查结论（确认当前镜像不可部署）
+
+1. **注册表确认**：容器内 `ModelRegistry.get_supported_archs()` 无任何 `MiniMaxM3*` 条目。
+2. **transformers fallback 不可行**：`AutoConfig` + `trust_remote_code` 可加载（`MiniMaxM3VLConfig`），
+   但 `AutoModelForCausalLM.from_config` 报 `ValueError: Unrecognized configuration class` —
+   模型目录 `auto_map` 只注册了 `AutoConfig`，没有模型实现类，transformers 后端无法加载权重。
+3. **上游支持状态**：vLLM 已于 2026-06-12 宣布 MiniMax-M3 day-0 支持
+   （[vLLM blog](https://vllm.ai/blog/2026-06-12-minimax-m3-vllm)、
+   [recipes](https://recipes.vllm.ai/MiniMaxAI/MiniMax-M3)），但：
+   - 稳定版尚未发布，CUDA/ROCm 需用专用镜像 `vllm/vllm-openai:minimax-m3`；
+   - 上游实现为 hardware-isolated（`nvidia/`、`amd/` 目录），**无 Ascend (NPU) 路径**；
+   - 需等待 vllm-ascend 后续版本合入 `MiniMaxM3SparseForConditionalGeneration` 支持。
+
+**结论**：当前 `vllm-ascend:v0.22.1rc1-a3` 镜像无法部署 MiniMax-M3，无脚本级 workaround。
+待 vllm-ascend 新版本发布后，`run_vllm.sh`（已按 M2.7 配方编写）可直接复用验证。

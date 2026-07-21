@@ -47,13 +47,21 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
 
-# Fallback variables for older versions
-export VLLM_ASCEND_ENABLE_MLAPO=1
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
+# Fallback variables for older versions (all overridable from environment)
+export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+readonly ENABLE_EP="${ENABLE_EP:-1}"
 
-# v0.20.2 additional_config format
-readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true, "enable_mlapo": true}'
+# v0.20.2 additional_config format (kept in sync with the env vars above,
+# since additional_config takes precedence over env vars on Ascend)
+_fc1=false; [[ "$VLLM_ASCEND_ENABLE_FLASHCOMM1" == "1" ]] && _fc1=true
+_mlapo=false; [[ "$VLLM_ASCEND_ENABLE_MLAPO" == "1" ]] && _mlapo=true
+readonly ADDITIONAL_CONFIG="{\"enable_balance_scheduling\": true, \"enable_flashcomm1\": ${_fc1}, \"enable_mlapo\": ${_mlapo}}"
+
+# Expert parallel flag (set ENABLE_EP=0 to disable)
+EP_FLAG=()
+[[ "$ENABLE_EP" == "1" ]] && EP_FLAG=(--enable-expert-parallel)
 
 echo "============================================"
 echo "[INFO] Kimi-K2.6 W4A8 — Agent-Optimized Deployment"
@@ -81,7 +89,7 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens 16384 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enable-expert-parallel \
+    "${EP_FLAG[@]}" \
     --enable-auto-tool-choice \
     --tool-call-parser kimi_k2 \
     --language-model-only \

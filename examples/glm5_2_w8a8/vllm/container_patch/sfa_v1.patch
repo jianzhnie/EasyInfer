@@ -1,0 +1,101 @@
+--- orig/sfa_v1.py	2026-07-21 15:21:32.531819113 +0800
++++ sfa_v1.py	2026-07-21 15:26:52.793884000 +0800
+@@ -491,14 +491,26 @@
+         # NOTE: it imposes a limit on the number of input tokens and conflicts with FlashComm
+         self.enable_mlapo = get_ascend_config().enable_mlapo
+ 
+-        assert self.indexer is not None, "Indexer is required for DSA."
++        assert self.indexer is not None or self.skip_topk, (
++            "Indexer is required for DSA unless skip_topk is set "
++            "(IndexCache 'shared' layer reusing a previous layer's top-k)."
++        )
+ 
+         self.local_num_heads = self.num_heads
+         self.vllm_config = get_current_vllm_config()
+-        self.use_index_cache = self.skip_topk or getattr(
+-            self.vllm_config.model_config.hf_config,
+-            "use_index_cache",
+-            False,
++        hf_config = self.vllm_config.model_config.hf_config
++        # IndexCache: layers marked "shared" in hf config.indexer_types own no
++        # indexer and reuse the top-k selection of the most recent "full"
++        # layer; full layers must then keep topk_indices_buffer fresh.
++        _indexer_types = getattr(hf_config, "indexer_types", None) or []
++        self.use_index_cache = (
++            self.skip_topk
++            or "shared" in _indexer_types
++            or getattr(
++                hf_config,
++                "use_index_cache",
++                False,
++            )
+         )
+         self.is_kv_producer = (
+             self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
+@@ -506,11 +518,20 @@
+         self.layer_name = kwargs.get("layer_name")
+ 
+         # indexer param
+-        self.n_head: int = self.indexer.n_head  # 64
+-        self.head_dim: int = self.indexer.head_dim  # 128
+-        self.wq_b = self.indexer.wq_b
+-        self.wk_weights_proj = self.indexer.wk_weights_proj
+-        self.k_norm = self.indexer.k_norm
++        if self.indexer is not None:
++            self.n_head: int = self.indexer.n_head  # 64
++            self.head_dim: int = self.indexer.head_dim  # 128
++            self.wq_b = self.indexer.wq_b
++            self.wk_weights_proj = self.indexer.wk_weights_proj
++            self.k_norm = self.indexer.k_norm
++        else:
++            # IndexCache "shared" layer: no indexer weights exist. Only the
++            # dims are needed; top-k indices come from topk_indices_buffer.
++            self.n_head = hf_config.index_n_heads
++            self.head_dim = hf_config.index_head_dim
++            self.wq_b = None
++            self.wk_weights_proj = None
++            self.k_norm = None
+         self.cp_size = 1
+         self.is_rope_neox_style = True
+         self.use_torch_npu_lightning_indexer = False
+@@ -1256,7 +1277,12 @@
+                 slot_mapping=slot_mapping,
+                 num_input_tokens=num_input_tokens,
+             )
+-            k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
++            if self.indexer is not None:
++                k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
++            else:
++                # IndexCache "shared" layer: no indexer weights; the indexer
++                # k cache of this layer is never used for selection.
++                k_li, k_li_scale = None, None
+             wait_for_kv_layer_from_connector(layer_name)
+         # native
+         else:
+@@ -1277,7 +1303,12 @@
+             assert self.q_a_layernorm is not None, "q_a_layernorm must be initialized"
+             q_c = self.q_a_layernorm(q_c)
+ 
+-            k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
++            if self.indexer is not None:
++                k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
++            else:
++                # IndexCache "shared" layer: no indexer weights; the indexer
++                # k cache of this layer is never used for selection.
++                k_li, k_li_scale = None, None
+ 
+             wait_for_kv_layer_from_connector(layer_name)
+ 
+@@ -1375,9 +1406,10 @@
+                         slot_mapping=slot_mapping[: attn_metadata.num_actual_tokens],
+                     )
+ 
+-            k_li = self._get_full_kv(k_li, attn_metadata)
++            if k_li is not None:
++                k_li = self._get_full_kv(k_li, attn_metadata)
+ 
+-        if kv_cache is not None:
++        if kv_cache is not None and k_li is not None:
+             if self.is_kv_producer:
+                 attn_metadata.reshape_cache_event = torch.npu.Event()
+ 

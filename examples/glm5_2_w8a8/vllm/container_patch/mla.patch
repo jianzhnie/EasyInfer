@@ -1,0 +1,14 @@
+--- orig/mla.py	2026-07-21 15:21:32.072536817 +0800
++++ mla.py	2026-07-21 15:23:58.060202000 +0800
+@@ -112,6 +112,11 @@
+             kv_b_proj=self.kv_b_proj,
+             use_sparse=self.is_sparse,
+             indexer=self.indexer,
++            # Forwarded to the attention impl via **extra_impl_args so that
++            # backends (e.g. Ascend SFA) can reuse the shared top-k buffer
++            # on IndexCache "shared" layers that own no indexer.
++            skip_topk=self.skip_topk,
++            topk_indices_buffer=mla_modules.topk_indices_buffer,
+         )
+ 
+         self.prefix = prefix

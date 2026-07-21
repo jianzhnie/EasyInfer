@@ -48,13 +48,27 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
 
+# Feature toggles (1=on, 0=off), overridable via environment.
+# NOTE: FLASHCOMM1=0 is a workaround for "QuantMatmul not support to process
+# empty tensor" (aclnnQuantMatmulWeightNz 161002) in profile_run: the flashcomm1
+# custom ops (maybe_all_gather_and_maybe_unpad / maybe_chunk_residual) can
+# produce empty tensors on some TP ranks, which npu_quant_matmul rejects.
+FLASHCOMM1="${FLASHCOMM1:-0}"
+MLAPO="${MLAPO:-1}"
+BALANCE_SCHEDULING="${BALANCE_SCHEDULING:-1}"
+
 # Fallback variables for older versions
-export VLLM_ASCEND_ENABLE_MLAPO=1
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_BALANCE_SCHEDULING=1
+export VLLM_ASCEND_ENABLE_MLAPO="$MLAPO"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="$FLASHCOMM1"
+export VLLM_ASCEND_BALANCE_SCHEDULING="$BALANCE_SCHEDULING"
+
+_to_bool() { [[ "$1" == "1" || "$1" == "true" ]] && echo true || echo false; }
 
 # v0.20.2 additional_config format
-readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true, "enable_mlapo": true}'
+BS_BOOL="$(_to_bool "$BALANCE_SCHEDULING")"
+FC1_BOOL="$(_to_bool "$FLASHCOMM1")"
+MLAPO_BOOL="$(_to_bool "$MLAPO")"
+readonly ADDITIONAL_CONFIG="{\"enable_balance_scheduling\": ${BS_BOOL}, \"enable_flashcomm1\": ${FC1_BOOL}, \"enable_mlapo\": ${MLAPO_BOOL}}"
 
 echo "============================================"
 echo "[INFO] Kimi-K2.7-Code W4A8 — Agent-Optimized Deployment"
@@ -62,6 +76,7 @@ echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] FLASHCOMM1=$FLASHCOMM1 MLAPO=$MLAPO BALANCE_SCHEDULING=$BALANCE_SCHEDULING"
 echo "[INFO] Prefix Caching: ENABLED"
 echo "============================================"
 

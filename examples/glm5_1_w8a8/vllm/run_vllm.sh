@@ -110,6 +110,14 @@ fi
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
 readonly ADDITIONAL_CONFIG='{"multistream_overlap_shared_expert": true}'
 
+# Eager mode (skip compilation + decode cudagraphs). Matches the known-good
+# GLM-5.1 W4A8 deployment config; use when the compiled decode path misbehaves.
+readonly ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+COMPILE_ARGS=(--compilation-config "$COMPILATION_CONFIG")
+if [[ "$ENFORCE_EAGER" == "1" ]]; then
+    COMPILE_ARGS=(--enforce-eager)
+fi
+
 # MTP speculative decoding (off by default at TP=16 to save memory)
 SPEC_ARGS=()
 if [[ "$ENABLE_MTP" == "1" ]]; then
@@ -121,7 +129,7 @@ echo "[INFO] GLM-5.1 W8A8 — vLLM-Ascend Deployment (2-node TP=16)"
 echo "[INFO] Model:    $MODEL_PATH"
 echo "[INFO] TP=$TP  PP=$PP  DP=$DP  PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL  MTP=$ENABLE_MTP"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL  MTP=$ENABLE_MTP  ENFORCE_EAGER=$ENFORCE_EAGER"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
 echo "============================================"
 
@@ -148,7 +156,7 @@ vllm serve "$MODEL_PATH" \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
     --additional-config "$ADDITIONAL_CONFIG" \
-    --compilation-config "$COMPILATION_CONFIG" \
+    "${COMPILE_ARGS[@]}" \
     --seed 1024 \
     ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     "$@"
