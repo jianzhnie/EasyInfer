@@ -91,8 +91,13 @@ ct_build_tools() {
     printf '"max_tokens":100,"tool_choice":"auto","tools":%s}' "$tool"
 }
 
-# ---- JSON parser（统一入口，底层是 curl_helper.py）-------------------------------
-ct_json() { python3 "${CT_DIR}/curl_helper.py" "$1" <<<"$2" 2>/dev/null || echo ""; }
+# ---- JSON helpers -----------------------------------------------------------
+ct_json()      { python3 "${CT_DIR}/curl_helper.py" "$1" <<<"$2" 2>/dev/null || echo ""; }
+pretty_json() {
+    local input
+    input=$(cat)
+    python3 -m json.tool <<<"$input" 2>/dev/null || echo "$input"
+}
 
 # ==============================================================================
 # Public API (curl_test:: namespace)
@@ -140,7 +145,7 @@ curl_test::models() {
     log_sec "模型列表"
     local resp
     resp=$(ct_curl "${BASE_URL}/v1/models") || { log_err "无法获取"; return 1; }
-    echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+    echo "$resp" | pretty_json
     log_ok "获取成功"
 }
 
@@ -160,7 +165,7 @@ curl_test::chat() {
         [[ -n "$usage" ]] && log_info "Tokens: $usage"
     else
         log_err "空回复"
-        echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+        echo "$resp" | pretty_json
         return 1
     fi
 }
