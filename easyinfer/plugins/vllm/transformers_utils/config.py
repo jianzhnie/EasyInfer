@@ -18,3 +18,37 @@ def patch_vllm_config_registry(module: Any) -> None:
     if module._CONFIG_REGISTRY.get("pcl_model") != "DeepseekV3Config":
         module._CONFIG_REGISTRY["pcl_model"] = "DeepseekV3Config"
         logger.info("Registered vLLM config alias: pcl_model -> DeepseekV3Config")
+
+    # LongCat-Flash custom models use model_type="longcat" (from
+    # configuration_longcat.LongcatConfig) but vLLM's built-in config system
+    # expects model_type="longcat_flash" → LongcatFlashConfig.  Register the
+    # alias so vLLM can properly convert the HF config for these checkpoints.
+    if module._CONFIG_REGISTRY.get("longcat") != "LongcatFlashConfig":
+        module._CONFIG_REGISTRY["longcat"] = "LongcatFlashConfig"
+        logger.info("Registered vLLM config alias: longcat -> LongcatFlashConfig")
+
+    # The custom ``LongcatConfig`` uses ``num_layers`` instead of HF's
+    # standard ``num_hidden_layers``.  vllm_ascend's MLA ops
+    # (``MultiHeadLatentAttentionWrapper``) reads ``num_hidden_layers``
+    # directly from the HF config.  We patch ``PretrainedConfig.__init__``
+    # so that any config instance missing ``num_hidden_layers`` gets it
+    # auto-populated from ``num_layers``.
+    try:
+        from transformers import PretrainedConfig as _PretrainedConfig
+    except ImportError:
+        _PretrainedConfig = None
+
+    if _PretrainedConfig is not None:
+        _original_pretrained_init = _PretrainedConfig.__init__
+
+        def _patched_pretrained_init(self: Any, *args: Any, **kwargs: Any) -> None:
+            _original_pretrained_init(self, *args, **kwargs)
+            if not hasattr(self, "num_hidden_layers"):
+                num_layers = getattr(self, "num_layers", None)
+                if num_layers is not None:
+                    object.__setattr__(self, "num_hidden_layers", num_layers)
+
+        _PretrainedConfig.__init__ = _patched_pretrained_init
+        logger.info(
+            "Patched PretrainedConfig.__init__ to auto-set num_hidden_layers from num_layers"
+        )

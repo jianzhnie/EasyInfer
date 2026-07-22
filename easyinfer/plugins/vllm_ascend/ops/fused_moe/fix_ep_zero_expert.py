@@ -66,6 +66,10 @@ def patch_chunked_mlp(module: object) -> None:
         group_list_type: int = 1,
         topk_scales: torch.Tensor | None = None,
         need_trans: bool = True,
+        swiglu_limit: float = 0.0,
+        lora_context: Any = None,
+        expanded_row_idx: torch.Tensor | None = None,
+        topk_ids: torch.Tensor | None = None,
     ):
         num_experts = w1.shape[0]
         if num_experts <= _MAX_EXPERTS_PER_CHUNK:
@@ -80,6 +84,10 @@ def patch_chunked_mlp(module: object) -> None:
                 group_list_type,
                 topk_scales,
                 need_trans,
+                swiglu_limit=swiglu_limit,
+                lora_context=lora_context,
+                expanded_row_idx=expanded_row_idx,
+                topk_ids=topk_ids,
             )
 
         outputs: list[torch.Tensor] = []
@@ -118,6 +126,10 @@ def patch_chunked_mlp(module: object) -> None:
                 group_list_type,
                 None,
                 need_trans,
+                swiglu_limit=swiglu_limit,
+                lora_context=lora_context,
+                expanded_row_idx=expanded_row_idx,
+                topk_ids=topk_ids,
             )
             outputs.append(cout)
 

@@ -1,4 +1,10 @@
-"""Patch for vllm/model_executor/models/longcat_flash.py
+"""Patches for vllm/model_executor/models/longcat_flash.py
+
+1. **Grouped Routing** — optional, only when config sets ``use_group_routing``
+   AND ``expert_expansion_factor > 1``.
+2. **MTP weight filtering** — skips Multi-Token Prediction keys during weight
+   loading (the built-in ``".mtp." in name`` check misses keys that start with
+   ``mtp.`` after vLLM strips the ``model.`` prefix).
 
 Supports Grouped Routing (分组路由) from the custom HuggingFace model
 ``modeling_longcat_flash_group.py``.
@@ -38,6 +44,7 @@ kernel does not support ``custom_routing_function``.  Only the first pass
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import torch
@@ -239,44 +246,24 @@ def _patch_ascend_select_experts(
 # ---------------------------------------------------------------------------
 
 
+# ===========================================================================
+# Patch 1: Grouped Routing (optional, config-driven)
+# ===========================================================================
+
+
 @register_patch(target="vllm.model_executor.models.longcat_flash")
 def patch_longcat_flash_grouped_routing(module: Any) -> None:
-    """Monkey-patch vLLM ``longcat_flash`` for Grouped Routing support.
+    """Inject grouped routing into ``LongcatMoe`` when config enables it.
 
-    Changes
-    -------
-    1. **FlashConfig** — accepts ``use_group_routing`` and
-       ``expert_expansion_factor`` from the HF config.
-    2. **LongcatMoe** — injects grouped routing.  Three code paths:
+    Only activates when **both** ``use_group_routing=True`` and
+    ``expert_expansion_factor > 1`` are present in the config.
+    Otherwise this is a no-op.
 
-       *zero_expert_type is None*
-           Sets ``custom_routing_function`` → ``CustomRoutingRouter``.
-       *zero_expert_type is set, GPU*
-           Patches ``ZeroExpertRouter._compute_routing`` directly (the
-           router factory skips ``CustomRoutingRouter`` in this case).
-       *Ascend NPU*
-           Replaces ``select_experts`` on the ``AscendZeroExpertFusedMoE``
-           instance (its ``forward()`` bypasses both of the above).
+    Three code paths (device-dependent):
+    - **GPU, zero_expert_type set**: patches ``ZeroExpertRouter`` directly.
+    - **GPU, zero_expert_type=None**: sets ``custom_routing_function``.
+    - **Ascend NPU**: replaces ``select_experts`` on the fused-MoE instance.
     """
-
-    # ---- 1. FlashConfig ----
-
-    original_config_init = module.FlashConfig.__init__
-
-    def patched_config_init(
-        self: Any,
-        use_group_routing: bool = False,
-        expert_expansion_factor: int = 1,
-        **kwargs: Any,
-    ) -> None:
-        original_config_init(self, **kwargs)
-        self.use_group_routing = use_group_routing
-        self.expert_expansion_factor = expert_expansion_factor
-
-    module.FlashConfig.__init__ = patched_config_init
-    patch_logger.info("[longcat_flash] Patched FlashConfig for grouped routing fields")
-
-    # ---- 2. LongcatMoe ----
 
     original_moe_init = module.LongcatMoe.__init__
 
@@ -305,13 +292,13 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             enable_eplb=enable_eplb,
         )
 
+        # ---- Guard: only activate when explicitly configured ----
         use_group_routing = getattr(config, "use_group_routing", False)
         expansion_factor = getattr(config, "expert_expansion_factor", 1)
-
         if not (use_group_routing and expansion_factor > 1):
             return
+        # -----------------------------------------------------------
 
-        # n_routed_experts = N + Z (already computed by LongcatRouter)
         n_routed = self.router.n_routed_experts
         zero_expert_type = getattr(config, "zero_expert_type", None)
         is_ascend = hasattr(self.experts, "_temporarily_set_attrs")
@@ -325,9 +312,9 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             # invoking ZeroExpertRouter._compute_routing.
             _patch_zero_expert_router(self.experts, expansion_factor, n_routed)
             patch_logger.info(
-                "[longcat_flash] Enabled grouped routing on %s (ZeroExpertRouter path): "
-                "expansion_factor=%d, n_routed_experts=%d, top_k=%d, zero_expert_type=%s",
-                prefix or "LongcatMoe",
+                "[longcat_flash] Grouped routing (ZeroExpertRouter): "
+                "prefix=%s expansion=%d n_routed=%d top_k=%d zero=%s",
+                prefix,
                 expansion_factor,
                 n_routed,
                 top_k,
@@ -337,22 +324,24 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             # ---- Path B: no zero expert (any device) ----
             # Router factory will create CustomRoutingRouter.
             self.experts.custom_routing_function = (
-                lambda hidden_states, gating_output, topk, renormalize, **kw: (
-                    _grouped_routing(
-                        hidden_states,
-                        gating_output,
-                        topk,
-                        renormalize,
-                        expansion_factor,
-                        n_routed,
-                        e_score_correction_bias=(self.router.e_score_correction_bias),
-                    )
+                lambda hidden_states,
+                gating_output,
+                topk,
+                renormalize,
+                **kw: _grouped_routing(
+                    hidden_states,
+                    gating_output,
+                    topk,
+                    renormalize,
+                    expansion_factor,
+                    n_routed,
+                    e_score_correction_bias=self.router.e_score_correction_bias,
                 )
             )
             patch_logger.info(
-                "[longcat_flash] Enabled grouped routing on %s (CustomRoutingRouter path): "
-                "expansion_factor=%d, n_routed_experts=%d, top_k=%d",
-                prefix or "LongcatMoe",
+                "[longcat_flash] Grouped routing (CustomRoutingRouter): "
+                "prefix=%s expansion=%d n_routed=%d top_k=%d",
+                prefix,
                 expansion_factor,
                 n_routed,
                 top_k,
@@ -366,14 +355,41 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
         if is_ascend:
             _patch_ascend_select_experts(self.experts, expansion_factor, n_routed)
             patch_logger.info(
-                "[longcat_flash] Enabled grouped routing on %s (Ascend select_experts path): "
-                "expansion_factor=%d, n_routed_experts=%d, top_k=%d",
-                prefix or "LongcatMoe",
+                "[longcat_flash] Grouped routing (Ascend select_experts): "
+                "prefix=%s expansion=%d n_routed=%d top_k=%d",
+                prefix,
                 expansion_factor,
                 n_routed,
                 top_k,
             )
 
     module.LongcatMoe.__init__ = patched_moe_init
-
     patch_logger.info("[longcat_flash] Grouped Routing monkey patch applied")
+
+
+# ===========================================================================
+# Patch 2: MTP weight filtering
+# ===========================================================================
+
+
+@register_patch(target="vllm.model_executor.models.longcat_flash")
+def patch_longcat_flash_mtp_filter(module: Any) -> None:
+    """Filter MTP (Multi-Token Prediction) keys during weight loading.
+
+    The built-in check ``".mtp." in name`` misses keys that start with
+    ``mtp.`` after vLLM strips the ``model.`` prefix from checkpoint keys.
+    We pre-filter the weight iterator to skip any key containing ``mtp.``.
+    """
+    original_load_weights = module.LongcatFlashForCausalLM.load_weights
+
+    def patched_load_weights(self: Any, weights: Any) -> Any:
+        with contextlib.suppress(TypeError, ValueError):
+            weights = [
+                (n, t)
+                for n, t in weights
+                if ".mtp." not in n and not n.startswith("mtp.")
+            ]
+        return original_load_weights(self, weights)
+
+    module.LongcatFlashForCausalLM.load_weights = patched_load_weights
+    patch_logger.info("[longcat_flash] MTP weight filter applied")
