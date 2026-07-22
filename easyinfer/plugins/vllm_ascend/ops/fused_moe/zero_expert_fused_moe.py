@@ -21,9 +21,33 @@ Non-EP (AllGather) path
 Without expert parallelism the prepare step does not change the token
 dimension, so routing is computed in ``forward`` before delegating to the
 parent ``forward_impl``.  The memoization trick from upstream works unchanged.
+
+Compatibility note
+------------------
+vLLM 0.23 removed ``ZeroExpertFusedMoE`` (zero-expert handling moved into
+the router, and vllm_ascend's ``AscendFusedMoE`` computes the zero-expert
+contribution natively).  This OOT replacement only applies to older vLLM;
+on vLLM >= 0.23 the module skips itself below and nothing is registered.
 """
 
 from __future__ import annotations
+
+import importlib.util as _importlib_util
+
+if (
+    _importlib_util.find_spec(
+        "vllm.model_executor.layers.fused_moe.zero_expert_fused_moe"
+    )
+    is None
+):
+    # Raised on purpose: discover_modules() catches ImportError and skips
+    # this module.  ZeroExpertFusedMoE is gone in vllm >= 0.23 and upstream
+    # AscendFusedMoE handles zero experts natively, so this OOT class is
+    # obsolete there.
+    raise ImportError(
+        "ZeroExpertFusedMoE not found (vllm >= 0.23); "
+        "AscendZeroExpertFusedMoE OOT registration skipped"
+    )
 
 from typing import TYPE_CHECKING
 

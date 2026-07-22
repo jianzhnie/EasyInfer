@@ -19,13 +19,10 @@ def patch_vllm_config_registry(module: Any) -> None:
         module._CONFIG_REGISTRY["pcl_model"] = "DeepseekV3Config"
         logger.info("Registered vLLM config alias: pcl_model -> DeepseekV3Config")
 
-    # LongCat-Flash custom models use model_type="longcat" (from
-    # configuration_longcat.LongcatConfig) but vLLM's built-in config system
-    # expects model_type="longcat_flash" → LongcatFlashConfig.  Register the
-    # alias so vLLM can properly convert the HF config for these checkpoints.
-    if module._CONFIG_REGISTRY.get("longcat") != "LongcatFlashConfig":
-        module._CONFIG_REGISTRY["longcat"] = "LongcatFlashConfig"
-        logger.info("Registered vLLM config alias: longcat -> LongcatFlashConfig")
+    # NOTE: no config alias is needed for LongCat checkpoints.  Their
+    # config.json carries no ``model_type``, so vLLM never consults
+    # ``_CONFIG_REGISTRY`` for them; with ``trust_remote_code`` the
+    # checkpoint's own ``configuration_*.py`` is loaded instead.
 
     # The custom ``LongcatConfig`` uses ``num_layers`` instead of HF's
     # standard ``num_hidden_layers``.  vllm_ascend's MLA ops

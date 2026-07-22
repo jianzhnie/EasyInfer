@@ -23,23 +23,22 @@ Compatibility
 - **Without zero experts** (``zero_expert_type=None``): sets
   ``custom_routing_function`` on the ``FusedMoE`` so the router factory
   creates a ``CustomRoutingRouter``.
-- **With zero experts, GPU** (``zero_expert_type="identity"``): directly
+- **With zero experts** (``zero_expert_type="identity"``): directly
   monkey-patches ``ZeroExpertRouter._compute_routing`` on the instance,
   because the router factory gives ``ZeroExpertRouter`` higher priority
-  and it ignores ``custom_routing_function``.  Skipped on Ascend because
-  ``AscendZeroExpertFusedMoE.forward()`` never calls this method.
-- **Ascend NPU** (any ``zero_expert_type``): replaces ``select_experts``
-  on the ``AscendZeroExpertFusedMoE`` instance, because its ``forward()``
-  temporarily disables ``custom_routing_function`` and calls
-  ``select_experts`` directly, bypassing both of the above paths.
+  and it ignores ``custom_routing_function``.
 
-Known Limitation
-----------------
-On Ascend NPU, the **second pass** of ``AscendZeroExpertFusedMoE.forward()``
-(the ``AscendFusedMoE.forward`` call for real experts) uses Ascend's native
-routing (standard top-k) rather than grouped routing, because the CANN fused
-kernel does not support ``custom_routing_function``.  Only the first pass
-(zero-expert selection via ``select_experts``) uses grouped routing.
+Ascend NPU note
+---------------
+vLLM 0.23 removed ``ZeroExpertFusedMoE``; ``LongcatMoe`` now builds a plain
+``FusedMoE`` and vllm_ascend's ``AscendFusedMoE`` computes the zero-expert
+contribution natively, so the old ``AscendZeroExpertFusedMoE`` OOT
+replacement (and its grouped-routing ``select_experts`` hook) is gone.
+The duck-typing marker it relied on (``_temporarily_set_attrs``) no longer
+exists in vllm_ascend >= 0.23, so the Ascend-specific grouped-routing path
+below is currently inactive; grouped routing is only wired up on GPU.
+Both LongCat-Flash checkpoints ship without ``use_group_routing``, so this
+path is dormant in practice.
 """
 
 from __future__ import annotations
@@ -214,11 +213,12 @@ def _patch_ascend_select_experts(
 ) -> None:
     """Replace ``select_experts`` on Ascend with grouped routing.
 
-    ``AscendZeroExpertFusedMoE.forward()`` temporarily disables
-    ``custom_routing_function`` and calls ``select_experts`` directly,
-    so neither the router patch nor ``custom_routing_function`` takes
-    effect.  This helper replaces ``select_experts`` at the instance
-    level so grouped routing runs inside the Ascend forward.
+    Legacy hook kept for older vllm_ascend releases whose
+    ``AscendZeroExpertFusedMoE.forward()`` temporarily disabled
+    ``custom_routing_function`` and called ``select_experts`` directly,
+    bypassing both the router patch and ``custom_routing_function``.
+    On vllm_ascend >= 0.23 that OOT class no longer exists and this
+    helper is never invoked (see the module docstring).
     """
 
     def grouped_select_experts(
@@ -262,7 +262,8 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
     Three code paths (device-dependent):
     - **GPU, zero_expert_type set**: patches ``ZeroExpertRouter`` directly.
     - **GPU, zero_expert_type=None**: sets ``custom_routing_function``.
-    - **Ascend NPU**: replaces ``select_experts`` on the fused-MoE instance.
+    - **Ascend NPU (legacy, vllm_ascend < 0.23 only)**: replaces
+      ``select_experts`` on the fused-MoE instance.
     """
 
     original_moe_init = module.LongcatMoe.__init__
@@ -301,15 +302,16 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
 
         n_routed = self.router.n_routed_experts
         zero_expert_type = getattr(config, "zero_expert_type", None)
+        # Duck-typing marker of the old AscendZeroExpertFusedMoE OOT class.
+        # vllm_ascend >= 0.23 removed it, so this is False there and Path C
+        # below stays inactive (upstream AscendFusedMoE handles zero experts
+        # natively).
         is_ascend = hasattr(self.experts, "_temporarily_set_attrs")
 
         if zero_expert_type is not None and not is_ascend:
             # ---- Path A: GPU + zero experts ----
             # Router factory created a ZeroExpertRouter which ignores
             # custom_routing_function → patch _compute_routing directly.
-            # NOTE: skipped on Ascend because AscendZeroExpertFusedMoE.forward()
-            # calls select_experts directly (handled by Path C below), never
-            # invoking ZeroExpertRouter._compute_routing.
             _patch_zero_expert_router(self.experts, expansion_factor, n_routed)
             patch_logger.info(
                 "[longcat_flash] Grouped routing (ZeroExpertRouter): "
@@ -347,11 +349,12 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
                 top_k,
             )
 
-        # ---- Path C: Ascend NPU ----
-        # AscendZeroExpertFusedMoE.forward() temporarily disables
-        # custom_routing_function and calls select_experts directly,
-        # bypassing both Path A's router patch and Path B's custom_routing_function.
-        # This applies regardless of zero_expert_type.
+        # ---- Path C: Ascend NPU (legacy, inactive on vllm_ascend >= 0.23) ----
+        # Only reachable on older vllm_ascend releases whose
+        # AscendZeroExpertFusedMoE.forward() temporarily disabled
+        # custom_routing_function and called select_experts directly,
+        # bypassing both Path A's router patch and Path B's
+        # custom_routing_function.
         if is_ascend:
             _patch_ascend_select_experts(self.experts, expansion_factor, n_routed)
             patch_logger.info(
