@@ -1,48 +1,38 @@
 #!/bin/bash
 # =============================================================================
-# LongCat-Flash-Chat-2layer — vllm serve deployment
+# LongCat-Flash 2-Layer — vllm serve deployment
 # =============================================================================
 # Architecture: LongcatFlashForCausalLM | 512 Routed Experts + 256 Zero | MLA
 #               2 layers extracted from the original 28-layer model.
-# Docker image: quay.io/ascend/vllm-ascend:v0.20.2rc1-a3
-#
-# Two modes:
-#   (A) Stable mode  — TP=1, no EP, single NPU (default)
-#   (B) EP mode      — TP=2, --enable-expert-parallel, 2 NPU
-#       EP mode loads and starts correctly (AssertionError fixed by
-#       EasyInfer fix_ep_zero_expert plugin), but inference may trigger
-#       aicore exception on CANN 9.0.0 depending on the MoE kernel.
+# Docker image: quay.io/ascend/vllm-ascend:v0.23.0rc1-a3
 #
 # Usage:
-#   bash run_vllm.sh                                    # stable mode (A)
-#   EP=1 TP=2 bash run_vllm.sh                          # EP mode (B)
-#   TP=1 MAX_MODEL_LEN=4096 bash run_vllm.sh            # override params
+#   bash run_vllm.sh                                    # stable mode (default)
+#   EP=1 TP=2 bash run_vllm.sh                          # EP mode
+#   MODEL_PATH=/custom/path TP=8 bash run_vllm.sh       # custom model
 #
 # Prerequisites:
 #   pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer  # once per container
-#
-# Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
 # =============================================================================
 set -euo pipefail
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat/expand"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat-2layer}"
+readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Thinking-2601-2layer}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8010}"
-readonly TP="${TP:-1}"
+readonly PORT="${PORT:-8300}"
+readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly ENABLE_EP="${EP:-0}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
+readonly EXECUTOR="${EXECUTOR:-ray}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash-2layer}"
 readonly DTYPE="${DTYPE:-bfloat16}"
 
 # ------------------------------------------------------------------------------
-# Ensure EasyInfer plugins are registered (first run per container)
+# Ensure EasyInfer plugins are registered
 # ------------------------------------------------------------------------------
 pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
 
@@ -78,13 +68,12 @@ command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127
 # ------------------------------------------------------------------------------
 
 echo "============================================"
-echo "[INFO] LongCat-Flash-Chat-2layer — Deployment"
+echo "[INFO] LongCat-Flash 2-Layer Deployment"
 echo "[INFO] Model:   $MODEL_PATH"
-echo "[INFO] TP=$TP, PP=$PP, EP=$ENABLE_EP (mp backend)"
+echo "[INFO] TP=$TP, PP=$PP, EP=$ENABLE_EP, Backend=$EXECUTOR"
 echo "[INFO] Host:    ${HOST}:${PORT}"
 echo "[INFO] MaxLen:  $MAX_MODEL_LEN  Seqs: $MAX_NUM_SEQS"
 echo "[INFO] MemUtil: $GPU_MEM_UTIL"
-echo "[INFO] Docker:  quay.io/ascend/vllm-ascend:v0.20.2rc1-a3"
 echo "============================================"
 
 EP_FLAGS=()
@@ -101,12 +90,11 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     "${EP_FLAGS[@]}" \
-    --distributed-executor-backend mp \
+    --distributed-executor-backend "$EXECUTOR" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-    --enable-chunked-prefill \
     --no-enable-prefix-caching \
     --enforce-eager \
     --seed 1024 \
