@@ -8,7 +8,10 @@
 #
 # 环境变量:
 #   HOST PORT BASE_URL MODEL_NAME CURL_TIMEOUT WAIT_TIMEOUT WAIT_INTERVAL
-#   SKIP_WAIT SKIP_HEALTH SKIP_MODELS SKIP_CHAT SKIP_STREAM SKIP_TOOLS SKIP_ANTHROPIC
+#   SKIP_WAIT SKIP_HEALTH SKIP_MODELS SKIP_CHAT SKIP_STREAM SKIP_TOOLS
+#   SKIP_ANTHROPIC SKIP_CODE
+#   ENABLE_VISION=1  启用多模态图片测试(默认关闭,仅多模态模型开启)
+#   VISION_URL       自定义测试图片 URL
 # =============================================================================
 
 # ---- Config（source 后可修改）--------------------------------------------------
@@ -36,16 +39,12 @@ if [[ -f "${CT_DIR}/../scripts/common.sh" ]]; then
     source "${CT_DIR}/../scripts/common.sh"
 fi
 
-# ---- Colors ------------------------------------------------------------------
-if [[ -z "${RED:-}" ]]; then
-    readonly RED='\033[0;31m'
-    readonly GREEN='\033[0;32m'
-    readonly YELLOW='\033[1;33m'
-    readonly BLUE='\033[0;34m'
-    readonly NC='\033[0m'
-elif [[ -z "${BLUE:-}" ]]; then
-    BLUE='\033[0;34m'
-fi
+# ---- Colors（逐变量兜底，兼容 common.sh 只定义了部分颜色的情况）---------------
+: "${RED:='\033[0;31m'}"
+: "${GREEN:='\033[0;32m'}"
+: "${YELLOW:='\033[1;33m'}"
+: "${BLUE:='\033[0;34m'}"
+: "${NC:='\033[0m'}"
 
 # ==============================================================================
 # Internal helpers（ct_ 前缀：curl wrapper / builder / parser；log_ 前缀：日志；skip_if：跳过检测）
@@ -89,6 +88,13 @@ ct_build_tools() {
     printf '{"model":"%s","messages":[{"role":"user","content":"%s"}],' \
         "${MODEL_NAME}" "$1"
     printf '"max_tokens":100,"tool_choice":"auto","tools":%s}' "$tool"
+}
+ct_build_vision() {
+    local url="${VISION_URL:-https://example.com/test.png}"
+    printf '{"model":"%s","messages":[{"role":"user","content":[' "${MODEL_NAME}"
+    printf '{"type":"text","text":"Describe this image briefly."},'
+    printf '{"type":"image_url","image_url":{"url":"%s"}}]}],' "$url"
+    printf '"max_tokens":128}'
 }
 
 # ---- JSON helpers -----------------------------------------------------------
@@ -210,6 +216,33 @@ curl_test::tools() {
     esac
 }
 
+curl_test::code() {
+    skip_if SKIP_CODE && return 0
+    log_sec "代码生成"
+    curl_test::chat "${PROMPTS[6]}" 200
+}
+
+curl_test::vision() {
+    [[ "${ENABLE_VISION:-0}" == "1" ]] || return 0
+    skip_if SKIP_VISION && return 0
+    log_sec "多模态 Vision (图片 URL)"
+    local raw code resp content
+    raw=$(ct_curl_raw "$(ct_build_vision)" "${BASE_URL}/v1/chat/completions")
+    code="${raw##*$'\n'}"
+    resp="${raw%$'\n'*}"
+    if [[ "$code" != "200" ]]; then
+        log_warn "Vision 请求失败 (HTTP ${code})，模型可能不支持图片输入"
+        return 0
+    fi
+    content=$(ct_json content "$resp")
+    if [[ -n "$content" && "$content" != "None" ]]; then
+        log_ok "Vision 回复: ${content:0:150}"
+    else
+        log_warn "Vision 响应为空"
+    fi
+    return 0
+}
+
 curl_test::anthropic() {
     skip_if SKIP_ANTHROPIC && return 0
     log_sec "Anthropic Messages API"
@@ -239,9 +272,12 @@ curl_test::run() {
     curl_test::wait      || { log_err "服务未就绪，终止测试"; return 1; }
     curl_test::health    || ((failed++))
     curl_test::models    || ((failed++))
-    curl_test::chat      || ((failed++))
+    curl_test::chat "${PROMPTS[0]}" || ((failed++))   # 中文
+    curl_test::chat "${PROMPTS[1]}" || ((failed++))   # 英文
+    curl_test::code      || ((failed++))
     curl_test::stream    || ((failed++))
     curl_test::tools     || ((failed++))
+    curl_test::vision    || ((failed++))
     curl_test::anthropic
     echo ""
     echo "=========================================="

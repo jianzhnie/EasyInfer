@@ -20,7 +20,11 @@ def load_content():
 
 # ---- chat ---------------------------------------------------------
 def cmd_content():
-    print(load_content()['choices'][0]['message']['content'])
+    msg = load_content()['choices'][0]['message']
+    # reasoning 模型(GLM/Kimi-Thinking 等)content 可能为 null,
+    # 正文在 reasoning_content / reasoning 字段,取两者中有效的一个
+    text = msg.get('content') or msg.get('reasoning_content') or msg.get('reasoning') or ''
+    print(text if text else '')
 
 
 def cmd_usage():
@@ -41,8 +45,9 @@ def cmd_tool():
     if msg.get('tool_calls'):
         tc = msg['tool_calls'][0]
         print(f"tool={tc['function']['name']} args={tc['function']['arguments']}")
-    elif msg.get('content'):
-        print(f"text={msg['content'][:100]}")
+    elif msg.get('content') or msg.get('reasoning_content') or msg.get('reasoning'):
+        text = msg.get('content') or msg.get('reasoning_content') or msg.get('reasoning')
+        print(f"text={text[:100]}")
     else:
         print('none')
 
