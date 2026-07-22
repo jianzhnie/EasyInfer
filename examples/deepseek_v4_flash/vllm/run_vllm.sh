@@ -1,10 +1,9 @@
 #!/bin/bash
 # =============================================================================
 # DeepSeek-V4-Flash W8A8 MTP — 直接 vllm serve 部署
-# ⚠️ 注意: vLLM-Ascend 0.18.0rc1 不支持 DeepseekV4ForCausalLM 架构。
-# 本脚本已将 architectures 改为 DeepseekV32ForCausalLM 作为临时方案，
-# 但引擎初始化仍可能失败（模型属性不兼容）。
-# 需要升级 vLLM-Ascend 到支持 DeepSeek V4 的版本后才能正常使用。
+# vLLM-Ascend 0.22.1rc1 起原生支持 DeepseekV4ForCausalLM（已验证 PASS）。
+# （0.18.0rc1 时代需要将 architectures 改为 DeepseekV32ForCausalLM 的临时方案
+#  早已移除，当前脚本直接按原架构部署。）
 # 默认 TP=8 PP=1 (单节点)
 # =============================================================================
 set -eo pipefail

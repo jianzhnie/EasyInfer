@@ -1,8 +1,8 @@
 # Kimi-K2.6 W4A8 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8003**
+> **vLLM-Ascend 0.23.0rc1 + CANN 8.5.1** | 端口: **8003**
 > 架构: KimiK25ForConditionalGeneration | 384 Experts | MoE | MLA | Vision (多模态) | W4A8 量化
-> 已验证配置: TP=8 PP=2 (2节点) | 上下文: 262,144 (max_position_embeddings)
+> 已验证配置: TP=8 PP=2 (2节点) + **`FLASHCOMM1=0`** | 上下文: 262,144 (max_position_embeddings)
 > Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (kimi_k2) ✅ | Anthropic Messages API ✅
 
 ## 模型简介
@@ -24,7 +24,11 @@
 
 ### 架构注意事项
 
-Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。因此**不需要** `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`，也**需要不同**的 HCCL 配置。
+Kimi-K2.6 使用 `DeepseekV3ForCausalLM` 注意力路径，不走 GLM 的 SFA/DSA 路径。
+但 **W4A8 量化路径下必须设置 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`**：FLASHCOMM1 的
+AOT 编译图会给 `QuantMatmul` 传入空 tensor，报 161002
+（`AclNN_Parameter_Error(EZ1001): QuantMatmul not support to process empty tensor currently`）。
+v0.22.1/v0.23.0 均复现，`FLASHCOMM1=0` 后服务与输出完全正常（含多模态 Vision）。
 
 ### 工具调用解析器
 
@@ -139,7 +143,7 @@ curl http://localhost:8003/v1/chat/completions \
 | `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
 | `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
 | `TASK_QUEUE_ENABLE` | `1` | 任务队列优化 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | FlashComm 通信优化 |
+| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `0` | **必须为 0**（=1 时 161002 QuantMatmul 空 tensor） |
 | `VLLM_ASCEND_ENABLE_MLAPO` | `1` | MLA 算子融合优化 |
 | `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
 
@@ -238,3 +242,9 @@ A: 专家数更多 (384 vs 256)，EP_SIZE 需能整除 384 (推荐 8, 12, 16, 24
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair2: 10.42.11.198/199 | TP=8 PP=2, PORT=8003 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/kimi-k2.6-w4a8_*.log` | `npu_quant_matmul` 算子错误 161002：`AclNN_Parameter_Error(EZ1001): QuantMatmul not support to process empty tensor currently` |
 
 - 该错误与 Kimi-K2.7-Code-w4a8 相同，说明当前 CANN/vLLM-Ascend 版本对 Kimi 系列 W4A8 量化路径不支持，需等版本修复。
+| 2026-07-22 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | pair2: 10.42.11.198/199 | TP=8 PP=2, FLASHCOMM1=0, PORT=8003 | ✅ PASS | `logs/kimi26_fc0_vllm.log` | curl 全项通过（含多模态 Vision），质量探针输出连贯 |
+
+### 2026-07-22 结论：FLASHCOMM1=0 可规避 161002
+
+- `VLLM_ASCEND_ENABLE_FLASHCOMM1=0` 后 161002（QuantMatmul 空 tensor）消失，
+  v0.23.0 上验证通过。根因是 FLASHCOMM1 的 AOT 编译路径会给 QuantMatmul 传入空 tensor。

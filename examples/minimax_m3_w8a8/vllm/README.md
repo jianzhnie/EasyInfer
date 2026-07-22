@@ -1,8 +1,9 @@
 # MiniMax-M3 W8A8 部署指南
 
-> ⚠️ **兼容性警告**: vLLM 0.22.1 (当前容器) **不支持** `MiniMaxM3SparseForConditionalGeneration` 架构，
-> 模型注册表中仅有 MiniMaxM2 及更早版本。部署预计失败，需等待 vLLM/vLLM-Ascend 升级。
-> **vLLM-Ascend 0.22.1rc1 + CANN 8.5.1** | 端口: **8014**
+> ⚠️ **兼容性警告**: vLLM **0.22.1 与 0.23.0rc1** 注册表均**不支持**
+> `MiniMaxM3SparseForConditionalGeneration` 架构（0.23.0rc1 已复查确认）。
+> 上游 vLLM 的支持仅有 CUDA/ROCm 路径，需等待 vllm-ascend 合入。
+> **vLLM-Ascend 0.23.0rc1 + CANN 8.5.1** | 端口: **8014**
 > 架构: MiniMaxM3SparseForConditionalGeneration (minimax_m3_vl) | MoE | VL | W8A8 量化
 > 目标配置: TP=8 PP=1 (单节点，权重 ~418G → ~52G/NPU，显存紧张)
 
@@ -66,15 +67,10 @@ bash examples/minimax_m3_w8a8/vllm/curl_test.sh
 
 ## 验证记录
 
-| 日期 | 环境 | 配置 | 结果 |
-|------|------|------|------|
-| 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=8 单节点 | 预计失败：架构不支持 |
-
-## 验证记录
-
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair3: 10.42.11.200/201 | TP=8 PP=1, PORT=8014 | ❌ FAIL_SERVICE | `logs/minimax_m3_retry_v022/*.log` | `MiniMaxM3SparseForConditionalGeneration` 不在 vLLM 0.22.1 支持架构列表中 |
+| 2026-07-22 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | — | — | ❌ 不支持（注册表复查） | — | v0.23.0rc1 注册表仍无 `MiniMaxM3*`，上游仅 CUDA/ROCm 路径 |
 
 - 初次部署因脚本中包含当前版本不支持的 `--swap-space 32` 参数而直接退出，已移除该参数。
 - 移除后服务仍无法启动，核心原因为 vLLM 0.22.1 registry 未注册 `MiniMaxM3SparseForConditionalGeneration`，需等后续版本支持。

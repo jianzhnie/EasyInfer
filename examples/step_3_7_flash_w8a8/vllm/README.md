@@ -1,8 +1,10 @@
 # Step-3.7-Flash W8A8 MTP 部署指南
 
-> ⚠️ **兼容性警告**: vLLM 0.22.1 (当前容器) 注册表中**没有** `Step3p7ForConditionalGeneration`，
-> 但包含其文本骨干 `Step3p5ForCausalLM` 和 `Step3p5MTP`。外层 VL 包装能否加载需实测确认。
-> **vLLM-Ascend 0.22.1rc1 + CANN 8.5.1** | 端口: **8015**
+> ⚠️ **兼容性警告**: vLLM 0.22.1 注册表中没有 `Step3p7ForConditionalGeneration`；
+> **vLLM 0.23.0rc1 已注册**，但其实现与该 checkpoint 不兼容
+> （worker 初始化报 `shape '[8, -1, 128]' is invalid for input of size 128`），
+> 两个版本均无法部署，需等上游修复。
+> **vLLM-Ascend 0.23.0rc1 + CANN 8.5.1** | 端口: **8015**
 > 架构: Step3p7ForConditionalGeneration (text: Step3p5ForCausalLM) | MoE | MTP | W8A8 量化
 > 目标配置: TP=8 PP=1 (单节点，权重 ~204G → ~26G/NPU)
 
@@ -70,12 +72,6 @@ curl http://localhost:8015/v1/chat/completions \
 
 ## 验证记录
 
-| 日期 | 环境 | 配置 | 结果 |
-|------|------|------|------|
-| 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=8 单节点 | 待验证（外层架构未注册，存疑） |
-
-## 验证记录
-
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair4: 10.42.11.202/203 | TP=8 PP=1, PORT=8015 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/step-3.7-flash_*.log` | `ValueError: Unrecognized configuration class Step3p7Config for this kind of AutoModel: AutoModel`，vLLM 0.22.1 未注册 Step-3.7-Flash 的 VL 配置类 |
@@ -96,3 +92,10 @@ curl http://localhost:8015/v1/chat/completions \
    transformers 后端不会反量化，数值必然错误；`--quantization ascend` 只作用于 vLLM 原生模型层。
 4. **结论**：需等待 vLLM / vllm-ascend 原生注册 `Step3p7ForConditionalGeneration`（文本侧
    `Step3p5ForCausalLM` 已注册，外层 VL wrapper + MTP 待支持）。当前镜像无脚本级 workaround。
+| 2026-07-22 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | pair4: 10.42.11.202/203 | TP=8 PP=1, PORT=8015 | ❌ FAIL_SERVICE | `logs/step37_v023_vllm.log` | 架构已在 v0.23.0 注册，但 worker 初始化报 `shape '[8, -1, 128]' is invalid for input of size 128` |
+
+### 2026-07-22 补充（v0.23.0）
+
+- `Step3p7ForConditionalGeneration` 已进入 v0.23.0 注册表，配置解析通过、权重可加载，
+  但在 KV cache 初始化阶段报 shape 错误 → v0.23.0rc1 的 Step3p7 实现与该 checkpoint
+  不兼容，需等上游修复（稳定版或后续 rc）。

@@ -39,9 +39,18 @@ pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || tru
 # ------------------------------------------------------------------------------
 # NPU environment variables
 # ------------------------------------------------------------------------------
+# Auto-detect network interface
+if [[ -z "${HCCL_SOCKET_IFNAME:-}" ]]; then
+    HCCL_SOCKET_IFNAME="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+    HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
+fi
+if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
+    GLOO_SOCKET_IFNAME="$HCCL_SOCKET_IFNAME"
+fi
+
 export HCCL_OP_EXPANSION_MODE=AIV
-export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
-export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enp66s0f5}"
+export HCCL_SOCKET_IFNAME
+export GLOO_SOCKET_IFNAME
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-2048}"

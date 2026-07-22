@@ -1,8 +1,8 @@
 # DeepSeek-V4-Pro W4A8 MTP 部署指南
 
-> ⚠️ **部署受阻** | vLLM-Ascend 0.20.2 + CANN 9.0.0 | 384 Experts | MoE | MTP
-> **已知问题**: Eco-Tech 版模型权重含 `attn_sink` 参数，vLLM-Ascend 0.20.2 无法识别 (KeyError)
-> **修复方法**: 需在 `deepseek_v4.py:1204` 添加 `if name not in params_dict: continue` 跳过未知 sink 权重
+> ✅ **已验证 PASS** | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | 384 Experts | MoE | MTP
+> 已验证配置: TP=8 PP=2 (2 节点), **MAX_MODEL_LEN=4096**（更大值 KV cache 不足） | 端口: **8005**
+> 历史问题: vLLM-Ascend 0.20.2 无法识别 Eco-Tech 版权重的 `attn_sink` 参数（0.22.1 已修复）
 
 DeepSeek-V4-Pro 是 DeepSeek V4 系列的旗舰模型，384 路由专家 + 1 共享专家，支持 MTP 投机解码。
 W4A8 量化版本在保持推理质量的同时大幅降低显存占用。

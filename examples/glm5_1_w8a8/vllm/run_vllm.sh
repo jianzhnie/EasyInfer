@@ -1,16 +1,19 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W8A8 — Direct vllm serve deployment (2-node TP=16)
+# GLM-5.1 W8A8 — Direct vllm serve deployment (2-node TP=8 PP=2)
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
 # Max Position: 202752 | Deploy: 32K context (override with MAX_MODEL_LEN)
-# Note: GLM-5 does not support Pipeline Parallelism; use large TP across nodes.
-#       Weights ~718G (W8A8) — a single A2 node (8 x 64G) cannot hold them,
-#       TP=16 (2 nodes) is the minimum viable configuration.
+# Note: Weights ~718G (W8A8) — a single A2 node (8 x 64G) cannot hold them.
+#   ⚠️  TP=16 produces GIBBERISH output with this static-W8A8 checkpoint on
+#       vllm-ascend v0.22.1/v0.23.0 (both eager and cudagraph modes) — the
+#       TP=16 static-quant DSA path is numerically broken. Use TP=8 PP=2
+#       (verified PASS, coherent output). GLM-5.2-w8a8 works fine with the
+#       same stack, so the issue is specific to this checkpoint at TP=16.
 #
 # Usage:
-#   bash run_vllm.sh                              # TP=16 (2 nodes via Ray)
-#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh   # larger context
+#   bash run_vllm.sh                              # TP=8 PP=2 (2 nodes via Ray, verified)
+#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh   # larger context
 #   ENABLE_MTP=1 bash run_vllm.sh                 # enable MTP speculative decoding
 #
 # Reference:
@@ -64,8 +67,8 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.1-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8012}"
-readonly TP="${TP:-16}"
-readonly PP="${PP:-1}"
+readonly TP="${TP:-8}"
+readonly PP="${PP:-2}"
 readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"

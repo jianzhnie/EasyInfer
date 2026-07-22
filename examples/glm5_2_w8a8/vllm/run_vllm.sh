@@ -34,10 +34,14 @@ set -u
 
 # =============================================================================
 # Cache directory layout:
-#   /dev/shm/... (tmpfs, noexec) → temp files, runtime logs, home
+#   <project>/.cache/glm52-w8a8 (shared NFS/home mount) → temp files, runtime logs, home
+#     (must NOT be /dev/shm: worker nodes miss TMPDIR there and clang fails
+#      with "unable to make temporary file")
 #   /root/.cache/... (overlay, exec) → triton/torchinductor (need .so loading)
 # =============================================================================
-readonly CACHE_ROOT="${CACHE_ROOT:-/dev/shm/glm52-cache}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+readonly CACHE_ROOT="${CACHE_ROOT:-$ROOT_DIR/.cache/glm52-w8a8}"
 readonly EXEC_CACHE_ROOT="${EXEC_CACHE_ROOT:-/root/.cache/glm52-cache}"
 
 export PYTHONDONTWRITEBYTECODE=1
@@ -126,7 +130,14 @@ fi
 # Compilation config (official docs)
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
 readonly ADDITIONAL_CONFIG='{"multistream_overlap_shared_expert": true}'
-readonly SPECULATIVE_CONFIG='{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}'
+# MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
+# ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
+# to off; enable only with PP=1.
+readonly ENABLE_MTP="${ENABLE_MTP:-0}"
+SPEC_ARGS=()
+if [[ "$ENABLE_MTP" == "1" ]]; then
+    SPEC_ARGS+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}')
+fi
 
 echo "============================================"
 echo "[INFO] GLM-5.2 W8A8 — vLLM-Ascend Deployment (Official Config)"
@@ -165,7 +176,7 @@ vllm serve "$MODEL_PATH" \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
     --async-scheduling \
-    --speculative-config "$SPECULATIVE_CONFIG" \
+    ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     --additional-config "$ADDITIONAL_CONFIG" \
     --compilation-config "$COMPILATION_CONFIG" \
     --seed 1024 \

@@ -48,8 +48,11 @@ export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
 
 # Fallback variables for older versions (all overridable from environment)
+# NOTE: FLASHCOMM1=0 is mandatory for this W4A8 checkpoint — the FLASHCOMM1
+# AOT-compiled graph feeds an empty tensor to QuantMatmul (error 161002
+# "QuantMatmul not support to process empty tensor") on v0.22.1/v0.23.0.
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
-export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-0}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
 readonly ENABLE_EP="${ENABLE_EP:-1}"
 

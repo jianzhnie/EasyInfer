@@ -1,10 +1,10 @@
 # Kimi-K2.7-Code W4A8 部署指南
 
-> **vLLM-Ascend 0.22.1rc1 + CANN 8.5.1** | 端口: **8013**
+> **vLLM-Ascend 0.23.0rc1 + CANN 8.5.1** | 端口: **8013**
 > 架构: KimiK25ForConditionalGeneration | 384 Experts | MoE | MLA | Vision (多模态) | W4A8 量化
-> 目标配置: TP=8 PP=2 (2 节点，权重 ~500G) | 上下文: 32K（可扩展）
+> 已验证配置: TP=8 PP=2 (2 节点，权重 ~500G) + **`FLASHCOMM1=0`**（脚本已默认） | 上下文: 32K（可扩展）
 > 代码特化版本，部署配置与 Kimi-K2.6 相同，仅路径/端口/模型名不同
-> 验证状态: 见文末「验证记录」
+> 验证状态: ✅ PASS（见文末「验证记录」）
 
 ## 模型简介
 
@@ -81,14 +81,13 @@ curl http://localhost:8013/v1/chat/completions \
 
 ## 验证记录
 
-| 日期 | 环境 | 配置 | 结果 |
-|------|------|------|------|
-| 待填写 | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | TP=8 PP=2 2 节点 | 待验证 |
-
-## 验证记录
-
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair7: 10.42.11.208/209 | TP=8 PP=2, PORT=8013 | ❌ FAIL_SERVICE | `logs/parallel_deploy_v022_rerun/kimi-k2.7-code_*.log` | `npu_quant_matmul` 算子错误 161002：`AclNN_Parameter_Error(EZ1001): QuantMatmul not support to process empty tensor currently` |
+| 2026-07-22 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | pair7: 10.42.11.208/209 | TP=8 PP=2, FLASHCOMM1=0, PORT=8013 | ✅ PASS | `logs/kimi27_retry_vllm.log` | curl 全项通过，质量探针推理连贯、答案正确 |
 
-- 该错误与 Kimi-K2.6-w4a8 相同，属于当前 CANN/vLLM-Ascend 版本对 Kimi W4A8 量化路径不支持，需等版本修复。
+### 2026-07-22 结论：FLASHCOMM1=0 可规避 161002
+
+- 脚本已默认 `FLASHCOMM1=0`（即为此 161002 规避）。v0.23.0 上验证通过，
+  根因是 FLASHCOMM1 的 AOT 编译路径会给 QuantMatmul 传入空 tensor。
+- Kimi-K2.6-w4a8 同样适用（见 `examples/kimi_k2_6_w4a8/vllm/README.md`）。

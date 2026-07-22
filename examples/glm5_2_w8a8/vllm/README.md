@@ -1,8 +1,8 @@
 # GLM-5.2 W8A8 部署指南
 
-> **vLLM-Ascend 0.22.1rc1 + CANN 8.5.1** | 端口: **8007**
+> **vLLM-Ascend 0.23.0rc1 + CANN 8.5.1** | 端口: **8007**
 > 架构: GlmMoeDsaForCausalLM | 256 Experts | MoE | MTP | W8A8 量化
-> 已验证配置: TP=8 PP=1 (单节点 A2) | 上下文: 32,768 | Chat ✅ Tool Calling ✅
+> 已验证配置: **TP=8 PP=2 (2× A2 64G)** | 上下文: 32K | Chat ✅ Tool Calling ✅
 > GLM-5.2 与 GLM-5/5.1 共享相同架构，上下文窗口扩展至 1M
 
 ## 模型简介
@@ -16,15 +16,18 @@
 | **MLA** | kv_lora_rank=512, q_lora_rank=2048, qk_head_dim=256, v_head_dim=256 |
 | **原生上下文** | **1,048,576** (1M) |
 | **量化方式** | W8A8 (8-bit 权重 + 8-bit 激活) |
-| **MTP** | num_nextn_predict_layers=1, mtp |
-| **PP 支持** | ❌ 不支持 Pipeline Parallelism |
+| **MTP** | num_nextn_predict_layers=1（默认关，`ENABLE_MTP=1` 打开；PP>1 时不可用） |
+| **PP 支持** | ✅ PP=2 已验证（A2 64G 的推荐配置）；PP>1 与 MTP 互斥 |
 | **工具调用解析器** | glm47 |
 | **推理解析器** | glm45 |
 | **词表大小** | 154,880 |
 
 ### 架构注意事项
 
-GLM-5.2 的 config.json 包含 `index_topk: 2048`，导致 vLLM-Ascend 识别为 DeepSeek V3.2，触发 DSA CP 路径。W8A8 量化下 CP 路径不兼容，**必须设置 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`**。
+GLM-5.2 的 config.json 包含 `index_topk: 2048` 和 `index_topk_freq: 4`（indexer 仅存在于
+部分层：0,1,2,6,10,…）。**vLLM-Ascend 0.23.0 原生支持该层模式**（`index_skip_topk_offset`），
+0.22.1 需手工 patch（存档于 `container_patch/`，仅旧版有效）。
+DSA 路径不兼容 FLASHCOMM1，**必须设置 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`**（脚本已内置）。
 
 ### 官方文档参考
 
@@ -35,11 +38,12 @@ GLM-5.2 的 config.json 包含 `index_topk: 2048`，导致 vLLM-Ascend 识别为
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8`
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.2-w8a8`
 
-**硬件要求**: 部署前先确认硬件类型：
-- **A3 (128GB/NPU)**: ✅ 可直接部署 TP=8
-- **A2 (64GB/NPU)**: ❌ 模型权重固定消耗 ~60.4GB/卡，TP=8 必定 OOM；TP=16 因 MLA 维度不兼容无法使用
+**硬件要求**:
+- **A3 (128GB/NPU)**: ✅ TP=8 单节点
+- **A2 (64GB/NPU)**: ✅ **TP=8 PP=2 两节点**（已验证）；TP=8 单节点 OOM（权重 ~60.4GB/卡），
+  TP=16 因 MLA 维度不可整除不可用
 
 ```bash
 # 确认 NPU 内存（容器内执行）
@@ -47,7 +51,7 @@ npu-smi info | grep "HBM-Usage" | head -1
 # 65536 MB = 64GB (A2) | 131072 MB = 128GB (A3)
 ```
 
-> ⚠️ 以下部署步骤仅适用于 **A3 (128GB) 硬件**。
+> 以下部署步骤适用于 **A2 (64GB) 与 A3 (128GB)**：A2 用 `PP=2`（两节点），A3 单节点直接起。
 
 ```bash
 # 1. 启动 NPU Docker 容器
@@ -60,19 +64,22 @@ bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ### 部署
 
 ```bash
-# 单节点 A3 (32K 上下文, TP=8)
+# A3 单节点 (32K 上下文, TP=8)
 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
+
+# A2 两节点（已验证配置, TP=8 PP=2, 需先起跨节点 Ray 集群）
+RAY_ADDRESS=<head>:6379 PP=2 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 
 # 后台运行
 nohup bash examples/glm5_2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
 
-# 多节点需要设置 RAY_ADDRESS 和网卡
-RAY_ADDRESS=10.42.11.130:6379 NIC_NAME=enp66s0f0 TP=16 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
+# 打开 MTP 投机解码（仅 PP=1 可用，PP>1 与 MTP 互斥）
+ENABLE_MTP=1 bash examples/glm5_2_w8a8/vllm/run_vllm.sh
 ```
 
-### 多节点部署前提（TP>8）
+### 多节点部署前提（TP>8 或 PP>1）
 
-使用 TP>8（跨节点）时，**必须设置 `RAY_ADDRESS`**，否则 Engine Core 子进程无法连接到 Ray 集群：
+跨节点部署时，**必须设置 `RAY_ADDRESS`**，否则 Engine Core 子进程无法连接到 Ray 集群：
 
 ```bash
 # 获取 Ray 集群地址
@@ -82,10 +89,14 @@ print(ray.get_runtime_context().gcs_address)
 "
 
 # 部署时导出
-RAY_ADDRESS=10.42.11.130:6379 TP=16 bash run_vllm.sh
+RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
 ```
 
-### 量化文件修复
+### 量化文件修复（仅 v0.22.1 需要）
+
+> ⚠️ **v0.23.0 起不再需要**：v0.23.0 原生支持 `index_skip_topk_offset`/`index_topk_freq`
+> 的层模式，KeyError 已不存在。以下修复仅适用于 v0.22.1（更推荐直接用 v0.23.0；
+> v0.22.1 的 vLLM 代码 patch 存档于 `container_patch/`）。
 
 如果遇到 `KeyError: model.layers.N.self_attn.indexer.wq_b.weight`，需要修复 `quant_model_description.json`：
 
@@ -125,16 +136,17 @@ curl http://localhost:8007/v1/chat/completions \
 
 | 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
 |------|-----|-----|-----|-----|--------|------|
-| 单节点 A3 (128G) | 8 | 1 | 2 | 16 | 32K | ✅ 生产验证 |
+| 单节点 A3 (128G) | 8 | 1 | 2 | 16 | 32K | 官方推荐配置 |
 | 单节点 A2 (64G) | 8 | 1 | 1 | 8 | 4K+ | ❌ OOM（权重 ~60.4GB/卡） |
+| **2 节点 A2 (64G)** | **8** | **2** | 1 | 16 | 32K | ✅ **已验证 PASS（本集群）** |
 | 2 节点 A2 (64G) | 16 | 1 | 1 | 16 | - | ❌ TP=16 维度不兼容 |
 | 4 节点 A2 (64G) | 16 | 2 | 1 | 32 | - | ❌ 同上（PP 不影响 TP 维度分割） |
 
 > **关键结论**：
-> - GLM-5.2 W8A8 在 64GB A2 NPU 上使用 TP=8 **无法部署**，模型权重固定消耗 ~60.4GB/卡
-> - GLM-5.2 **不支持 Pipeline Parallelism** (`SupportsPP` 接口缺失)
-> - TP=16 尝试失败：MLA 注意力层维度 (`num_kv_heads=3 × head_dim=192 = 576`) 无法被 16 整除
-> - **生产环境**（`service_node0.sh`）使用 **A3 128GB NPU + DP=2** 配置
+> - GLM-5.2 W8A8 在 64GB A2 NPU 上 TP=8 单节点 OOM（权重固定消耗 ~60.4GB/卡）
+> - **PP=2 已在 v0.23.0 上验证可用**（早前"不支持 PP"的结论作废）；**PP>1 与 MTP 互斥**，
+>   脚本 `ENABLE_MTP` 默认关
+> - TP=16 不可用：MLA 注意力层维度 (`num_kv_heads=3 × head_dim=192 = 576`) 无法被 16 整除
 
 ### 内存分析（W8A8 @ 64GB A2）
 
@@ -290,14 +302,14 @@ docker exec vllm-ascend-env bash -c 'rm -rf /dev/shm/glm52-cache/triton/* /dev/s
 
 A: 设置 `NIC_NAME` 和 `HCCL_IF_IP` 环境变量绑定高速网卡：
 ```bash
-NIC_NAME=enp66s0f0 HCCL_IF_IP=10.42.11.130 TP=16 bash run_vllm.sh
+NIC_NAME=enp66s0f0 HCCL_IF_IP=10.42.11.130 RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
 ```
 单节点无需设置（留空自动探测）。
 
 ### Q: 缓存目录在哪里？如何修改？
 
 A: 缓存分为两类：
-- **不可执行缓存** (`CACHE_ROOT`, 默认 `/dev/shm/glm52-cache`): tmp、home、vllm、ascend-log，位于 tmpfs 内存盘
+- **不可执行缓存** (`CACHE_ROOT`, 默认项目共享路径 `.cache/glm52-w8a8`): tmp、home、vllm、ascend-log（不要用 `/dev/shm`：worker 节点 clang 编译会因 TMPDIR 缺失失败）
 - **可执行缓存** (`EXEC_CACHE_ROOT`, 默认 `/root/.cache/glm52-cache`): triton、torchinductor 编译的 `.so` 文件，需要可执行文件系统（容器 `/dev/shm` 通常挂载 `noexec`）
 
 可通过环境变量分别覆盖路径。
@@ -317,15 +329,15 @@ import ray; ray.init(address='auto', ignore_reinit_error=True)
 print(ray.get_runtime_context().gcs_address)
 "
 
-# 部署（以 TP=16 为例）
-RAY_ADDRESS=10.42.11.130:6379 TP=16 bash run_vllm.sh
+# 部署（A2 已验证配置：TP=8 PP=2 两节点）
+RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
 ```
 
 ### Q: A2 (64GB) 上能用 TP=8 部署吗？
 
-A: **不能**。实际测试 5 种不同内存配置（从 `gpu_memory_utilization=0.95` 到 `0.50`，`max_model_len` 从 32K 到 2K，禁用 MTP/CUDA Graph），模型权重均固定消耗 **≈60.4 GiB/卡**，仅剩 ~3.6GB 余量。需要 A3 (128GB) 硬件或 W4A8 量化版本。
+A: **单节点不能**（权重固定消耗 ≈60.4 GiB/卡，仅剩 ~3.6GB 余量），但 **TP=8 PP=2 两节点已验证可用**（2026-07-22 PASS，每卡 ~30 GiB）。A3 (128GB) 可单节点 TP=8。注意 PP>1 时必须 `ENABLE_MTP=0`。
 
-### Q: 为什么 TP=16 也不行？
+### Q: 为什么不能用 TP=16？
 
 A: GLM-5.2 的 MLA 注意力层维度 `num_kv_heads × head_dim = 3 × 192 = 576`，不能被 16 整除。TP=16 时 weight sharding 计算错误：`start(0) + length(704) > 576`。需要 vLLM-Ascend 修复 `deepseek_v2.py` 中的 Indexer shard 计算逻辑。
 
@@ -340,3 +352,13 @@ A: 官方发布的 W8A8 量化描述文件中，78 层只有 22 层（密集层 
 | 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair1: 10.42.11.196/197 | TP=8 PP=1, PORT=8007 | ❌ FAIL_SERVICE | `logs/parallel_deploy_remaining_v022/glm5.2-w8a8_*.log` | 权重加载失败：`KeyError: 'model.layers.3.self_attn.indexer.wq_b.weight'`，当前 vLLM-Ascend 量化配置未覆盖 GLM-5.2 的 `indexer` 权重结构 |
 
 - 该错误发生在 `vllm_ascend/quantization/modelslim_config.py` 解析量化描述时，说明模型权重 key 与当前 vLLM-Ascend 实现不匹配。
+| 2026-07-22 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | pair1: 10.42.11.196/197 | **TP=8 PP=2**, ENABLE_MTP=0, PORT=8007 | ✅ PASS | `logs/glm52_w8a8_pp2b_vllm.log` | curl 全项通过，质量探针输出连贯 |
+
+### 2026-07-22 结论：v0.23.0 原生支持
+
+- v0.23.0 的 `deepseek_v2.py` 原生实现 `index_skip_topk_offset`/`index_topk_freq`，
+  与 checkpoint 的 indexer 层模式（0,1,2,6,10,…）完全吻合，07-20 的 KeyError 消失。
+  （v0.22.1 手工 patch 存档在 `container_patch/`，仅旧版需要。）
+- TP=8 单节点在 A2 64G 上 OOM（~60.4GiB/卡）→ **TP=8 PP=2**（两节点 ~30GiB/卡）。
+- PP>1 与 MTP 互斥（v0.23.0 明确拒绝），脚本新增 `ENABLE_MTP` 开关（默认关）。
+- `CACHE_ROOT` 改到项目共享路径（worker 节点 `/dev/shm` 下 clang 编译失败）。
