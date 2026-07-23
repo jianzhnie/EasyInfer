@@ -29,6 +29,9 @@ from easyinfer.plugins.logging import patch_logger
 from easyinfer.plugins.registry import register_patch
 
 _TARGETS = [
+    # Patch the source function so any late importers get the fix.
+    "vllm.model_executor.models.utils",
+    # Also patch consumer modules to rebind their local "from X import Y" references.
     "vllm_ascend.patch.worker.patch_deepseek_v2",
     "vllm_ascend.patch.worker.patch_qwen3_next_mtp",
 ]

@@ -1,9 +1,7 @@
-
 """LongcatFlash model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
-
 
 LONGCAT_PRETRAINED_CONFIG_ARCHIVE_MAP = {}
 
@@ -110,8 +108,8 @@ class LongcatFlashConfig(PretrainedConfig):
     ```"""
 
     model_type = "longcat_flash"
-    keys_to_ignore_at_inference = ["past_key_values"]
-    base_model_tp_plan = {
+    keys_to_ignore_at_inference = ["past_key_values"]  # noqa: RUF012
+    base_model_tp_plan = {  # noqa: RUF012
         "layers.*.self_attn.k_proj": "colwise",
         "layers.*.self_attn.v_proj": "colwise",
         "layers.*.self_attn.o_proj": "rowwise",
@@ -122,7 +120,7 @@ class LongcatFlashConfig(PretrainedConfig):
         "layers.*.mlps.*.up_proj": "local_colwise",
         "layers.*.mlps.*.down_proj": "local_rowwise",
     }
-    base_model_pp_plan = {
+    base_model_pp_plan = {  # noqa: RUF012
         "embed_tokens": (["input_ids"], ["inputs_embeds"]),
         "layers": (["hidden_states", "attention_mask"], ["hidden_states"]),
         "norm": (["hidden_states"], ["hidden_states"]),
@@ -159,7 +157,7 @@ class LongcatFlashConfig(PretrainedConfig):
         rope_theta=10000.0,
         attention_bias=False,
         attention_dropout=0.0,
-        attention_method='MLA',
+        attention_method="MLA",
         initializer_range=0.006,
         router_bias=False,
         zero_expert_num=None,
@@ -199,7 +197,6 @@ class LongcatFlashConfig(PretrainedConfig):
             self.head_dim = qk_rope_head_dim
         else:
             ValueError('attention_method should be one of ["MLA"]')
-
 
         if num_key_value_heads is None:
             num_key_value_heads = num_attention_heads

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2025 Meituan
 # This code is licensed under the MIT License, for details, see the ./LICENSE file.
 #
@@ -6,7 +5,7 @@
 # LongCat-Flash Group — 分组路由变体 (自定义模型)
 # =============================================================================
 #
-# 基于原始 LongCat-Flash 模型改造而来。
+# 基于原始 LongCat-Flash 模型改造而来.
 #
 # 原始模型
 #   Checkpoint : /home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat
@@ -23,8 +22,8 @@
 #   2. 分组路由 — 专家扩展 F 倍后二选一
 #      原始:  topk(logits)                     直接在 N+Z 个 logit 上选
 #      本模型: reshape(logits, [F, G]) → per_group_max → topk(G_winners)
-#      先将 N+Z 个 logit reshape 为 F 组 × G 个类型，每组取 max 选出最佳副本，
-#      再在 G 个优胜者中 top-k，等价于「组内最佳 → 组间 topk」
+#      先将 N+Z 个 logit reshape 为 F 组 x G 个类型, 每组取 max 选出最佳副本,
+#      再在 G 个优胜者中 top-k, 等价于[组内最佳 -> 组间 topk]
 #      Config: use_group_routing=True + expert_expansion_factor=F (F≥2)
 #
 # 新增 Config:
@@ -39,12 +38,11 @@
 #   (组件 LongcatFlashRMSNorm / MLA / MLP / TopkRouter / MoE 沿用原名)
 # =============================================================================
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation import GenerationMixin
@@ -52,12 +50,16 @@ from transformers.integrations import use_kernel_forward_from_hub
 from transformers.masking_utils import create_causal_mask
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_layers import GradientCheckpointingLayer
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+)
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
 from transformers.utils.generic import check_model_inputs
+
 from .configuration_longcat_flash import LongcatFlashConfig
 
 
@@ -87,7 +89,9 @@ class LongcatFlashRotaryEmbedding(nn.Module):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
+            self.rope_type = config.rope_scaling.get(
+                "rope_type", config.rope_scaling.get("type")
+            )
         else:
             self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
@@ -103,12 +107,23 @@ class LongcatFlashRotaryEmbedding(nn.Module):
     @torch.no_grad()
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
+        inv_freq_expanded = (
+            self.inv_freq[None, :, None]
+            .float()
+            .expand(position_ids.shape[0], -1, 1)
+            .to(x.device)
+        )
         position_ids_expanded = position_ids[:, None, :].float()
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+        device_type = (
+            x.device.type
+            if isinstance(x.device.type, str) and x.device.type != "mps"
+            else "cpu"
+        )
         with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            freqs = (
+                inv_freq_expanded.float() @ position_ids_expanded.float()
+            ).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos() * self.attention_scaling
             sin = emb.sin() * self.attention_scaling
@@ -121,7 +136,9 @@ class LongcatFlashMLP(nn.Module):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size if hidden_size is None else hidden_size
-        self.intermediate_size = config.ffn_hidden_size if intermediate_size is None else intermediate_size
+        self.intermediate_size = (
+            config.ffn_hidden_size if intermediate_size is None else intermediate_size
+        )
 
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
@@ -146,39 +163,60 @@ class LongcatFlashTopkRouter(nn.Module):
         self.routed_scaling_factor = config.routed_scaling_factor
         self.norm_topk_prob = config.norm_topk_prob
         self.router_bias = config.router_bias
-        self.use_group_routing = getattr(config, 'use_group_routing', False)
-        self.expert_expansion_factor = getattr(config, 'expert_expansion_factor', 1)
+        self.use_group_routing = getattr(config, "use_group_routing", False)
+        self.expert_expansion_factor = getattr(config, "expert_expansion_factor", 1)
 
-        self.classifier = nn.Linear(config.hidden_size, self.n_routed_experts, bias=self.router_bias)
-        self.register_buffer("e_score_correction_bias", torch.zeros((self.n_routed_experts)))
+        self.classifier = nn.Linear(
+            config.hidden_size, self.n_routed_experts, bias=self.router_bias
+        )
+        self.register_buffer(
+            "e_score_correction_bias", torch.zeros(self.n_routed_experts)
+        )
 
     @torch.no_grad()
     def get_topk_indices(self, scores):
-        scores_for_choice = scores.view(-1, self.n_routed_experts) + self.e_score_correction_bias.unsqueeze(0)
+        scores_for_choice = scores.view(
+            -1, self.n_routed_experts
+        ) + self.e_score_correction_bias.unsqueeze(0)
         if self.use_group_routing:
             # Grouped routing (方案一):
             #   Router layout after expansion:
-            #     [real_0..real_{N-1}, zero_0..zero_{Z-1}]  × F copies
+            #     [real_0..real_{N-1}, zero_0..zero_{Z-1}]  x F copies
             #   Group all (N+Z) original experts into (N+Z) groups,
             #   each containing F copies of the same source expert.
             #   Pick best within each group, then select topk from (N+Z) winners.
             expansion_factor = self.expert_expansion_factor
-            total_groups = self.n_routed_experts // expansion_factor          # N + Z (original total)
+            total_groups = (
+                self.n_routed_experts // expansion_factor
+            )  # N + Z (original total)
 
             # Reshape: (tokens, expansion_factor, total_groups) -> transpose -> (tokens, total_groups, expansion_factor)
-            grouped_score = scores_for_choice.view(-1, expansion_factor, total_groups).transpose(-1, -2)
-            group_score_best, group_best_idx = grouped_score.max(dim=-1)   # (tokens, total_groups)
+            grouped_score = scores_for_choice.view(
+                -1, expansion_factor, total_groups
+            ).transpose(-1, -2)
+            group_score_best, group_best_idx = grouped_score.max(
+                dim=-1
+            )  # (tokens, total_groups)
 
-            _, topk_group_ids = torch.topk(group_score_best, k=self.top_k, dim=-1, sorted=False)
+            _, topk_group_ids = torch.topk(
+                group_score_best, k=self.top_k, dim=-1, sorted=False
+            )
             # Expert index: group_id + offset * total_groups
-            topk_indices = topk_group_ids + group_best_idx.gather(1, topk_group_ids) * total_groups
+            topk_indices = (
+                topk_group_ids + group_best_idx.gather(1, topk_group_ids) * total_groups
+            )
         else:
-            topk_indices = torch.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
+            topk_indices = torch.topk(
+                scores_for_choice, k=self.top_k, dim=-1, sorted=False
+            )[1]
         return topk_indices
 
     def forward(self, hidden_states):
         hidden_states = hidden_states.view(-1, self.config.hidden_size)
-        router_logits = F.linear(hidden_states.type(torch.float32), self.classifier.weight.type(torch.float32))
+        router_logits = F.linear(
+            hidden_states.type(torch.float32),
+            self.classifier.weight.type(torch.float32),
+        )
         scores = router_logits.softmax(dim=-1)
         topk_indices = self.get_topk_indices(scores)
         topk_weights = scores.gather(1, topk_indices)
@@ -207,15 +245,28 @@ class LongcatFlashMoE(nn.Module):
         self.zero_expert_num = config.zero_expert_num
         self.zero_expert_type = config.zero_expert_type
 
-    def moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, topk_weights: torch.Tensor):
+    def moe(
+        self,
+        hidden_states: torch.Tensor,
+        topk_indices: torch.Tensor,
+        topk_weights: torch.Tensor,
+    ):
         final_hidden_states = torch.zeros_like(hidden_states, dtype=topk_weights.dtype)
-        total_experts = len(self.experts) if self.zero_expert_num is None else len(self.experts) + self.zero_expert_num
+        total_experts = (
+            len(self.experts)
+            if self.zero_expert_num is None
+            else len(self.experts) + self.zero_expert_num
+        )
 
-        expert_mask = torch.nn.functional.one_hot(topk_indices, num_classes=total_experts)
+        expert_mask = torch.nn.functional.one_hot(
+            topk_indices, num_classes=total_experts
+        )
         expert_mask = expert_mask.permute(2, 0, 1)
 
         for expert_idx in range(total_experts):
-            expert = self.experts[expert_idx] if expert_idx < len(self.experts) else None
+            expert = (
+                self.experts[expert_idx] if expert_idx < len(self.experts) else None
+            )
             mask = expert_mask[expert_idx]
             token_indices, weight_indices = torch.where(mask)
 
@@ -239,7 +290,9 @@ class LongcatFlashMoE(nn.Module):
         orig_shape = hidden_states.shape
         topk_indices, topk_weights = self.router(hidden_states)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = self.moe(hidden_states, topk_indices, topk_weights).view(*orig_shape)
+        hidden_states = self.moe(hidden_states, topk_indices, topk_weights).view(
+            *orig_shape
+        )
         return hidden_states
 
 
@@ -258,7 +311,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -267,7 +322,7 @@ def eager_attention_forward(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
+    attention_mask: torch.Tensor | None,
     scaling: float,
     dropout: float = 0.0,
     **kwargs: Unpack[TransformersKwargs],
@@ -280,15 +335,21 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+        query.dtype
+    )
+    attn_weights = nn.functional.dropout(
+        attn_weights, p=dropout, training=module.training
+    )
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1, use_mla=False):
+def apply_rotary_pos_emb(
+    q, k, cos, sin, position_ids=None, unsqueeze_dim=1, use_mla=False
+):
     """Applies Rotary Position Embedding to the query and key tensors.
 
     Args:
@@ -330,7 +391,9 @@ class LongcatFlashMLA(nn.Module):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
-        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.num_key_value_groups = (
+            config.num_attention_heads // config.num_key_value_heads
+        )
         self.attention_dropout = config.attention_dropout
         self.num_heads = config.num_attention_heads
         self.rope_theta = config.rope_theta
@@ -343,11 +406,17 @@ class LongcatFlashMLA(nn.Module):
 
         self.is_causal = True
         if self.q_lora_rank is None:
-            self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.qk_head_dim, bias=False)
+            self.q_proj = nn.Linear(
+                config.hidden_size, self.num_heads * self.qk_head_dim, bias=False
+            )
         else:
-            self.q_a_proj = nn.Linear(config.hidden_size, config.q_lora_rank, bias=config.attention_bias)
+            self.q_a_proj = nn.Linear(
+                config.hidden_size, config.q_lora_rank, bias=config.attention_bias
+            )
             self.q_a_layernorm = LongcatFlashRMSNorm(config.q_lora_rank)
-            self.q_b_proj = nn.Linear(config.q_lora_rank, self.num_heads * self.qk_head_dim, bias=False)
+            self.q_b_proj = nn.Linear(
+                config.q_lora_rank, self.num_heads * self.qk_head_dim, bias=False
+            )
 
         self.kv_a_proj_with_mqa = nn.Linear(
             config.hidden_size,
@@ -377,17 +446,28 @@ class LongcatFlashMLA(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[torch.Tensor],
-        past_key_value: Optional[Cache] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None,
+        past_key_value: Cache | None = None,
+        cache_position: torch.LongTensor | None = None,
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         batch_size, seq_length = hidden_states.shape[:-1]
         query_shape = (batch_size, seq_length, -1, self.qk_head_dim)
-        key_shape = (batch_size, seq_length, -1, self.qk_nope_head_dim + self.v_head_dim)
+        key_shape = (
+            batch_size,
+            seq_length,
+            -1,
+            self.qk_nope_head_dim + self.v_head_dim,
+        )
 
-        q_states = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states))).view(query_shape).transpose(1, 2)
-        q_pass, q_rot = torch.split(q_states, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_states = (
+            self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+            .view(query_shape)
+            .transpose(1, 2)
+        )
+        q_pass, q_rot = torch.split(
+            q_states, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
+        )
 
         # apply q_lora scaling
         if self.mla_scale_q_lora is not None:
@@ -395,7 +475,9 @@ class LongcatFlashMLA(nn.Module):
             q_rot = q_rot * self.mla_scale_q_lora
 
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        k_pass, k_rot = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_pass, k_rot = torch.split(
+            compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
+        )
         k_pass = self.kv_a_layernorm(k_pass)
 
         # apply kv_lora scaling
@@ -403,7 +485,9 @@ class LongcatFlashMLA(nn.Module):
             k_pass = k_pass * self.mla_scale_kv_lora
 
         k_pass = self.kv_b_proj(k_pass).view(key_shape).transpose(1, 2)
-        k_pass, value_states = torch.split(k_pass, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        k_pass, value_states = torch.split(
+            k_pass, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
+        )
 
         k_rot = k_rot.view(batch_size, 1, seq_length, self.qk_rope_head_dim)
 
@@ -416,14 +500,21 @@ class LongcatFlashMLA(nn.Module):
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
-        if self.config._attn_implementation == "flash_attention_2" and self.qk_head_dim != self.v_head_dim:
+        if (
+            self.config._attn_implementation == "flash_attention_2"
+            and self.qk_head_dim != self.v_head_dim
+        ):
             value_states = F.pad(value_states, [0, self.qk_head_dim - self.v_head_dim])
 
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+            attention_interface = ALL_ATTENTION_FUNCTIONS[
+                self.config._attn_implementation
+            ]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -436,7 +527,10 @@ class LongcatFlashMLA(nn.Module):
             **kwargs,
         )
 
-        if self.config._attn_implementation == "flash_attention_2" and self.qk_head_dim != self.v_head_dim:
+        if (
+            self.config._attn_implementation == "flash_attention_2"
+            and self.qk_head_dim != self.v_head_dim
+        ):
             attn_output = attn_output[:, :, :, : self.v_head_dim]
 
         attn_output = attn_output.reshape(batch_size, seq_length, -1).contiguous()
@@ -467,11 +561,17 @@ class LongcatFlashGroupDecoderLayer(GradientCheckpointingLayer):
         post_attention_layernorm = []
         for i in range(2):
             self_attn.append(
-                create_attention_block(config.attention_method, config=config, layer_idx=layer_idx * 2 + i)
+                create_attention_block(
+                    config.attention_method, config=config, layer_idx=layer_idx * 2 + i
+                )
             )
             mlps.append(LongcatFlashMLP(config))
-            input_layernorm.append(LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps))
-            post_attention_layernorm.append(LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps))
+            input_layernorm.append(
+                LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            )
+            post_attention_layernorm.append(
+                LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            )
 
         self.self_attn = nn.ModuleList(self_attn)
         self.mlps = nn.ModuleList(mlps)
@@ -481,14 +581,14 @@ class LongcatFlashGroupDecoderLayer(GradientCheckpointingLayer):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_value: Cache | None = None,
+        use_cache: bool | None = False,
+        cache_position: torch.LongTensor | None = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
         for i in range(2):
             residual = hidden_states
 
@@ -510,7 +610,9 @@ class LongcatFlashGroupDecoderLayer(GradientCheckpointingLayer):
             hidden_states = self.post_attention_layernorm[i](hidden_states)
 
             if i == 0:
-                shortcut_mlp_output = self.mlp(hidden_states)  # shortcut output (MoE output)
+                shortcut_mlp_output = self.mlp(
+                    hidden_states
+                )  # shortcut output (MoE output)
 
             hidden_states = self.mlps[i](hidden_states)
             hidden_states = residual + hidden_states
@@ -525,14 +627,14 @@ class LongcatFlashGroupPreTrainedModel(PreTrainedModel):
     config: LongcatFlashConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["LongcatFlashGroupDecoderLayer"]
-    _skip_keys_device_placement = ["past_key_values"]
+    _no_split_modules = ["LongcatFlashGroupDecoderLayer"]  # noqa: RUF012
+    _skip_keys_device_placement = ["past_key_values"]  # noqa: RUF012
     _supports_flash_attn = True
     _supports_sdpa = True
     _supports_flex_attn = True
     _can_compile_fullgraph = True
     _supports_attention_backend = True
-    _can_record_outputs = {
+    _can_record_outputs = {  # noqa: RUF012
         "hidden_states": LongcatFlashGroupDecoderLayer,
         "attentions": LongcatFlashMLA,
     }
@@ -540,16 +642,21 @@ class LongcatFlashGroupPreTrainedModel(PreTrainedModel):
 
 @auto_docstring
 class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
-    _keys_to_ignore_on_load_unexpected = [r"model\.mtp.*"]
+    _keys_to_ignore_on_load_unexpected = [r"model\.mtp.*"]  # noqa: RUF012
 
     def __init__(self, config: LongcatFlashConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(
+            config.vocab_size, config.hidden_size, self.padding_idx
+        )
         self.layers = nn.ModuleList(
-            [LongcatFlashGroupDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [
+                LongcatFlashGroupDecoderLayer(config, layer_idx)
+                for layer_idx in range(config.num_hidden_layers)
+            ]
         )
         self.norm = LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = LongcatFlashRotaryEmbedding(config=config)
@@ -562,17 +669,19 @@ class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
     @auto_docstring
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        cache_position: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
         if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+            raise ValueError(
+                "You must specify exactly one of input_ids or inputs_embeds"
+            )
 
         if inputs_embeds is None:
             inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
@@ -581,9 +690,13 @@ class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
             past_key_values = DynamicCache()
 
         if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            past_seen_tokens = (
+                past_key_values.get_seq_length() if past_key_values is not None else 0
+            )
             cache_position: torch.Tensor = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
             )
 
         if position_ids is None:
@@ -621,10 +734,10 @@ class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
 
 @auto_docstring
 class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
-    _tp_plan = {"lm_head": "colwise_rep"}
-    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
-    _keys_to_ignore_on_load_unexpected = [r"model\.mtp.*"]
+    _tied_weights_keys = ["lm_head.weight"]  # noqa: RUF012
+    _tp_plan = {"lm_head": "colwise_rep"}  # noqa: RUF012
+    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}  # noqa: RUF012
+    _keys_to_ignore_on_load_unexpected = [r"model\.mtp.*"]  # noqa: RUF012
 
     def __init__(self, config):
         super().__init__(config)
@@ -645,15 +758,15 @@ class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationM
     @auto_docstring
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        logits_to_keep: Union[int, torch.Tensor] = 0,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
+        cache_position: torch.LongTensor | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
         r"""
@@ -686,12 +799,21 @@ class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationM
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        slice_indices = (
+            slice(-logits_to_keep, None)
+            if isinstance(logits_to_keep, int)
+            else logits_to_keep
+        )
         logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                vocab_size=self.config.vocab_size,
+                **kwargs,
+            )
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -703,7 +825,7 @@ class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationM
 
 
 __all__ = [
-    "LongcatFlashGroupPreTrainedModel",
-    "LongcatFlashGroupModel",
     "LongcatFlashGroupForCausalLM",
+    "LongcatFlashGroupModel",
+    "LongcatFlashGroupPreTrainedModel",
 ]

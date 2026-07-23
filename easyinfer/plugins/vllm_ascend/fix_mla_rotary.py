@@ -62,8 +62,7 @@ def _ensure_mla_caches(rotary_mod: Any, num_tokens: int) -> None:
     rotary_mod._cos_mla = cos0.new_ones(new_size, 1, 1, rope_dim)
     rotary_mod._sin_mla = cos0.new_zeros(new_size, 1, 1, rope_dim)
     patch_logger.info(
-        "[fix_mla_rotary] (Re)allocated MLA cos/sin scratch "
-        "(rope_dim=%d, tokens=%d)",
+        "[fix_mla_rotary] (Re)allocated MLA cos/sin scratch (rope_dim=%d, tokens=%d)",
         rope_dim,
         new_size,
     )
@@ -102,8 +101,7 @@ def _patch_caller(module: Any) -> None:
     """
     if _rotary_mod is None:
         patch_logger.warning(
-            "[fix_mla_rotary] rotary_embedding not patched; "
-            "leaving %s untouched",
+            "[fix_mla_rotary] rotary_embedding not patched; leaving %s untouched",
             module.__name__,
         )
         return
