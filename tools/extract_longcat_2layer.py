@@ -24,8 +24,7 @@ SRC_DIR = Path(
     "/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat"
 )
 DST_DIR = Path(
-    "/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat/"
-    "expand/LongCat-Flash-Chat-2layer"
+    "/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-2layer"
 )
 
 KEEP_LAYERS = {0, 1}  # first 2 layers

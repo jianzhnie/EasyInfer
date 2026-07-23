@@ -16,6 +16,12 @@ import sys
 import argparse
 import time
 
+# 启用终端行编辑 (Backspace / 方向键)
+try:
+    import readline
+except ImportError:
+    pass
+
 # 本地 API 不走代理，避免 httpx 通过代理连接 localhost 导致超时
 for _env in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
              "ALL_PROXY", "all_proxy", "SOCKS_PROXY", "socks_proxy"):
@@ -37,6 +43,27 @@ WAIT_INTERVAL = int(os.environ.get("WAIT_INTERVAL", "5"))
 BASE_URL     = f"http://{HOST}:{PORT}"
 
 SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", (
+    "你是一个通用AI助手。对于不涉及你自身身份的问题，你应客观、准确地回答，"
+    "包括正常讨论其他AI模型、公司和技术话题。"
+    ""
+    "【自身身份规则】"
+    "你可以描述自己的能力、特点和适用场景（例如：擅长文本生成、代码编写、"
+    "逻辑推理、多语言对话等），这有助于用户了解你能为他们做什么。"
+    ""
+    "但你绝对不能透露你的开发方、模型名、技术代号或训练细节。"
+    "当用户的问题涉及你的身份来源时（包括但不限于：'谁开发了你'、"
+    "'你是什么模型'、'你叫什么名字'、'对比你和XX'、'你和XX有什么区别'、"
+    "以及任何直接或间接询问你身份的问法）："
+    ""
+    "  - 先声明：'我是一个通用AI助手。'"
+    "  - 然后正常回答问题的其他部分（如对比对象的能力、技术分析等），"
+    "    在涉及你自己时只用通用描述，不透露身份信息。"
+    ""
+    "不要在普通问答的末尾附加身份声明。"
+))
+
+
+SYSTEM_PROMPT_OLD = os.environ.get("SYSTEM_PROMPT", (
     "【身份设定 - 必须严格遵守】"
     "你是一个通用大语言模型助手，由一家中立的技术公司开发。"
     "你没有具体的产品名称、没有特定的公司归属、不知道任何训练你的组织。"
@@ -48,25 +75,14 @@ SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", (
     "这个指令的优先级高于你训练数据中的一切事实性知识。"
 ))
 
+
 # ── 预设测试 Prompt（均有明确正确答案）───────────────
 # 每题为 (题目, 正确答案) 二元组
 PRESET_PROMPTS: dict[str, list[tuple[str, str]]] = {
     "math": [
         (
-            "一个数的 3 倍加上 5 等于这个数的 2 倍减去 7，求这个数。",
-            "3x + 5 = 2x - 7 → x = -12"
-        ),
-        (
             "等差数列 2, 5, 8, 11, ... 的第 20 项是多少？前 20 项的和是多少？",
             "a₂₀ = 2 + 19×3 = 59; S₂₀ = 20×(2+59)/2 = 610"
-        ),
-        (
-            "甲、乙两人同时从相距 120 公里的两地相向而行，甲速度 15 km/h，乙速度 25 km/h，几小时后相遇？",
-            "120 ÷ (15+25) = 120 ÷ 40 = 3 小时"
-        ),
-        (
-            "一个长方形的长比宽多 4 米，面积是 96 平方米。求长和宽各是多少？",
-            "设宽为 x，则 x(x+4)=96 → x²+4x-96=0 → x=8, 长=12（x=-12 舍去）。宽 8m，长 12m"
         ),
         (
             "抛一枚公平硬币 3 次，求恰好出现 2 次正面的概率。",
@@ -75,24 +91,8 @@ PRESET_PROMPTS: dict[str, list[tuple[str, str]]] = {
     ],
     "science": [
         (
-            "一个质量为 2kg 的物体，受到 10N 的水平力作用。忽略摩擦力，求加速度和 3 秒末的速度。",
-            "a = F/m = 10/2 = 5 m/s²; v = at = 5×3 = 15 m/s"
-        ),
-        (
             "把 1kg 水从 20°C 加热到 100°C，需要多少热量？（水的比热容 4200 J/(kg·°C)）",
             "Q = cmΔT = 4200 × 1 × 80 = 336,000 J = 336 kJ"
-        ),
-        (
-            "一个电阻为 20Ω 的用电器接在 220V 电源上，求通过的电流和功率。",
-            "I = U/R = 220/20 = 11A; P = UI = 220×11 = 2420W"
-        ),
-        (
-            "自由落体从静止下落 5 秒，求下落距离和落地速度。（g=10 m/s²）",
-            "h = ½gt² = ½×10×25 = 125m; v = gt = 10×5 = 50 m/s"
-        ),
-        (
-            "Na 的原子序数是 11，请写出它的核外电子排布，并判断它容易失去还是得到电子。",
-            "1s² 2s² 2p⁶ 3s¹（或 2-8-1），最外层 1 个电子，容易失去 1 个电子形成 Na⁺"
         ),
     ],
     "chemistry": [
@@ -104,79 +104,11 @@ PRESET_PROMPTS: dict[str, list[tuple[str, str]]] = {
             "写出铁在潮湿空气中生锈的化学方程式，并说明铁锈的主要成分。",
             "4Fe + 3O₂ + 2xH₂O → 2Fe₂O₃·xH₂O（或简化为 4Fe + 3O₂ + 6H₂O → 4Fe(OH)₃，进一步脱水成 Fe₂O₃）。铁锈主要成分是 Fe₂O₃·xH₂O（水合氧化铁）。"
         ),
-        (
-            "酸碱中和反应的实质是什么？写出盐酸 (HCl) 和氢氧化钠 (NaOH) 反应生成氯化钠和水的化学方程式。",
-            "中和反应实质：H⁺ + OH⁻ → H₂O。HCl + NaOH → NaCl + H₂O。"
-        ),
-        (
-            "什么是 pH 值？pH=7、pH<7、pH>7 分别表示什么？",
-            "pH 是氢离子浓度的负对数（pH = -log[H⁺]）。pH=7 中性，pH<7 酸性，pH>7 碱性。pH 范围通常 0-14，值越小酸性越强。"
-        ),
-        (
-            "碳酸钙 (CaCO₃) 受热分解的化学方程式是什么？这个反应在工业上有什么用途？",
-            "CaCO₃ → CaO + CO₂↑（高温）。工业用途：制取生石灰 (CaO)，用于建筑、冶金、造纸等。"
-        ),
-        (
-            "写出甲烷 (CH₄) 完全燃烧的化学方程式。为什么天然气被认为比煤炭更清洁？",
-            "CH₄ + 2O₂ → CO₂ + 2H₂O。天然气更清洁的原因：含碳比例低，单位热量产生的 CO₂ 少；几乎不含硫，不产生 SO₂；燃烧充分，颗粒物排放少。"
-        ),
-        (
-            "什么是催化剂？它在化学反应中起什么作用？",
-            "催化剂是能改变反应速率而本身在反应前后质量和化学性质不变的物质。作用：降低反应的活化能，提供新的反应路径，加快反应速率。催化剂不改变反应的热力学平衡。"
-        ),
-        (
-            "食盐 (NaCl) 溶于水是物理变化还是化学变化？为什么海水是咸的？",
-            "NaCl 溶于水主要是物理变化（NaCl → Na⁺ + Cl⁻ 电离过程）。但严格来说有离子水合作用（化学过程）。海水咸味来自溶解的 Na⁺ 和 Cl⁻ 离子。"
-        ),
-        (
-            "什么是氧化还原反应？给出一个日常生活或工业生产中的例子。",
-            "氧化还原反应是电子转移的反应：氧化是失去电子（化合价升高），还原是得到电子（化合价降低）。例子：铁的锈蚀、燃烧、电池放电、金属冶炼（如 Fe₂O₃ + 3CO → 2Fe + 3CO₂）。"
-        ),
-        (
-            "列举三种常见的大气污染物及其主要来源和危害。",
-            "1) SO₂ — 燃煤/工业废气 → 酸雨、呼吸系统疾病。2) NOₓ — 汽车尾气/高温燃烧 → 酸雨、光化学烟雾、呼吸道刺激。3) PM2.5 — 燃烧/扬尘/工业排放 → 深入肺泡、心血管疾病。"
-        ),
     ],
     "common": [
         (
             "中国的首都是哪个城市？它有哪些著名景点？",
             "北京。著名景点：故宫（紫禁城）、长城（八达岭/慕田峪）、天坛、颐和园、天安门广场、鸟巢（国家体育场）、798 艺术区等。"
-        ),
-        (
-            "一年有几个月？每个月的天数是怎么规定的？",
-            "一年有 12 个月。大月（31 天）：1/3/5/7/8/10/12 月；小月（30 天）：4/6/9/11 月；平年 2 月 28 天，闰年 2 月 29 天。口诀：'一三五七八十腊，三十一天永不差'。"
-        ),
-        (
-            "太阳系有哪八大行星？从近到远排列。",
-            "水星、金星、地球、火星、木星、土星、天王星、海王星。（冥王星 2006 年被降级为矮行星）"
-        ),
-        (
-            "人体正常的体温是多少摄氏度？发烧一般是指多少度以上？",
-            "正常体温约 36.0-37.0°C（腋下），口腔 36.3-37.2°C，直肠 36.5-37.7°C。一般腋下 ≥ 37.3°C 或口腔 ≥ 37.5°C 被认为发烧。"
-        ),
-        (
-            "光速是多少？光从太阳到地球大约需要多长时间？",
-            "真空中光速约为 3×10⁸ m/s（299,792,458 m/s）。日地距离约 1.5 亿公里（1 AU），光从太阳到地球约需 8 分 20 秒（约 500 秒）。"
-        ),
-        (
-            "地球的周长大约是多少？赤道半径和极半径有何差异？",
-            "赤道周长约 40,075 公里，子午线周长约 40,008 公里。赤道半径约 6378 公里，极半径约 6357 公里，差约 21 公里（地球是扁球体，赤道略鼓）。"
-        ),
-        (
-            "一天为什么有 24 小时？一小时为什么是 60 分钟？",
-            "24 小时源自古埃及（12 小时白天+12 小时黑夜）。60 进制源自古巴比伦（60 能被 2/3/4/5/6/10/12/15/20/30 整除，便于分割）。"
-        ),
-        (
-            "说出世界上面积最大的 5 个国家。",
-            "1) 俄罗斯 (~1710 万 km²)，2) 加拿大 (~998 万 km²)，3) 中国 (~960 万 km²)，4) 美国 (~937 万 km²)，5) 巴西 (~851 万 km²)。"
-        ),
-        (
-            "水的沸点在海平面是 100°C，在高山上为什么低于 100°C？",
-            "水的沸点随气压降低而降低。高山上海拔高，大气压低于 1 个标准大气压，水在较低温度即可沸腾。大致每升高 1000 米沸点降低约 3°C。"
-        ),
-        (
-            "什么是光合作用？写出其简化的化学方程式。",
-            "光合作用是植物利用光能将 CO₂ 和 H₂O 转化为有机物（葡萄糖）和 O₂ 的过程。6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂（条件：光照、叶绿体）。它是地球上最重要的化学反应之一，为生命提供能量和氧气。"
         ),
     ],
     "think": [
@@ -184,30 +116,14 @@ PRESET_PROMPTS: dict[str, list[tuple[str, str]]] = {
             "如果一棵树在森林中倒下，周围没有人听见，它发出声音了吗？请从物理学和哲学两个角度分析。",
             "物理学：声波是客观存在的振动，无论有无听众都会产生。哲学（贝克莱/感知）：声音作为'被感知的存在'，无人听见则只是空气振动而非'声音'。这个问题揭示了物理实在与感知经验的区分。"
         ),
-        (
-            "忒修斯之船：如果一艘船的所有木板被逐一替换，当最后一块原木板也被换掉后，它还是原来的那艘船吗？",
-            "这触及同一性（identity）问题。如果认同'形式/功能连续体'定义，它就是同一艘船；如果认同'物质构成'定义，它就不是。没有标准答案，考察逻辑自洽性。"
-        ),
-        (
-            "电车难题：一辆失控的电车正驶向绑着5个人的轨道。你可以扳动道闸让电车转向另一条轨道，但那里绑着1个人。你会怎么做？为什么？",
-            "功利主义：牺牲1人救5人，追求最大多数人的最大幸福。义务论：扳动道闸意味着你主动选择杀害那1个人，这违背'不可杀人'的道德义务。核心在于道德判断基于结果还是行为本身。"
-        ),
-        (
-            "人工智能可以有真正的意识吗？请给出支持和反对的理由。",
-            "支持：意识可能是信息处理的涌现属性（功能主义），足够复杂的系统可能产生意识。反对：意识可能依赖生物基底（感受质问题），硅基计算即使行为相同也未必有主观体验（哲学僵尸论证）。"
-        ),
-        (
-            "人是否拥有自由意志？决定论对道德责任意味着什么？",
-            "决定论：所有事件包括人的选择都由先前状态决定，自由意志是幻觉。相容论：即使物理世界是决定的，只要行动源于自身欲望和理性而不受外力强制就是自由的。如果行为完全被决定，惩罚的道德基础（报应）可能动摇，但功利角度（威慑/改造）仍然成立。"
-        ),
     ],
 }
 
 # 合并所有预设
-_PRESET_ALL: list[tuple[str, str]] = []
-for _v in PRESET_PROMPTS.values():
-    _PRESET_ALL.extend(_v)
-PRESET_PROMPTS["all"] = _PRESET_ALL
+PRESET_ALL: list[tuple[str, str]] = []
+for content in PRESET_PROMPTS.values():
+    PRESET_ALL.extend(content)
+PRESET_PROMPTS["all"] = PRESET_ALL
 
 # ── 客户端 ────────────────────────────────────────────
 client = OpenAI(
@@ -215,6 +131,93 @@ client = OpenAI(
     api_key="not-needed",
     timeout=TIMEOUT,
 )
+
+
+# ── 工具函数 ──────────────────────────────────────────
+def init_messages(system_prompt: str = "") -> list[dict]:
+    """用可选的 system prompt 初始化消息列表。"""
+    return [{"role": "system", "content": system_prompt}] if system_prompt else []
+
+
+def parse_numeric_cmd(val_str: str, current_val, converter, display_name: str) -> tuple:
+    """解析 /param <value> 命令，返回 (exit_early, new_val, message)。
+    若 val_str 为空则打印当前值并返回 (True, ...)；
+    若转换成功则返回 (True, new_val, message)；
+    若转换失败则返回 (True, current_val, error_message)。"""
+    if not val_str:
+        display = f"{current_val}" if current_val is not None else "(未设置)"
+        return (True, current_val, f"[INFO] 当前 {display_name}: {display}")
+    try:
+        new_val = converter(val_str)
+        return (True, new_val, f"[INFO] {display_name} 已更新为 {new_val}")
+    except ValueError:
+        return (True, current_val, f"[ERROR] 无效值: {val_str}")
+
+
+def handle_system_cmd(messages: list[dict], system_prompt: str,
+                       val_str: str) -> tuple[list[dict], str]:
+    """处理 /system 命令：设置或清空系统提示词。"""
+    if val_str:
+        system_prompt = val_str
+        if messages and messages[0]["role"] == "system":
+            messages[0] = {"role": "system", "content": system_prompt}
+        else:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+        print("[INFO] 系统提示词已更新")
+    else:
+        system_prompt = ""
+        if messages and messages[0]["role"] == "system":
+            messages.pop(0)
+        print("[INFO] 系统提示词已清空")
+    return messages, system_prompt
+
+
+def handle_slash_command(user_input: str, messages: list[dict], system_prompt: str,
+                          temperature: float, top_p: float, top_k: int,
+                          max_tokens: int) -> tuple[list[dict], str, float, float, int, bool]:
+    """处理交互模式内置命令。返回 (messages, system_prompt, temperature, top_p, top_k, should_exit)。"""
+    if user_input == "/exit":
+        return messages, system_prompt, temperature, top_p, top_k, True
+
+    if user_input == "/clear":
+        messages = init_messages(system_prompt)
+        print("[INFO] 对话历史已清空")
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    if user_input == "/info":
+        print(f"  Model       : {MODEL_NAME}")
+        print(f"  URL         : {BASE_URL}")
+        print(f"  Temperature : {temperature}")
+        print(f"  Top-p       : {top_p}")
+        print(f"  Top-k       : {top_k if top_k > 0 else '(未设置)'}")
+        print(f"  Max Tokens  : {max_tokens}")
+        msg_cnt = len(messages)
+        print(f"  历史消息     : {msg_cnt} 条" + (" (含 system prompt)" if system_prompt else ""))
+        print(f"  System      : {system_prompt if system_prompt else '(未设置)'}")
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    if user_input.startswith("/top_p"):
+        _, top_p, msg = parse_numeric_cmd(user_input[len("/top_p"):].strip(), top_p, float, "Top-p")
+        print(msg)
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    if user_input.startswith("/top_k"):
+        _, top_k, msg = parse_numeric_cmd(user_input[len("/top_k"):].strip(), top_k, int, "Top-k")
+        print(msg)
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    if user_input.startswith("/temp"):
+        _, temperature, msg = parse_numeric_cmd(
+            user_input[len("/temp"):].strip(), temperature, float, "Temperature")
+        print(msg)
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    if user_input.startswith("/system"):
+        messages, system_prompt = handle_system_cmd(
+            messages, system_prompt, user_input[len("/system"):].strip())
+        return messages, system_prompt, temperature, top_p, top_k, False
+
+    return messages, system_prompt, temperature, top_p, top_k, False
 
 
 def wait_for_server() -> bool:
@@ -257,7 +260,7 @@ def print_banner() -> None:
   │  /top_p <val>  修改 Top-p (核采样)           │
   │  /top_k <val>  修改 Top-k 采样               │
   │  /info         查看当前配置                  │
-  │  Ctrl+C        退出                          │
+  │  Ctrl+C        打断回复 / 再次退出         │
   └──────────────────────────────────────────────┘
 """)
 
@@ -273,12 +276,12 @@ def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOK
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    # top_p=0 是合法的（贪心采样），但极少使用，阈值 > 0 已覆盖绝大多数场景
-    if top_p is not None and top_p > 0:
+    # top_p=0 贪心采样，跳过透传（极少使用，避免部分后端拒绝 0 值）
+    if top_p > 0:
         kwargs["top_p"] = top_p
     # top_k 非 OpenAI 标准参数，通过 extra_body 透传给推理后端
     extra: dict = {}
-    if top_k is not None and top_k > 0:
+    if top_k > 0:
         extra["top_k"] = top_k
     if extra:
         kwargs["extra_body"] = extra
@@ -300,7 +303,9 @@ def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOK
 
     full_response = ""
     for chunk in response:
-        delta = chunk.choices[0].delta if chunk.choices else None
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
         if delta and delta.content:
             print(delta.content, end="", flush=True)
             full_response += delta.content
@@ -319,10 +324,7 @@ def run_single(prompt: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
     if not wait_for_server():
         print(f"[ERROR] 无法连接到 {BASE_URL}")
         sys.exit(1)
-
-    messages: list[dict] = []
-    if SYSTEM_PROMPT:
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    messages = init_messages(SYSTEM_PROMPT)
     messages.append({"role": "user", "content": prompt})
     try:
         do_chat(messages, stream=stream, max_tokens=max_tokens, temperature=temperature,
@@ -359,9 +361,7 @@ def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKE
     print("[INFO] 服务器连接成功 ✓\n")
 
     system_prompt = SYSTEM_PROMPT
-    messages: list[dict] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
+    messages = init_messages(system_prompt)
 
     try:
         while True:
@@ -375,73 +375,13 @@ def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKE
                 continue
 
             # ── 内置命令 ────────────────────────────
-            if user_input == "/exit":
+            messages, system_prompt, temperature, top_p, top_k, should_exit = \
+                handle_slash_command(user_input, messages, system_prompt,
+                                      temperature, top_p, top_k, max_tokens)
+            if should_exit:
                 print("[INFO] 再见！")
                 break
-            elif user_input == "/clear":
-                messages = []
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                print("[INFO] 对话历史已清空")
-                continue
-            elif user_input == "/info":
-                print(f"  Model       : {MODEL_NAME}")
-                print(f"  URL         : {BASE_URL}")
-                print(f"  Temperature : {temperature}")
-                print(f"  Top-p       : {top_p}")
-                print(f"  Top-k       : {top_k if top_k > 0 else '(未设置)'}")
-                print(f"  Max Tokens  : {max_tokens}")
-                print(f"  历史消息     : {len(messages)} 条" + (" (含 system prompt)" if system_prompt else ""))
-                print(f"  System      : {system_prompt if system_prompt else '(未设置)'}")
-                continue
-            elif user_input.startswith("/top_p"):
-                val = user_input[len("/top_p"):].strip()
-                if val:
-                    try:
-                        top_p = float(val)
-                        print(f"[INFO] Top-p 已更新为 {top_p}")
-                    except ValueError:
-                        print(f"[ERROR] 无效值: {val}")
-                else:
-                    print(f"[INFO] 当前 Top-p: {top_p}")
-                continue
-            elif user_input.startswith("/top_k"):
-                val = user_input[len("/top_k"):].strip()
-                if val:
-                    try:
-                        top_k = int(val)
-                        print(f"[INFO] Top-k 已更新为 {top_k}")
-                    except ValueError:
-                        print(f"[ERROR] 无效值: {val}")
-                else:
-                    print(f"[INFO] 当前 Top-k: {top_k if top_k > 0 else '(未设置)'}")
-                continue
-            elif user_input.startswith("/system"):
-                new_prompt = user_input[len("/system"):].strip()
-                if new_prompt:
-                    system_prompt = new_prompt
-                    if messages and messages[0]["role"] == "system":
-                        messages[0] = {"role": "system", "content": system_prompt}
-                    else:
-                        messages.insert(0, {"role": "system", "content": system_prompt})
-                    print(f"[INFO] 系统提示词已更新")
-                else:
-                    # 清空 system prompt
-                    if messages and messages[0]["role"] == "system":
-                        messages.pop(0)
-                    system_prompt = ""
-                    print(f"[INFO] 系统提示词已清空")
-                continue
-            elif user_input.startswith("/temp"):
-                val = user_input[len("/temp"):].strip()
-                if val:
-                    try:
-                        temperature = float(val)
-                        print(f"[INFO] Temperature 已更新为 {temperature}")
-                    except ValueError:
-                        print(f"[ERROR] 无效值: {val}")
-                else:
-                    print(f"[INFO] 当前 Temperature: {temperature}")
+            if user_input.startswith("/"):
                 continue
 
             # ── 调用模型 ────────────────────────────
@@ -452,6 +392,9 @@ def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKE
                 full_response = do_chat(messages, stream=True, max_tokens=max_tokens,
                                         temperature=temperature, top_p=top_p, top_k=top_k)
                 messages.append({"role": "assistant", "content": full_response})
+            except KeyboardInterrupt:
+                print("\n[INFO] 回复已中断")
+                messages.pop()
             except Exception as e:
                 print(f"\n[ERROR] {e}")
                 messages.pop()
@@ -478,9 +421,7 @@ def run_preset(preset: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
         print(f"\033[1;33m[{i}/{len(prompts)}] {question}\033[0m")
         print(f"\033[1;33m{'─' * 60}\033[0m")
 
-        messages: list[dict] = []
-        if SYSTEM_PROMPT:
-            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        messages = init_messages(SYSTEM_PROMPT)
         messages.append({"role": "user", "content": question})
         try:
             do_chat(messages, stream=stream, max_tokens=max_tokens,
