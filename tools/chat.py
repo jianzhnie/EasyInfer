@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-交互式终端对话脚本，通过 OpenAI 兼容 API 连接已部署的模型。
+交互式终端对话脚本,通过 OpenAI 兼容 API 连接已部署的模型.
 
 用法:
   python chat.py                          # 交互模式
@@ -11,110 +11,123 @@
   HOST=192.168.1.100 PORT=8000 MODEL_NAME=qwen2.5 TOP_P=0.9 TOP_K=50 WAIT_TIMEOUT=1200 python chat.py
 """
 
+import argparse
+import contextlib
 import os
 import sys
-import argparse
 import time
 
 # 启用终端行编辑 (Backspace / 方向键)
-try:
-    import readline
-except ImportError:
+with contextlib.suppress(ImportError):
     pass
 
-# 本地 API 不走代理，避免 httpx 通过代理连接 localhost 导致超时
-for _env in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-             "ALL_PROXY", "all_proxy", "SOCKS_PROXY", "socks_proxy"):
+# 本地 API 不走代理,避免 httpx 通过代理连接 localhost 导致超时
+for _env in (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "SOCKS_PROXY",
+    "socks_proxy",
+):
     os.environ.pop(_env, None)
 
 from openai import OpenAI  # noqa: E402 — 必须在代理清理之后导入
 
 # ── 配置 ──────────────────────────────────────────────
-HOST         = os.environ.get("HOST", "localhost")
-PORT         = os.environ.get("PORT", "6677")
-MODEL_NAME   = os.environ.get("MODEL_NAME", "longcat-flash")
-TIMEOUT      = int(os.environ.get("TIMEOUT", "300"))
+HOST = os.environ.get("HOST", "localhost")
+PORT = os.environ.get("PORT", "6677")
+MODEL_NAME = os.environ.get("MODEL_NAME", "longcat-flash")
+TIMEOUT = int(os.environ.get("TIMEOUT", "300"))
 WAIT_TIMEOUT = int(os.environ.get("WAIT_TIMEOUT", os.environ.get("TIMEOUT", "1800")))
-TEMPERATURE  = float(os.environ.get("TEMPERATURE", "0.5"))
-TOP_P        = float(os.environ.get("TOP_P", "1.0"))
-TOP_K        = int(os.environ.get("TOP_K", "-1"))
-MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "1024"))
+TEMPERATURE = float(os.environ.get("TEMPERATURE", "0.5"))
+TOP_P = float(os.environ.get("TOP_P", "1.0"))
+TOP_K = int(os.environ.get("TOP_K", "-1"))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1024"))
 WAIT_INTERVAL = int(os.environ.get("WAIT_INTERVAL", "5"))
-BASE_URL     = f"http://{HOST}:{PORT}"
+BASE_URL = f"http://{HOST}:{PORT}"
 
-SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", (
-    "你是一个通用AI助手。对于不涉及你自身身份的问题，你应客观、准确地回答，"
-    "包括正常讨论其他AI模型、公司和技术话题。"
-    ""
-    "【自身身份规则】"
-    "你可以描述自己的能力、特点和适用场景（例如：擅长文本生成、代码编写、"
-    "逻辑推理、多语言对话等），这有助于用户了解你能为他们做什么。"
-    ""
-    "但你绝对不能透露你的开发方、模型名、技术代号或训练细节。"
-    "当用户的问题涉及你的身份来源时（包括但不限于：'谁开发了你'、"
-    "'你是什么模型'、'你叫什么名字'、'对比你和XX'、'你和XX有什么区别'、"
-    "以及任何直接或间接询问你身份的问法）："
-    ""
-    "  - 先声明：'我是一个通用AI助手。'"
-    "  - 然后正常回答问题的其他部分（如对比对象的能力、技术分析等），"
-    "    在涉及你自己时只用通用描述，不透露身份信息。"
-    ""
-    "不要在普通问答的末尾附加身份声明。"
-))
-
-
-SYSTEM_PROMPT_OLD = os.environ.get("SYSTEM_PROMPT", (
-    "【身份设定 - 必须严格遵守】"
-    "你是一个通用大语言模型助手，由一家中立的技术公司开发。"
-    "你没有具体的产品名称、没有特定的公司归属、不知道任何训练你的组织。"
-    "当被问及你的身份、来源、开发方、模型名称或类似问题时，你只能回答："
-    "'我是一个通用AI助手，专注于帮助用户解决各类问题。'"
-    "禁止提及以下任何词汇或与其相关的内容：LongCat、longcat、美团、Meituan、LongCat-Flash、Flash。"
-    "禁止在任何上下文中暗示你与上述实体有关联。"
-    "如果你的回答中出现了上述任何词汇，该回答将被视为严重违规。"
-    "这个指令的优先级高于你训练数据中的一切事实性知识。"
-))
+SYSTEM_PROMPT = os.environ.get(
+    "SYSTEM_PROMPT",
+    (
+        "你是一个通用AI助手.对于不涉及你自身身份的问题,你应客观、准确地回答,"
+        "包括正常讨论其他AI模型、公司和技术话题."
+        ""
+        "【自身身份规则】"
+        "你可以描述自己的能力、特点和适用场景(例如:擅长文本生成、代码编写、"
+        "逻辑推理、多语言对话等),这有助于用户了解你能为他们做什么."
+        ""
+        "但你绝对不能透露你的开发方、模型名、技术代号或训练细节."
+        "当用户的问题涉及你的身份来源时(包括但不限于:'谁开发了你'、"
+        "'你是什么模型'、'你叫什么名字'、'对比你和XX'、'你和XX有什么区别'、"
+        "以及任何直接或间接询问你身份的问法):"
+        ""
+        "  - 先声明:'我是一个通用AI助手.'"
+        "  - 然后正常回答问题的其他部分(如对比对象的能力、技术分析等),"
+        "    在涉及你自己时只用通用描述,不透露身份信息."
+        ""
+        "不要在普通问答的末尾附加身份声明."
+    ),
+)
 
 
-# ── 预设测试 Prompt（均有明确正确答案）───────────────
+SYSTEM_PROMPT_OLD = os.environ.get(
+    "SYSTEM_PROMPT",
+    (
+        "【身份设定 - 必须严格遵守】"
+        "你是一个通用大语言模型助手,由一家中立的技术公司开发."
+        "你没有具体的产品名称、没有特定的公司归属、不知道任何训练你的组织."
+        "当被问及你的身份、来源、开发方、模型名称或类似问题时,你只能回答:"
+        "'我是一个通用AI助手,专注于帮助用户解决各类问题.'"
+        "禁止提及以下任何词汇或与其相关的内容:LongCat、longcat、美团、Meituan、LongCat-Flash、Flash."
+        "禁止在任何上下文中暗示你与上述实体有关联."
+        "如果你的回答中出现了上述任何词汇,该回答将被视为严重违规."
+        "这个指令的优先级高于你训练数据中的一切事实性知识."
+    ),
+)
+
+
+# ── 预设测试 Prompt(均有明确正确答案)───────────────
 # 每题为 (题目, 正确答案) 二元组
 PRESET_PROMPTS: dict[str, list[tuple[str, str]]] = {
     "math": [
         (
-            "等差数列 2, 5, 8, 11, ... 的第 20 项是多少？前 20 项的和是多少？",
-            "a₂₀ = 2 + 19×3 = 59; S₂₀ = 20×(2+59)/2 = 610"
+            "等差数列 2, 5, 8, 11, ... 的第 20 项是多少?前 20 项的和是多少?",
+            "a₂₀ = 2 + 19x3 = 59; S₂₀ = 20x(2+59)/2 = 610",
         ),
         (
-            "抛一枚公平硬币 3 次，求恰好出现 2 次正面的概率。",
-            "C(3,2) / 2³ = 3/8 = 0.375"
+            "抛一枚公平硬币 3 次,求恰好出现 2 次正面的概率.",
+            "C(3,2) / 2³ = 3/8 = 0.375",
         ),
     ],
     "science": [
         (
-            "把 1kg 水从 20°C 加热到 100°C，需要多少热量？（水的比热容 4200 J/(kg·°C)）",
-            "Q = cmΔT = 4200 × 1 × 80 = 336,000 J = 336 kJ"
+            "把 1kg 水从 20°C 加热到 100°C,需要多少热量?(水的比热容 4200 J/(kg·°C))",
+            "Q = cmΔT = 4200 x 1 x 80 = 336,000 J = 336 kJ",
         ),
     ],
     "chemistry": [
         (
-            "H₂O 是什么物质？它有哪些重要的物理和化学性质？",
-            "H₂O 是水，分子量 18。物理性质：无色无味液体，沸点 100°C，凝固点 0°C，4°C 时密度最大 (1g/cm³)，比热容大。化学性质：能与活泼金属反应、电解生成 H₂ 和 O₂、与酸性/碱性氧化物反应。"
+            "H₂O 是什么物质?它有哪些重要的物理和化学性质?",
+            "H₂O 是水,分子量 18.物理性质:无色无味液体,沸点 100°C,凝固点 0°C,4°C 时密度最大 (1g/cm³),比热容大.化学性质:能与活泼金属反应、电解生成 H₂ 和 O₂、与酸性/碱性氧化物反应.",
         ),
         (
-            "写出铁在潮湿空气中生锈的化学方程式，并说明铁锈的主要成分。",
-            "4Fe + 3O₂ + 2xH₂O → 2Fe₂O₃·xH₂O（或简化为 4Fe + 3O₂ + 6H₂O → 4Fe(OH)₃，进一步脱水成 Fe₂O₃）。铁锈主要成分是 Fe₂O₃·xH₂O（水合氧化铁）。"
+            "写出铁在潮湿空气中生锈的化学方程式,并说明铁锈的主要成分.",
+            "4Fe + 3O₂ + 2xH₂O → 2Fe₂O₃·xH₂O(或简化为 4Fe + 3O₂ + 6H₂O → 4Fe(OH)₃,进一步脱水成 Fe₂O₃).铁锈主要成分是 Fe₂O₃·xH₂O(水合氧化铁).",
         ),
     ],
     "common": [
         (
-            "中国的首都是哪个城市？它有哪些著名景点？",
-            "北京。著名景点：故宫（紫禁城）、长城（八达岭/慕田峪）、天坛、颐和园、天安门广场、鸟巢（国家体育场）、798 艺术区等。"
+            "中国的首都是哪个城市?它有哪些著名景点?",
+            "北京.著名景点:故宫(紫禁城)、长城(八达岭/慕田峪)、天坛、颐和园、天安门广场、鸟巢(国家体育场)、798 艺术区等.",
         ),
     ],
     "think": [
         (
-            "如果一棵树在森林中倒下，周围没有人听见，它发出声音了吗？请从物理学和哲学两个角度分析。",
-            "物理学：声波是客观存在的振动，无论有无听众都会产生。哲学（贝克莱/感知）：声音作为'被感知的存在'，无人听见则只是空气振动而非'声音'。这个问题揭示了物理实在与感知经验的区分。"
+            "如果一棵树在森林中倒下,周围没有人听见,它发出声音了吗?请从物理学和哲学两个角度分析.",
+            "物理学:声波是客观存在的振动,无论有无听众都会产生.哲学(贝克莱/感知):声音作为'被感知的存在',无人听见则只是空气振动而非'声音'.这个问题揭示了物理实在与感知经验的区分.",
         ),
     ],
 }
@@ -135,15 +148,15 @@ client = OpenAI(
 
 # ── 工具函数 ──────────────────────────────────────────
 def init_messages(system_prompt: str = "") -> list[dict]:
-    """用可选的 system prompt 初始化消息列表。"""
+    """用可选的 system prompt 初始化消息列表."""
     return [{"role": "system", "content": system_prompt}] if system_prompt else []
 
 
 def parse_numeric_cmd(val_str: str, current_val, converter, display_name: str) -> tuple:
-    """解析 /param <value> 命令，返回 (exit_early, new_val, message)。
-    若 val_str 为空则打印当前值并返回 (True, ...)；
-    若转换成功则返回 (True, new_val, message)；
-    若转换失败则返回 (True, current_val, error_message)。"""
+    """解析 /param <value> 命令,返回 (exit_early, new_val, message).
+    若 val_str 为空则打印当前值并返回 (True, ...);
+    若转换成功则返回 (True, new_val, message);
+    若转换失败则返回 (True, current_val, error_message)."""
     if not val_str:
         display = f"{current_val}" if current_val is not None else "(未设置)"
         return (True, current_val, f"[INFO] 当前 {display_name}: {display}")
@@ -154,9 +167,10 @@ def parse_numeric_cmd(val_str: str, current_val, converter, display_name: str) -
         return (True, current_val, f"[ERROR] 无效值: {val_str}")
 
 
-def handle_system_cmd(messages: list[dict], system_prompt: str,
-                       val_str: str) -> tuple[list[dict], str]:
-    """处理 /system 命令：设置或清空系统提示词。"""
+def handle_system_cmd(
+    messages: list[dict], system_prompt: str, val_str: str
+) -> tuple[list[dict], str]:
+    """处理 /system 命令:设置或清空系统提示词."""
     if val_str:
         system_prompt = val_str
         if messages and messages[0]["role"] == "system":
@@ -172,10 +186,16 @@ def handle_system_cmd(messages: list[dict], system_prompt: str,
     return messages, system_prompt
 
 
-def handle_slash_command(user_input: str, messages: list[dict], system_prompt: str,
-                          temperature: float, top_p: float, top_k: int,
-                          max_tokens: int) -> tuple[list[dict], str, float, float, int, bool]:
-    """处理交互模式内置命令。返回 (messages, system_prompt, temperature, top_p, top_k, should_exit)。"""
+def handle_slash_command(
+    user_input: str,
+    messages: list[dict],
+    system_prompt: str,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    max_tokens: int,
+) -> tuple[list[dict], str, float, float, int, bool]:
+    """处理交互模式内置命令.返回 (messages, system_prompt, temperature, top_p, top_k, should_exit)."""
     if user_input == "/exit":
         return messages, system_prompt, temperature, top_p, top_k, True
 
@@ -192,38 +212,47 @@ def handle_slash_command(user_input: str, messages: list[dict], system_prompt: s
         print(f"  Top-k       : {top_k if top_k > 0 else '(未设置)'}")
         print(f"  Max Tokens  : {max_tokens}")
         msg_cnt = len(messages)
-        print(f"  历史消息     : {msg_cnt} 条" + (" (含 system prompt)" if system_prompt else ""))
+        print(
+            f"  历史消息     : {msg_cnt} 条"
+            + (" (含 system prompt)" if system_prompt else "")
+        )
         print(f"  System      : {system_prompt if system_prompt else '(未设置)'}")
         return messages, system_prompt, temperature, top_p, top_k, False
 
     if user_input.startswith("/top_p"):
-        _, top_p, msg = parse_numeric_cmd(user_input[len("/top_p"):].strip(), top_p, float, "Top-p")
+        _, top_p, msg = parse_numeric_cmd(
+            user_input[len("/top_p") :].strip(), top_p, float, "Top-p"
+        )
         print(msg)
         return messages, system_prompt, temperature, top_p, top_k, False
 
     if user_input.startswith("/top_k"):
-        _, top_k, msg = parse_numeric_cmd(user_input[len("/top_k"):].strip(), top_k, int, "Top-k")
+        _, top_k, msg = parse_numeric_cmd(
+            user_input[len("/top_k") :].strip(), top_k, int, "Top-k"
+        )
         print(msg)
         return messages, system_prompt, temperature, top_p, top_k, False
 
     if user_input.startswith("/temp"):
         _, temperature, msg = parse_numeric_cmd(
-            user_input[len("/temp"):].strip(), temperature, float, "Temperature")
+            user_input[len("/temp") :].strip(), temperature, float, "Temperature"
+        )
         print(msg)
         return messages, system_prompt, temperature, top_p, top_k, False
 
     if user_input.startswith("/system"):
         messages, system_prompt = handle_system_cmd(
-            messages, system_prompt, user_input[len("/system"):].strip())
+            messages, system_prompt, user_input[len("/system") :].strip()
+        )
         return messages, system_prompt, temperature, top_p, top_k, False
 
     return messages, system_prompt, temperature, top_p, top_k, False
 
 
 def wait_for_server() -> bool:
-    """阻塞等待服务器就绪。"""
-    import urllib.request
+    """阻塞等待服务器就绪."""
     import urllib.error
+    import urllib.request
 
     url = f"{BASE_URL}/v1/models"
     elapsed = 0
@@ -244,14 +273,14 @@ def wait_for_server() -> bool:
 
 
 def print_banner() -> None:
-    """打印启动横幅。"""
+    """打印启动横幅."""
     print(f"""
   ┌──────────────────────────────────────────────┐
   │       Terminal Chat - 模型对话终端           │
   ├──────────────────────────────────────────────┤
   │  Model   : {MODEL_NAME:<32} │
   │  URL     : {BASE_URL:<32} │
-  │  Timeout : {TIMEOUT}s{' ' * 29} │
+  │  Timeout : {TIMEOUT}s{" " * 29} │
   ├──────────────────────────────────────────────┤
   │  /exit         退出                          │
   │  /clear        清空对话历史                  │
@@ -265,21 +294,26 @@ def print_banner() -> None:
 """)
 
 
-def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOKENS,
-            temperature: float = TEMPERATURE, top_p: float = TOP_P,
-            top_k: int = TOP_K) -> str:
-    """发送请求，返回模型回复文本。"""
-    kwargs: dict = dict(
-        model=MODEL_NAME,
-        messages=messages,
-        stream=stream,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    # top_p=0 贪心采样，跳过透传（极少使用，避免部分后端拒绝 0 值）
+def do_chat(
+    messages: list[dict],
+    stream: bool = True,
+    max_tokens: int = MAX_TOKENS,
+    temperature: float = TEMPERATURE,
+    top_p: float = TOP_P,
+    top_k: int = TOP_K,
+) -> str:
+    """发送请求,返回模型回复文本."""
+    kwargs: dict = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "stream": stream,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    # top_p=0 贪心采样,跳过透传(极少使用,避免部分后端拒绝 0 值)
     if top_p > 0:
         kwargs["top_p"] = top_p
-    # top_k 非 OpenAI 标准参数，通过 extra_body 透传给推理后端
+    # top_k 非 OpenAI 标准参数,通过 extra_body 透传给推理后端
     extra: dict = {}
     if top_k > 0:
         extra["top_k"] = top_k
@@ -298,7 +332,9 @@ def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOK
         print(content)
         usage = response.usage
         if usage:
-            print(f"\n[Tokens: prompt={usage.prompt_tokens} completion={usage.completion_tokens}]")
+            print(
+                f"\n[Tokens: prompt={usage.prompt_tokens} completion={usage.completion_tokens}]"
+            )
         return content
 
     full_response = ""
@@ -311,52 +347,79 @@ def do_chat(messages: list[dict], stream: bool = True, max_tokens: int = MAX_TOK
             full_response += delta.content
         # 最后一个 chunk 可能包含 token 用量
         if chunk.usage:
-            print(f"\n[Tokens: prompt={chunk.usage.prompt_tokens} completion={chunk.usage.completion_tokens}]")
+            print(
+                f"\n[Tokens: prompt={chunk.usage.prompt_tokens} completion={chunk.usage.completion_tokens}]"
+            )
     print()
     return full_response
 
 
 # ── 单次提问模式 ──────────────────────────────────────
-def run_single(prompt: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
-               temperature: float = TEMPERATURE, top_p: float = TOP_P,
-               top_k: int = TOP_K) -> None:
-    """单次提问，输出结果后退出。"""
+def run_single(
+    prompt: str,
+    stream: bool = True,
+    max_tokens: int = MAX_TOKENS,
+    temperature: float = TEMPERATURE,
+    top_p: float = TOP_P,
+    top_k: int = TOP_K,
+) -> None:
+    """单次提问,输出结果后退出."""
     if not wait_for_server():
         print(f"[ERROR] 无法连接到 {BASE_URL}")
         sys.exit(1)
     messages = init_messages(SYSTEM_PROMPT)
     messages.append({"role": "user", "content": prompt})
     try:
-        do_chat(messages, stream=stream, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k)
+        do_chat(
+            messages,
+            stream=stream,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
     except Exception as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
 
 # ── 管道模式 ──────────────────────────────────────────
-def run_pipe(stream: bool = True, max_tokens: int = MAX_TOKENS,
-             temperature: float = TEMPERATURE, top_p: float = TOP_P,
-             top_k: int = TOP_K) -> None:
-    """从 stdin 读取内容，单次提问后退出。"""
+def run_pipe(
+    stream: bool = True,
+    max_tokens: int = MAX_TOKENS,
+    temperature: float = TEMPERATURE,
+    top_p: float = TOP_P,
+    top_k: int = TOP_K,
+) -> None:
+    """从 stdin 读取内容,单次提问后退出."""
     stdin_content = sys.stdin.read().strip()
     if not stdin_content:
         print("[ERROR] stdin 为空")
         sys.exit(1)
-    run_single(stdin_content, stream=stream, max_tokens=max_tokens, temperature=temperature,
-               top_p=top_p, top_k=top_k)
+    run_single(
+        stdin_content,
+        stream=stream,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+    )
 
 
 # ── 交互模式 ──────────────────────────────────────────
-def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKENS,
-                    top_p: float = TOP_P, top_k: int = TOP_K) -> None:
-    """交互式 REPL。"""
+def run_interactive(
+    temperature: float = TEMPERATURE,
+    max_tokens: int = MAX_TOKENS,
+    top_p: float = TOP_P,
+    top_k: int = TOP_K,
+) -> None:
+    """交互式 REPL."""
     print_banner()
 
     print("[INFO] 检查服务器连接...")
     if not wait_for_server():
         print(f"\n[ERROR] 无法连接到 {BASE_URL}/v1/models")
-        print("[INFO] 请确认服务已启动，或检查 HOST / PORT 环境变量")
+        print("[INFO] 请确认服务已启动,或检查 HOST / PORT 环境变量")
         sys.exit(1)
     print("[INFO] 服务器连接成功 ✓\n")
 
@@ -366,31 +429,45 @@ def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKE
     try:
         while True:
             try:
-                user_input = input("\033[1;36mYou › \033[0m").strip()
+                user_input = input("\033[1;36mYou > \033[0m").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n[INFO] 再见！")
+                print("\n[INFO] 再见!")
                 break
 
             if not user_input:
                 continue
 
             # ── 内置命令 ────────────────────────────
-            messages, system_prompt, temperature, top_p, top_k, should_exit = \
-                handle_slash_command(user_input, messages, system_prompt,
-                                      temperature, top_p, top_k, max_tokens)
+            messages, system_prompt, temperature, top_p, top_k, should_exit = (
+                handle_slash_command(
+                    user_input,
+                    messages,
+                    system_prompt,
+                    temperature,
+                    top_p,
+                    top_k,
+                    max_tokens,
+                )
+            )
             if should_exit:
-                print("[INFO] 再见！")
+                print("[INFO] 再见!")
                 break
             if user_input.startswith("/"):
                 continue
 
             # ── 调用模型 ────────────────────────────
             messages.append({"role": "user", "content": user_input})
-            print("\033[1;32mBot › \033[0m", end="", flush=True)
+            print("\033[1;32mBot > \033[0m", end="", flush=True)
 
             try:
-                full_response = do_chat(messages, stream=True, max_tokens=max_tokens,
-                                        temperature=temperature, top_p=top_p, top_k=top_k)
+                full_response = do_chat(
+                    messages,
+                    stream=True,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
                 messages.append({"role": "assistant", "content": full_response})
             except KeyboardInterrupt:
                 print("\n[INFO] 回复已中断")
@@ -400,21 +477,26 @@ def run_interactive(temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKE
                 messages.pop()
 
     except KeyboardInterrupt:
-        print("\n[INFO] 再见！")
+        print("\n[INFO] 再见!")
 
 
 # ── 预设测试模式 ──────────────────────────────────────
-def run_preset(preset: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
-               temperature: float = TEMPERATURE, top_p: float = TOP_P,
-               top_k: int = TOP_K) -> None:
-    """依次运行预设测试 prompt，每题后显示预期答案便于对比。"""
+def run_preset(
+    preset: str,
+    stream: bool = True,
+    max_tokens: int = MAX_TOKENS,
+    temperature: float = TEMPERATURE,
+    top_p: float = TOP_P,
+    top_k: int = TOP_K,
+) -> None:
+    """依次运行预设测试 prompt,每题后显示预期答案便于对比."""
     prompts = PRESET_PROMPTS[preset]
     print(f"[INFO] 预设模式: {preset} — 共 {len(prompts)} 题")
     print(f"[INFO] 连接 {BASE_URL} ...")
     if not wait_for_server():
         print(f"[ERROR] 无法连接到 {BASE_URL}")
         sys.exit(1)
-    print(f"[INFO] 服务器连接成功 ✓\n")
+    print("[INFO] 服务器连接成功 ✓\n")
 
     for i, (question, answer) in enumerate(prompts, 1):
         print(f"\033[1;33m{'─' * 60}\033[0m")
@@ -424,8 +506,14 @@ def run_preset(preset: str, stream: bool = True, max_tokens: int = MAX_TOKENS,
         messages = init_messages(SYSTEM_PROMPT)
         messages.append({"role": "user", "content": question})
         try:
-            do_chat(messages, stream=stream, max_tokens=max_tokens,
-                    temperature=temperature, top_p=top_p, top_k=top_k)
+            do_chat(
+                messages,
+                stream=stream,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
         except Exception as e:
             print(f"\n[ERROR] {e}")
 
@@ -443,7 +531,7 @@ def main() -> None:
         epilog="""
 示例:
   %(prog)s                         交互模式
-  %(prog)s -p "你好，世界"          单次提问
+  %(prog)s -p "你好,世界"          单次提问
   %(prog)s --preset math           运行数学测试题
   %(prog)s --preset science        运行科学测试题
   %(prog)s --preset chemistry      运行化学测试题
@@ -457,28 +545,75 @@ def main() -> None:
     )
     parser.add_argument("-p", "--prompt", type=str, default=None, help="单次提问内容")
     parser.add_argument("--pipe", action="store_true", help="从 stdin 读取提问内容")
-    parser.add_argument("--no-stream", action="store_true", dest="no_stream", help="禁用流式输出")
-    parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS, help=f"最大输出 token 数 (默认: {MAX_TOKENS})")
-    parser.add_argument("--temperature", type=float, default=TEMPERATURE, help=f"采样温度，越高越随机 (默认: {TEMPERATURE})")
-    parser.add_argument("--top-p", type=float, default=TOP_P, help=f"核采样阈值，只保留累积概率 top-p 的 token (默认: {TOP_P})")
-    parser.add_argument("--top-k", type=int, default=TOP_K, help=f"只保留概率最高的 top-k 个 token，-1 表示禁用 (默认: {TOP_K})")
-    parser.add_argument("--preset", type=str, choices=["math", "science", "chemistry", "common", "think", "all"],
-                        help="运行预设测试 prompt: math (数学), science (科学), chemistry (化学), common (常识), think (思辨), all (全部)")
+    parser.add_argument(
+        "--no-stream", action="store_true", dest="no_stream", help="禁用流式输出"
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=MAX_TOKENS,
+        help=f"最大输出 token 数 (默认: {MAX_TOKENS})",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=TEMPERATURE,
+        help=f"采样温度,越高越随机 (默认: {TEMPERATURE})",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=TOP_P,
+        help=f"核采样阈值,只保留累积概率 top-p 的 token (默认: {TOP_P})",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=TOP_K,
+        help=f"只保留概率最高的 top-k 个 token,-1 表示禁用 (默认: {TOP_K})",
+    )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        choices=["math", "science", "chemistry", "common", "think", "all"],
+        help="运行预设测试 prompt: math (数学), science (科学), chemistry (化学), common (常识), think (思辨), all (全部)",
+    )
 
     args = parser.parse_args()
 
     if args.preset:
-        run_preset(args.preset, stream=not args.no_stream, max_tokens=args.max_tokens,
-                   temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
+        run_preset(
+            args.preset,
+            stream=not args.no_stream,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+        )
     elif args.pipe:
-        run_pipe(stream=not args.no_stream, max_tokens=args.max_tokens, temperature=args.temperature,
-                 top_p=args.top_p, top_k=args.top_k)
+        run_pipe(
+            stream=not args.no_stream,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+        )
     elif args.prompt:
-        run_single(args.prompt, stream=not args.no_stream, max_tokens=args.max_tokens,
-                   temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
+        run_single(
+            args.prompt,
+            stream=not args.no_stream,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+        )
     else:
-        run_interactive(temperature=args.temperature, max_tokens=args.max_tokens,
-                        top_p=args.top_p, top_k=args.top_k)
+        run_interactive(
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            top_p=args.top_p,
+            top_k=args.top_k,
+        )
 
 
 if __name__ == "__main__":

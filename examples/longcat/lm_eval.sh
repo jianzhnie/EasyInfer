@@ -39,13 +39,14 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 # 评测参数
 # ---------------------------------------------------------------------------
 # 模型路径 (本地 tokenizer 路径，用于 lm-eval 做 tokenization)
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
-OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Chat}"
+# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Thinking-2601}"
+OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Thinking-2601}"
 # API 中注册的模型名 (served-model-name)
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 # SGLang 服务地址
 API_HOST="${API_HOST:-localhost}"
-PORT="${PORT:-6677}"
+PORT="${PORT:-8200}"
 TASKS="${TASKS:-ceval-valid}"
 FEWSHOT="${FEWSHOT:-5}"
 BACKEND="${BACKEND:-api}"
@@ -71,7 +72,7 @@ LMEVAL_ARGS=(
     --tasks "$TASKS"
     --fewshot "$FEWSHOT"
     --max-model-len "$MAX_MODEL_LEN"
-    --num-concurrent 4
+    --num-concurrent 8
 )
 
 # API 模式下必须显式指定远程 URL（服务不在本地 127.0.0.1）

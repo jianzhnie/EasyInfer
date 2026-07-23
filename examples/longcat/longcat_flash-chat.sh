@@ -19,8 +19,9 @@ set -euo pipefail
 export VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-"INFO"}
 
 # --- 模型路径 ---
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Thinking-2601-combined}"
+# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Thinking-2601}"
 # MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-combined}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 
 # --- 并行度 ---
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-64}"         # TP: 单层显存切分
