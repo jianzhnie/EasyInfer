@@ -39,6 +39,9 @@ def register() -> None:
     if _module_available("vllm_ascend"):
         _register_plugin("easyinfer.plugins.vllm_ascend")
 
+    if _module_available("transformers"):
+        _register_plugin("easyinfer.plugins.transformers")
+
     _REGISTERED = True
 
 
