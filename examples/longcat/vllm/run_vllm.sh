@@ -9,8 +9,18 @@
 #       No quantization (bfloat16 native weights).
 #
 # Usage:
-#   bash run_vllm.sh
+#   bash run_vllm.sh                          # stable mode (default)
+#   EP=1 bash run_vllm.sh                     # expert parallel mode
 #   TP=64 MAX_MODEL_LEN=8192 bash run_vllm.sh
+#
+# Notes:
+#   - MLA attention kernel only supports block size 128; baked in
+#     (override with BLOCK_SIZE=<n>).
+#   - Chunked prefill is disabled by default (CHUNKED_PREFILL=1 to enable).
+#   - MC2 MoE comm is incompatible with zero-expert weight zeroing
+#     (MoeDistributeCombineV2 shape check fails -> collective hang).
+#     The EasyInfer plugin overrides the comm method to ALLGATHER via
+#     EASYINFER_MOE_COMM=allgather (set automatically when EP=1).
 #
 # Reference:
 #   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
@@ -18,24 +28,61 @@
 set -euo pipefail
 
 # Base configuration
-readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand"
-readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat-1024E-512Zero-E-Topk24-v2}"
+readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8010}"
 readonly TP="${TP:-64}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
+readonly ENABLE_EP="${EP:-1}"
+readonly EXECUTOR="${EXECUTOR:-ray}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
+readonly DTYPE="${DTYPE:-bfloat16}"
+# MLA attention kernel only supports block size 128 on this image.
+readonly BLOCK_SIZE="${BLOCK_SIZE:-128}"
+# Chunked prefill conflicts with EP token dispatch; disable by default.
+readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
 
+# ------------------------------------------------------------------------------
+# Ensure EasyInfer plugins are registered (required for the EP fixes)
+# ------------------------------------------------------------------------------
+pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# Log file (default: <repo>/logs/vllm_longcat_<timestamp>.log, override with LOG_FILE)
+# ------------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+LOG_DIR="${LOG_DIR:-${REPO_ROOT}/logs}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_FILE:-${LOG_DIR}/vllm_longcat_$(date +%Y%m%d_%H%M%S).log}"
+readonly LOG_FILE
+echo "[INFO] Log file: $LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# ------------------------------------------------------------------------------
 # NPU environment variables
+# ------------------------------------------------------------------------------
+# Auto-detect network interface
+if [[ -z "${HCCL_SOCKET_IFNAME:-}" ]]; then
+    HCCL_SOCKET_IFNAME="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+    HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
+fi
+if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
+    GLOO_SOCKET_IFNAME="$HCCL_SOCKET_IFNAME"
+fi
+
 export HCCL_OP_EXPANSION_MODE=AIV
+export HCCL_SOCKET_IFNAME
+export GLOO_SOCKET_IFNAME
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=800
+export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-800}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 
@@ -45,6 +92,16 @@ export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 
 # Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+
+# ------------------------------------------------------------------------------
+# Expert Parallel (optional)
+# ------------------------------------------------------------------------------
+if [[ "$ENABLE_EP" == "1" ]]; then
+    export ENABLE_EXPERT_PARALLEL=1
+    # MC2 MoE comm breaks with zero-expert weight zeroing; the EasyInfer
+    # plugin overrides the comm method to ALLGATHER (see fix_ep_zero_expert.py).
+    export EASYINFER_MOE_COMM="${EASYINFER_MOE_COMM:-allgather}"
+fi
 
 # 前置检查
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
@@ -57,27 +114,39 @@ command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127
 echo "============================================"
 echo "[INFO] LongCat-Flash-Chat-1024E-512Zero-Topk24-v2 — Deployment"
 echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP DP=$DP"
+echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "============================================"
+
+EP_FLAGS=()
+if [[ "$ENABLE_EP" == "1" ]]; then
+    EP_FLAGS=(--enable-expert-parallel)
+fi
+
+PREFILL_FLAGS=(--enable-chunked-prefill)
+if [[ "$CHUNKED_PREFILL" == "0" ]]; then
+    PREFILL_FLAGS=(--no-enable-chunked-prefill)
+fi
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
     --served-model-name "${SERVED_MODEL_NAME}" \
     --trust-remote-code \
-    --dtype bfloat16 \
+    --dtype "$DTYPE" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
-    --distributed-executor-backend ray \
+    "${EP_FLAGS[@]}" \
+    "${PREFILL_FLAGS[@]}" \
+    --block-size "$BLOCK_SIZE" \
+    --distributed-executor-backend "$EXECUTOR" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-    --enable-chunked-prefill \
     --no-enable-prefix-caching \
     --enforce-eager \
     --seed 1024 \
