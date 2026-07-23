@@ -63,8 +63,9 @@ def patch_enable_native_zero_expert(module: object) -> None:
     # ``__iadd__`` so ``result += zero_expert_result`` works.
     #
     # IMPORTANT: only inject ``__iadd__`` if the class doesn't already
-    # define one — future vllm-ascend versions may add it upstream, and we
-    # must not silently overwrite it.
+    # define one (including inherited).  ``hasattr`` catches both own and
+    # inherited definitions; if a parent class provides ``__iadd__`` we
+    # must not silently replace it with our tensor-only version.
     from vllm_ascend.ops.fused_moe.moe_comm_method import FusedExpertsResult
 
     if not hasattr(FusedExpertsResult, "__iadd__"):
@@ -92,10 +93,19 @@ def patch_enable_native_zero_expert(module: object) -> None:
         ):
             # Derive zero-expert count from the routing bias width
             # (real + zero) minus the logical expert count.
-            # Fall back to the config field if the bias is unavailable.
             n_zero = 0
             bias = getattr(router, "e_score_correction_bias", None)
             if bias is not None:
+                # Guard against unexpected bias layouts (scalar, empty).
+                if bias.ndim < 1:
+                    raise RuntimeError(
+                        "[fix_ep_zero_expert] e_score_correction_bias has "
+                        "unexpected shape %s (ndim=%d).  Cannot derive "
+                        "zero-expert count — vllm-ascend version may be "
+                        "incompatible.",
+                        tuple(bias.shape),
+                        bias.ndim,
+                    )
                 n_zero = bias.shape[-1] - router.num_logical_experts
             # max(...,0): when n_zero==0 the model truly has no zero
             # experts — do NOT enable the native path (Bug #3 in review).
@@ -106,6 +116,9 @@ def patch_enable_native_zero_expert(module: object) -> None:
             if n_zero > 0:
                 self.zero_expert_num = n_zero
                 self.zero_expert_type = router.zero_expert_type
+                # Flag consumed by Patch 3 to avoid double-counting the
+                # zero-expert contribution in the runner.
+                router._ez_native_handled = True  # type: ignore[attr-defined]
                 patch_logger.info(
                     "[fix_ep_zero_expert] Enabled native zero-expert path: "
                     "num=%s, type=%s",
@@ -114,15 +127,18 @@ def patch_enable_native_zero_expert(module: object) -> None:
                 )
             else:
                 # zero_expert_type is set but n_zero derived as 0 —
-                # inconsistent config or bias layout change.  Log a
-                # warning so the silent skip is discoverable.
-                patch_logger.warning(
+                # inconsistent config or bias layout change.  Fail fast
+                # because zero-expert IDs will NOT be sanitized and will
+                # reach the dispatch kernel → aicore crash.
+                raise RuntimeError(
                     "[fix_ep_zero_expert] zero_expert_type=%s is set but "
-                    "derived n_zero=0 (bias_shape[-1]=%s, num_logical=%s). "
-                    "Native zero-expert path NOT enabled — zero-expert IDs "
-                    "will NOT be sanitized.",
+                    "derived n_zero=0 "
+                    "(bias.shape=%s, num_logical=%s).  "
+                    "Cannot enable native zero-expert path — the model "
+                    "will crash without ID sanitization.  "
+                    "The vllm-ascend version may be incompatible.",
                     router.zero_expert_type,
-                    getattr(bias, "shape", "N/A"),
+                    tuple(bias.shape) if bias is not None else "N/A",
                     router.num_logical_experts,
                 )
 
@@ -190,24 +206,34 @@ def patch_moe_runner_zero_expert(module: object) -> None:
             isinstance(self.router, ZeroExpertRouter)
             and self.router.zero_expert_type is not None
         ):
-            # The native zero-expert path in ``apply`` already added the
-            # contribution.  Replace ``_zero_expert_output`` with a scalar
-            # zero so the downstream ``result += ...`` is a true no-op,
-            # avoiding double-counting that produces garbled output.
-            #
-            # ``result`` may be a plain Tensor (current vllm-ascend) or a
-            # FusedExpertsResult (future versions).  Extract device/dtype
-            # accordingly.
-            if isinstance(result, torch.Tensor):
-                dev = result.device
-                dt = result.dtype
-            else:
-                # Fallback: assume a dataclass with a ``routed_out`` field.
-                dev = result.routed_out.device
-                dt = result.routed_out.dtype
-            self.router._zero_expert_output = torch.tensor(
-                0.0, device=dev, dtype=dt
-            )
+            # Only suppress the runner addition when the native path in
+            # ``apply`` actually handled zero experts (flag set by
+            # ``patch_enable_native_zero_expert``).  Otherwise preserve
+            # the original ``_zero_expert_output`` so the runner can add
+            # it normally (future versions where the native path is off).
+            if getattr(self.router, "_ez_native_handled", False):
+                # The native zero-expert path in ``apply`` already added
+                # the contribution.  Replace ``_zero_expert_output`` with
+                # a scalar zero so ``result += ...`` is a true no-op,
+                # avoiding double-counting that produces garbled output.
+                #
+                # ``result`` may be a plain Tensor (current vllm-ascend)
+                # or a FusedExpertsResult (future versions).
+                if isinstance(result, torch.Tensor):
+                    dev = result.device
+                    dt = result.dtype
+                elif hasattr(result, "routed_out"):
+                    dev = result.routed_out.device
+                    dt = result.routed_out.dtype
+                else:
+                    raise TypeError(
+                        "[fix_ep_zero_expert] Unexpected result type: "
+                        "%s.  Expected Tensor or object with 'routed_out'."
+                        % type(result).__name__
+                    )
+                self.router._zero_expert_output = torch.tensor(
+                    0.0, device=dev, dtype=dt
+                )
         return _orig_maybe(self, result)
 
     MoERunner._maybe_add_zero_expert_output = _maybe
