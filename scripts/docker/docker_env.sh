@@ -31,10 +31,22 @@ export PARALLELISM="${PARALLELISM:-8}"
 export IMAGE_DIR="${IMAGE_DIR:-/home/jianzhnie/llmtuner/hfhub/docker/image}"
 
 # --- vLLM-Ascend 镜像配置（当前生效）---
-export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.22.1rc1-a3}"
-export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/vllm-ascend.v0.22.1rc1-a3.tar}"
-export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/ascend_infer_docker_run.sh}"
+# export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.22.1rc1-a3}"
+# export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/vllm-ascend.v0.22.1rc1-a3.tar}"
+# export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/run_npuslim_container.sh}"
+# export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
+
+# --- vLLM-Ascend 镜像配置（当前生效）---
+export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.23.0rc1-a3}"
+export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/vllm-ascend.v0.23.0rc1-a3.tar}"
+export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/run_npuslim_container.sh}"
 export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
+
+# --- vLLM-NPUSLIM 镜像
+# export IMAGE_NAME="ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0:latest"
+# export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/ascend910c-cann8.5.1-torch2.9.0-vllm0.18.0.tar}"
+# export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/run_npuslim_container.sh}"
+# export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
 
 # --- SGLang 镜像配置（切换到 SGLang 时取消注释下面 4 行，同时注释上面 vLLM 的 4 行）---
 # export IMAGE_NAME="${IMAGE_NAME:-swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:cann9.0.0-a3-B140}"
