@@ -24,26 +24,24 @@ def patch_register_longcat_flash(_module: Any) -> None:
     """Register LongCat-Flash config + model with transformers."""
     try:
         from .configuration_longcat_flash import LongcatFlashConfig
-        from .modeling_longcat_flash_group import LongcatFlashForCausalLM
+        from .modeling_longcat_flash_group import LongcatFlashGroupForCausalLM
         from transformers import AutoConfig, AutoModelForCausalLM
 
         model_type = LongcatFlashConfig.model_type
 
         AutoConfig.register(model_type, LongcatFlashConfig, exist_ok=True)
         AutoModelForCausalLM.register(
-            LongcatFlashConfig, LongcatFlashForCausalLM, exist_ok=True,
+            LongcatFlashConfig, LongcatFlashGroupForCausalLM, exist_ok=True,
         )
 
-        # Also register architecture aliases so both "LongcatFlashForCausalLM"
-        # and "LongcatCausalLM" in config.json resolve correctly
         for alias in _ARCH_ALIASES:
             AutoConfig.register(model_type, LongcatFlashConfig, exist_ok=True)
             AutoModelForCausalLM.register(
-                LongcatFlashConfig, LongcatFlashForCausalLM, exist_ok=True,
+                LongcatFlashConfig, LongcatFlashGroupForCausalLM, exist_ok=True,
             )
 
         patch_logger.success(
-            f"[transformers] Registered LongcatFlashForCausalLM "
+            f"[transformers] Registered LongcatFlashGroupForCausalLM "
             f"(model_type={model_type}, aliases={list(_ARCH_ALIASES)})"
         )
     except ImportError as e:

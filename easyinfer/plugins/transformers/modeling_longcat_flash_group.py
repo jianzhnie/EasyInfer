@@ -1,6 +1,43 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2025 Meituan
-# This code is licensed under the MIT License, for details, see the ./LICENSE file. 
+# This code is licensed under the MIT License, for details, see the ./LICENSE file.
+#
+# =============================================================================
+# LongCat-Flash Group — 分组路由变体 (自定义模型)
+# =============================================================================
+#
+# 基于原始 LongCat-Flash 模型改造而来。
+#
+# 原始模型
+#   Checkpoint : /home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat
+#   架构       : LongcatFlashForCausalLM → MLA + MoE (1024 专家, 512 identity)
+#              每层 1 子层: Attn → MoE, 标准 top-k 路由
+#
+# 本模型的两个改造:
+#
+#   1. 双层 Decoder — 每层 2 子层, MoE 变为 delayed shortcut
+#      sub-layer 0:  Attn0 → DenseMLP0 → +x
+#                           ↘ MoE(x) → shortcut (暂存)
+#      sub-layer 1:  Attn1 → DenseMLP1 → +x → + shortcut → out
+#
+#   2. 分组路由 — 专家扩展 F 倍后二选一
+#      原始:  topk(logits)                     直接在 N+Z 个 logit 上选
+#      本模型: reshape(logits, [F, G]) → per_group_max → topk(G_winners)
+#      先将 N+Z 个 logit reshape 为 F 组 × G 个类型，每组取 max 选出最佳副本，
+#      再在 G 个优胜者中 top-k，等价于「组内最佳 → 组间 topk」
+#      Config: use_group_routing=True + expert_expansion_factor=F (F≥2)
+#
+# 新增 Config:
+#   use_group_routing        : bool, default=False  — 是否启用分组路由
+#   expert_expansion_factor  : int,  default=1      — 每专家副本数
+#
+# 类名:
+#   LongcatFlashGroupForCausalLM       — 因果 LM (含 lm_head)
+#   LongcatFlashGroupModel             — 纯 Transformer
+#   LongcatFlashGroupPreTrainedModel   — 基类
+#   LongcatFlashGroupDecoderLayer      — Decoder 层
+#   (组件 LongcatFlashRMSNorm / MLA / MLP / TopkRouter / MoE 沿用原名)
+# =============================================================================
 
 from typing import Callable, Optional, Union
 
@@ -417,7 +454,7 @@ def create_attention_block(class_name, *args, **kwargs):
     return chosen_class(*args, **kwargs)
 
 
-class LongcatFlashDecoderLayer(GradientCheckpointingLayer):
+class LongcatFlashGroupDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config: LongcatFlashConfig, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
@@ -484,11 +521,11 @@ class LongcatFlashDecoderLayer(GradientCheckpointingLayer):
 
 
 @auto_docstring
-class LongcatFlashPreTrainedModel(PreTrainedModel):
+class LongcatFlashGroupPreTrainedModel(PreTrainedModel):
     config: LongcatFlashConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["LongcatFlashDecoderLayer"]
+    _no_split_modules = ["LongcatFlashGroupDecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn = True
     _supports_sdpa = True
@@ -496,13 +533,13 @@ class LongcatFlashPreTrainedModel(PreTrainedModel):
     _can_compile_fullgraph = True
     _supports_attention_backend = True
     _can_record_outputs = {
-        "hidden_states": LongcatFlashDecoderLayer,
+        "hidden_states": LongcatFlashGroupDecoderLayer,
         "attentions": LongcatFlashMLA,
     }
 
 
 @auto_docstring
-class LongcatFlashModel(LongcatFlashPreTrainedModel):
+class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"model\.mtp.*"]
 
     def __init__(self, config: LongcatFlashConfig):
@@ -512,7 +549,7 @@ class LongcatFlashModel(LongcatFlashPreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [LongcatFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [LongcatFlashGroupDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = LongcatFlashRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = LongcatFlashRotaryEmbedding(config=config)
@@ -583,7 +620,7 @@ class LongcatFlashModel(LongcatFlashPreTrainedModel):
 
 
 @auto_docstring
-class LongcatFlashForCausalLM(LongcatFlashPreTrainedModel, GenerationMixin):
+class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
@@ -591,7 +628,7 @@ class LongcatFlashForCausalLM(LongcatFlashPreTrainedModel, GenerationMixin):
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = LongcatFlashModel(config)
+        self.model = LongcatFlashGroupModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -623,9 +660,9 @@ class LongcatFlashForCausalLM(LongcatFlashPreTrainedModel, GenerationMixin):
         Example:
 
         ```python
-        >>> from transformers import AutoTokenizer, LongcatFlashForCausalLM
+        >>> from transformers import AutoTokenizer, LongcatFlashGroupForCausalLM
 
-        >>> model = LongcatFlashForCausalLM.from_pretrained("meta-longcat_flash/LongcatFlash-2-7b-hf")
+        >>> model = LongcatFlashGroupForCausalLM.from_pretrained("meta-longcat_flash/LongcatFlash-2-7b-hf")
         >>> tokenizer = AutoTokenizer.from_pretrained("meta-longcat_flash/LongcatFlash-2-7b-hf")
 
         >>> prompt = "Hey, are you conscious? Can you talk to me?"
@@ -665,4 +702,8 @@ class LongcatFlashForCausalLM(LongcatFlashPreTrainedModel, GenerationMixin):
         )
 
 
-__all__ = ["LongcatFlashPreTrainedModel", "LongcatFlashModel", "LongcatFlashForCausalLM"]
+__all__ = [
+    "LongcatFlashGroupPreTrainedModel",
+    "LongcatFlashGroupModel",
+    "LongcatFlashGroupForCausalLM",
+]

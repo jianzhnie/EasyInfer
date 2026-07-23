@@ -88,6 +88,16 @@ class LongcatFlashConfig(PretrainedConfig):
             The number of zero experts to use.
         zero_expert_type (`str`, *optional*, defaults to `None`):
             The type of zero expert to use.
+        use_group_routing (`bool`, *optional*, defaults to `False`):
+            Whether to use grouped routing. When enabled, the router output is
+            expanded by ``expert_expansion_factor``, experts are partitioned into
+            groups of identical replicas, the best replica within each group is
+            selected, and then top-k is applied across group winners.
+        expert_expansion_factor (`int`, *optional*, defaults to 1):
+            Number of replicas per expert when ``use_group_routing=True``.
+            The router's classifier dimension becomes
+            ``(n_routed_experts + zero_expert_num) * expert_expansion_factor``,
+            but the actual number of distinct expert types remains unchanged.
 
     ```python
     >>> from transformers import LongcatFlashModel, LongcatFlashConfig
@@ -154,6 +164,8 @@ class LongcatFlashConfig(PretrainedConfig):
         router_bias=False,
         zero_expert_num=None,
         zero_expert_type=None,
+        use_group_routing=False,
+        expert_expansion_factor=1,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -180,6 +192,8 @@ class LongcatFlashConfig(PretrainedConfig):
         self.router_bias = router_bias
         self.zero_expert_num = zero_expert_num
         self.zero_expert_type = zero_expert_type
+        self.use_group_routing = use_group_routing
+        self.expert_expansion_factor = expert_expansion_factor
 
         if self.attention_method == "MLA":
             self.head_dim = qk_rope_head_dim
