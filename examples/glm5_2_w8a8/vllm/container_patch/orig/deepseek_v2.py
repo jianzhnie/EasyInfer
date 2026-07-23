@@ -29,10 +29,9 @@ from collections.abc import Callable, Iterable
 from itertools import islice
 
 import torch
+import vllm._custom_ops as ops
 from torch import nn
 from transformers import DeepseekV2Config, DeepseekV3Config
-
-import vllm._custom_ops as ops
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, ParallelConfig, VllmConfig, get_current_vllm_config
@@ -539,7 +538,7 @@ class DeepseekV2Attention(nn.Module):
             q = self.q_proj(hidden_states)[0].view(
                 -1, self.num_local_heads, self.qk_head_dim
             )
-        q_nope, q_pe = q.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        _q_nope, q_pe = q.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
         latent_cache = self.kv_a_proj_with_mqa(hidden_states)[0]
         kv_a, _ = latent_cache.split([self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         latent_cache = latent_cache.unsqueeze(1)
@@ -1595,7 +1594,7 @@ class DeepseekV2ForCausalLM(
     SupportsEagle,
     SupportsEagle3,
 ):
-    packed_modules_mapping = {
+    packed_modules_mapping = {  # noqa: RUF012
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
     model_cls = DeepseekV2Model

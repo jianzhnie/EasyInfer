@@ -10,5 +10,5 @@
 +            skip_topk=self.skip_topk,
 +            topk_indices_buffer=mla_modules.topk_indices_buffer,
          )
- 
+
          self.prefix = prefix

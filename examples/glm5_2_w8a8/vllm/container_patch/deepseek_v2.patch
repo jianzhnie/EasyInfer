@@ -1,7 +1,7 @@
 --- orig/deepseek_v2.py	2026-07-21 15:21:31.579432918 +0800
 +++ deepseek_v2.py	2026-07-21 15:23:18.677056000 +0800
 @@ -987,36 +987,63 @@
- 
+
          _skip_topk = False
          if self.is_v32:
 -            self.indexer_rope_emb = get_rope(
@@ -90,6 +90,6 @@
 +                self.indexer_rope_emb = None
 +                self.indexer = None
 +                _skip_topk = True
- 
+
          else:
              self.indexer_rope_emb = None

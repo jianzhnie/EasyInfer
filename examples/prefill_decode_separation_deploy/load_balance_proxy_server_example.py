@@ -4,32 +4,32 @@
 #
 # 【作用】
 #   本代理是 GLM-5.2 模型在 vLLM Ascend Disaggregated Prefill 架构下的
-#   **流量入口**，负责将 Agent / 客户端的 OpenAI API 请求分发到多个
-#   Prefill 节点（PNode）和 Decode 节点（DNode），实现负载均衡。
+#   **流量入口**,负责将 Agent / 客户端的 OpenAI API 请求分发到多个
+#   Prefill 节点(PNode)和 Decode 节点(DNode),实现负载均衡.
 #
 # 【部署架构】
-#   4 PNode（KV Producer）+ 8 DNode（KV Consumer），通过 Proxy 统一对外服务
+#   4 PNode(KV Producer)+ 8 DNode(KV Consumer),通过 Proxy 统一对外服务
 #
-#   Agent → Proxy → PNode（处理 prompt，生成 KV cache，输出 1 token）
-#               ↘ → DNode（通过 KV transfer 拉取 KV cache，继续生成完整回复）
+#   Agent → Proxy → PNode(处理 prompt,生成 KV cache,输出 1 token)
+#               ↘ → DNode(通过 KV transfer 拉取 KV cache,继续生成完整回复)
 #
 # 【核心功能】
-#   1. 请求分发：选择负载最低的 PNode 执行 prefill，再选择 DNode 执行 decode
-#   2. 负载均衡：基于 active_tokens + active_kv_cache 的最小堆调度
-#   3. 上下文保留：Decoder 请求保留完整 prompt，确保模型理解上下文
-#   4. Max Tokens Cap：自动计算并限制 max_tokens，防止 context length 超限
-#   5. KV Transfer 协调：从 PNode 响应提取 kv_transfer_params，注入 DNode 请求
-#   6. 流式转发：透明透传 DNode 的 SSE 流式响应
-#   7. 协议兼容：OpenAI / Ollama 兼容 API 端点（/v1/models, /api/tags 等）
-#   8. 后端管理：健康检查、动态增删实例、Drain 安全下线
+#   1. 请求分发:选择负载最低的 PNode 执行 prefill,再选择 DNode 执行 decode
+#   2. 负载均衡:基于 active_tokens + active_kv_cache 的最小堆调度
+#   3. 上下文保留:Decoder 请求保留完整 prompt,确保模型理解上下文
+#   4. Max Tokens Cap:自动计算并限制 max_tokens,防止 context length 超限
+#   5. KV Transfer 协调:从 PNode 响应提取 kv_transfer_params,注入 DNode 请求
+#   6. 流式转发:透明透传 DNode 的 SSE 流式响应
+#   7. 协议兼容:OpenAI / Ollama 兼容 API 端点(/v1/models, /api/tags 等)
+#   8. 后端管理:健康检查、动态增删实例、Drain 安全下线
 #
-# 【关键修改（针对 GLM-5.2）】
-#   原版代理将完整 prompt 发送给 DNode，当 input_tokens + max_tokens 超过
-#   模型 context length（135000）时，DNode 返回 400 Bad Request。
+# 【关键修改(针对 GLM-5.2)】
+#   原版代理将完整 prompt 发送给 DNode,当 input_tokens + max_tokens 超过
+#   模型 context length(135000)时,DNode 返回 400 Bad Request.
 #
-#   修改内容（参见同目录部署文档第 6.2 节）：
+#   修改内容(参见同目录部署文档第 6.2 节):
 #   - 新增 InstanceInfo.input_tokens / context_length 字段
-#   - 新增 build_decoder_request()：保留完整 prompt，自动 cap max_tokens
+#   - 新增 build_decoder_request():保留完整 prompt,自动 cap max_tokens
 #   - assign_instances() 提取 prefiller 返回的 usage.prompt_tokens
 #   - generate_stream() 使用 build_decoder_request() 构建 DNode 请求
 #
@@ -93,6 +93,7 @@ class ServerRole(str, Enum):
 
 DEFAULT_CONTEXT_LENGTH = 135000
 
+
 @dataclass
 class InstanceInfo:
     request_id: str
@@ -116,7 +117,10 @@ class PayloadTooLargeError(Exception):
     def __init__(self, estimated_tokens: int, context_length: int):
         self.estimated_tokens = estimated_tokens
         self.context_length = context_length
-        super().__init__(f"Estimated prompt tokens {estimated_tokens} exceeds context length {context_length}")
+        super().__init__(
+            f"Estimated prompt tokens {estimated_tokens} exceeds context length {context_length}"
+        )
+
 
 global_args: argparse.Namespace | None = None
 shared_scheduler: "SharedProxyScheduler | None" = None
@@ -253,7 +257,10 @@ class SharedProxyScheduler:
         pool = self._pool(role)
         entry = pool.servers[key]
         entry.heap_seq += 1
-        heapq.heappush(pool.heap, (self._priority(role, entry, key), entry.ordinal, entry.heap_seq, key))
+        heapq.heappush(
+            pool.heap,
+            (self._priority(role, entry, key), entry.ordinal, entry.heap_seq, key),
+        )
         if len(pool.heap) > 2 * len(pool.servers):
             self._reset_heap(role)
 
@@ -274,7 +281,9 @@ class SharedProxyScheduler:
         for key, entry in pool.servers.items():
             if bump_seq:
                 entry.heap_seq += 1
-            heap.append((self._priority(role, entry, key), entry.ordinal, entry.heap_seq, key))
+            heap.append(
+                (self._priority(role, entry, key), entry.ordinal, entry.heap_seq, key)
+            )
         heapq.heapify(heap)
         pool.heap = heap
 
@@ -292,11 +301,15 @@ class SharedProxyScheduler:
             return {
                 "prefill_instances": [
                     {"host": e.host, "port": e.port}
-                    for _, e in sorted(self.prefillers.items(), key=lambda item: item[1].ordinal)
+                    for _, e in sorted(
+                        self.prefillers.items(), key=lambda item: item[1].ordinal
+                    )
                 ],
                 "decode_instances": [
                     {"host": e.host, "port": e.port}
-                    for _, e in sorted(self.decoders.items(), key=lambda item: item[1].ordinal)
+                    for _, e in sorted(
+                        self.decoders.items(), key=lambda item: item[1].ordinal
+                    )
                 ],
             }
 
@@ -387,15 +400,21 @@ class SharedProxyScheduler:
     ) -> None:
         with self._lock:
             if release_prefill_kv:
-                self._release_load(ServerRole.PREFILL, prefiller_key, prefiller_load, kv_cache=True)
-            self._release_load(ServerRole.DECODE, decoder_key, decoder_load, active_tokens=True)
+                self._release_load(
+                    ServerRole.PREFILL, prefiller_key, prefiller_load, kv_cache=True
+                )
+            self._release_load(
+                ServerRole.DECODE, decoder_key, decoder_load, active_tokens=True
+            )
             self.request_num = max(0, self.request_num - 1)
 
     def get_waiting_nodes(self) -> dict[str, tuple[str, tuple[str, int], int]]:
         with self._lock:
             return dict(self.waiting_nodes)
 
-    def add_instances(self, role: ServerRole, instances: list[tuple[str, int]]) -> list[str]:
+    def add_instances(
+        self, role: ServerRole, instances: list[tuple[str, int]]
+    ) -> list[str]:
         waiting_nodes: list[str] = []
         with self._lock:
             servers = self._pool(role).servers
@@ -430,7 +449,9 @@ class SharedProxyScheduler:
         with self._lock:
             self.waiting_nodes.pop(key, None)
 
-    def remove_instances(self, role: ServerRole, instances: list[tuple[str, int]]) -> bool:
+    def remove_instances(
+        self, role: ServerRole, instances: list[tuple[str, int]]
+    ) -> bool:
         if not instances:
             return False
         keys = {server_key(host, port) for host, port in instances}
@@ -439,7 +460,9 @@ class SharedProxyScheduler:
             if self.request_num > 0:
                 pool.tainted.update(keys)
                 self._reset_heap(role, bump_seq=True)
-                logger.warning("Start to taint %s instances %s.", role.value, sorted(keys))
+                logger.warning(
+                    "Start to taint %s instances %s.", role.value, sorted(keys)
+                )
                 return True
 
             removed = False
@@ -504,16 +527,20 @@ class WorkerRuntime:
         snapshot = self.scheduler.get_snapshot()
         role_targets = {
             ServerRole.PREFILL: {
-                server_key(s["host"], s["port"]): (s["host"], s["port"]) for s in snapshot["prefill_instances"]
+                server_key(s["host"], s["port"]): (s["host"], s["port"])
+                for s in snapshot["prefill_instances"]
             },
             ServerRole.DECODE: {
-                server_key(s["host"], s["port"]): (s["host"], s["port"]) for s in snapshot["decode_instances"]
+                server_key(s["host"], s["port"]): (s["host"], s["port"])
+                for s in snapshot["decode_instances"]
             },
         }
         for role, targets in role_targets.items():
             await self._sync_clients(role, targets)
 
-    async def _sync_clients(self, role: ServerRole, targets: dict[str, tuple[str, int]]) -> None:
+    async def _sync_clients(
+        self, role: ServerRole, targets: dict[str, tuple[str, int]]
+    ) -> None:
         clients = self._clients[role]
         for key in [key for key in clients if key not in targets]:
             await clients.pop(key).aclose()
@@ -523,7 +550,9 @@ class WorkerRuntime:
             clients[key] = httpx.AsyncClient(
                 timeout=None,
                 base_url=build_base_url(host, port),
-                limits=httpx.Limits(max_connections=100000, max_keepalive_connections=100000),
+                limits=httpx.Limits(
+                    max_connections=100000, max_keepalive_connections=100000
+                ),
             )
 
     async def close(self) -> None:
@@ -548,13 +577,17 @@ class NodeListener:
     def _run(self) -> None:
         while True:
             args = get_global_args()
-            for key, (instance_type, server, retries) in list(self.scheduler.get_waiting_nodes().items()):
+            for key, (instance_type, server, retries) in list(
+                self.scheduler.get_waiting_nodes().items()
+            ):
                 host, port = server
                 is_valid = asyncio.run(self.check_instance_status(host, port))
                 print(f"Checking instance {key}...")
                 retries += 1
                 if is_valid:
-                    self.scheduler.activate_waiting_instance(ServerRole(instance_type), host, port)
+                    self.scheduler.activate_waiting_instance(
+                        ServerRole(instance_type), host, port
+                    )
                 elif retries >= args.max_waiting_retries:
                     print(f"Instance {key} was not added to the proxy.")
                     self.scheduler.drop_waiting_instance(key)
@@ -569,7 +602,9 @@ class NodeListener:
         endpoint = "/models"
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
         try:
-            async with httpx.AsyncClient(timeout=5.0, base_url=build_base_url(host, port)) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, base_url=build_base_url(host, port)
+            ) as client:
                 response = await client.get(endpoint, headers=headers)
                 response.raise_for_status()
                 return True
@@ -581,7 +616,9 @@ def manager_config_path(proxy_port: int) -> Path:
     return Path(tempfile.gettempdir()) / f"vllm_lb_proxy_manager_{proxy_port}.json"
 
 
-def write_manager_config(proxy_port: int, host: str, manager_port: int, authkey: bytes) -> None:
+def write_manager_config(
+    proxy_port: int, host: str, manager_port: int, authkey: bytes
+) -> None:
     manager_config_path(proxy_port).write_text(
         json.dumps(
             {
@@ -616,12 +653,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefiller-ports", type=int, nargs="+", default=[8001])
     parser.add_argument("--decoder-hosts", type=str, nargs="+", default=["localhost"])
     parser.add_argument("--decoder-ports", type=int, nargs="+", default=[8002])
-    parser.add_argument("--max-retries", type=int, default=3, help="Maximum number of retries for HTTP requests")
     parser.add_argument(
-        "--retry-delay", type=float, default=0.001, help="Base delay (seconds) for exponential backoff retries"
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum number of retries for HTTP requests",
     )
     parser.add_argument(
-        "--max-waiting-retries", type=int, default=3, help="Maximum number of retries for waiting nodes to be started"
+        "--retry-delay",
+        type=float,
+        default=0.001,
+        help="Base delay (seconds) for exponential backoff retries",
+    )
+    parser.add_argument(
+        "--max-waiting-retries",
+        type=int,
+        default=3,
+        help="Maximum number of retries for waiting nodes to be started",
     )
     parser.add_argument(
         "--waiting-retry-interval",
@@ -654,11 +702,17 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
     if len(args.prefiller_hosts) != len(args.prefiller_ports):
-        raise ValueError("Number of prefiller hosts must match number of prefiller ports")
+        raise ValueError(
+            "Number of prefiller hosts must match number of prefiller ports"
+        )
     if len(args.decoder_hosts) != len(args.decoder_ports):
         raise ValueError("Number of decoder hosts must match number of decoder ports")
-    args.prefiller_instances = list(zip(args.prefiller_hosts, args.prefiller_ports))
-    args.decoder_instances = list(zip(args.decoder_hosts, args.decoder_ports))
+    args.prefiller_instances = list(
+        zip(args.prefiller_hosts, args.prefiller_ports, strict=False)
+    )
+    args.decoder_instances = list(
+        zip(args.decoder_hosts, args.decoder_ports, strict=False)
+    )
     return args
 
 
@@ -685,7 +739,9 @@ def bootstrap_parent_process(args: argparse.Namespace) -> None:
     if args.workers <= 1:
         return
 
-    shared_scheduler = SharedProxyScheduler(args.prefiller_instances, args.decoder_instances)
+    shared_scheduler = SharedProxyScheduler(
+        args.prefiller_instances, args.decoder_instances
+    )
     NodeListener(shared_scheduler)
 
     authkey = os.urandom(16)
@@ -701,7 +757,9 @@ def _ensure_scheduler(args) -> SharedProxyScheduler:
     global shared_scheduler
     if shared_scheduler is not None:
         return shared_scheduler
-    shared_scheduler = SharedProxyScheduler(args.prefiller_instances, args.decoder_instances)
+    shared_scheduler = SharedProxyScheduler(
+        args.prefiller_instances, args.decoder_instances
+    )
     NodeListener(shared_scheduler)
     return shared_scheduler
 
@@ -731,8 +789,10 @@ async def _detect_context_length_from_backend(runtime: WorkerRuntime) -> int | N
                 logger.debug("/v1/models from %s returned empty data", key)
                 continue
             max_len = models[0].get("max_model_len")
-            if isinstance(max_len, (int, float)) and max_len > 0:
-                logger.info("Detected context length %s from PNode %s", int(max_len), key)
+            if isinstance(max_len | int | float) and max_len > 0:
+                logger.info(
+                    "Detected context length %s from PNode %s", int(max_len), key
+                )
                 return int(max_len)
             logger.debug("No max_model_len in model data from %s: %s", key, models[0])
         except Exception as exc:
@@ -751,8 +811,10 @@ async def _detect_context_length_from_backend(runtime: WorkerRuntime) -> int | N
             if not isinstance(models, list) or not models:
                 continue
             max_len = models[0].get("max_model_len")
-            if isinstance(max_len, (int, float)) and max_len > 0:
-                logger.info("Detected context length %s from DNode %s", int(max_len), key)
+            if isinstance(max_len | int | float) and max_len > 0:
+                logger.info(
+                    "Detected context length %s from DNode %s", int(max_len), key
+                )
                 return int(max_len)
         except Exception:
             continue
@@ -826,7 +888,9 @@ def with_cancellation(handler_func):
         request = kwargs["request"]
         handler_task = asyncio.create_task(handler_func(*args, **kwargs))
         cancellation_task = asyncio.create_task(listen_for_disconnect(request))
-        done, pending = await asyncio.wait([handler_task, cancellation_task], return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(
+            [handler_task, cancellation_task], return_when=asyncio.FIRST_COMPLETED
+        )
         for task in pending:
             task.cancel()
         if handler_task in done:
@@ -862,7 +926,9 @@ def build_prefill_request(req_data: dict) -> dict:
     return payload
 
 
-def build_decoder_request(req_data: dict, input_tokens: int, context_length: int) -> dict:
+def build_decoder_request(
+    req_data: dict, input_tokens: int, context_length: int
+) -> dict:
     """Build the request to send to the decoder.
 
     The decoder receives the **full prompt** (so it has context), but
@@ -946,7 +1012,7 @@ async def send_request_to_service(
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
             else:
                 logger.error("All %s attempts failed for %s.", max_retries, endpoint)
-                raise last_exc
+                raise last_exc from exc
         except httpx.RequestError as exc:
             logger.warning("Attempt %s failed for %s: %s", attempt, endpoint, exc)
             last_exc = exc
@@ -954,7 +1020,7 @@ async def send_request_to_service(
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
             else:
                 logger.error("All %s attempts failed for %s.", max_retries, endpoint)
-                raise last_exc
+                raise last_exc from exc
 
 
 async def stream_service_response_with_retry(
@@ -968,7 +1034,9 @@ async def stream_service_response_with_retry(
     headers = auth_headers(request_id)
     for attempt in range(1, max_retries + 1):
         try:
-            async with client.stream("POST", endpoint, json=req_data, headers=headers) as response:
+            async with client.stream(
+                "POST", endpoint, json=req_data, headers=headers
+            ) as response:
                 response.raise_for_status()
                 first_chunk_sent = False
                 async for chunk in response.aiter_bytes():
@@ -1002,27 +1070,41 @@ async def stream_service_response_with_retry(
                 raise
             # Retriable errors: 429 (rate limit) and 5xx (server errors).
             if attempt < max_retries:
-                logger.warning("Attempt %s failed for streaming %s: %s", attempt, endpoint, exc)
+                logger.warning(
+                    "Attempt %s failed for streaming %s: %s", attempt, endpoint, exc
+                )
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
             else:
-                logger.error("All %s attempts failed for streaming %s.", max_retries, endpoint)
+                logger.error(
+                    "All %s attempts failed for streaming %s.", max_retries, endpoint
+                )
                 raise exc
         except httpx.RequestError as exc:
             if attempt < max_retries:
-                logger.warning("Attempt %s failed for streaming %s: %s", attempt, endpoint, exc)
+                logger.warning(
+                    "Attempt %s failed for streaming %s: %s", attempt, endpoint, exc
+                )
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
             else:
-                logger.error("All %s attempts failed for streaming %s.", max_retries, endpoint)
+                logger.error(
+                    "All %s attempts failed for streaming %s.", max_retries, endpoint
+                )
                 raise exc
         except Exception as exc:
             if "first_chunk_sent" in locals() and first_chunk_sent:
-                logger.error("Streaming to client interrupted after response started: %s", exc)
+                logger.error(
+                    "Streaming to client interrupted after response started: %s", exc
+                )
                 return
             if attempt < max_retries:
-                logger.warning("Attempt %s failed for streaming %s: %s", attempt, endpoint, exc)
+                logger.warning(
+                    "Attempt %s failed for streaming %s: %s", attempt, endpoint, exc
+                )
                 await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
             else:
-                logger.error("All %s attempts failed for streaming %s.", max_retries, endpoint)
+                logger.error(
+                    "All %s attempts failed for streaming %s.", max_retries, endpoint
+                )
                 raise exc
 
 
@@ -1034,12 +1116,21 @@ async def _abort_prefill_selection(
     is_initial_request: bool,
 ) -> None:
     if is_initial_request:
-        await runtime.schedule("finish_request", prefiller_key, prefiller_score, None, 0.0, release_prefill_kv=True)
+        await runtime.schedule(
+            "finish_request",
+            prefiller_key,
+            prefiller_score,
+            None,
+            0.0,
+            release_prefill_kv=True,
+        )
     else:
         await runtime.schedule("release_prefill_kv", prefiller_key, prefiller_score)
 
 
-async def _finish_instance(runtime: WorkerRuntime, info: InstanceInfo, *, release_prefill_kv: bool) -> None:
+async def _finish_instance(
+    runtime: WorkerRuntime, info: InstanceInfo, *, release_prefill_kv: bool
+) -> None:
     await runtime.schedule(
         "finish_request",
         info.prefiller_key,
@@ -1095,7 +1186,12 @@ async def assign_instances(
             base_delay=args.retry_delay,
         )
     except Exception:
-        await _abort_prefill_selection(runtime, prefiller_key, prefiller_score, is_initial_request=is_initial_request)
+        await _abort_prefill_selection(
+            runtime,
+            prefiller_key,
+            prefiller_score,
+            is_initial_request=is_initial_request,
+        )
         raise
 
     kv_transfer_params = response.json().get("kv_transfer_params", {})
@@ -1119,7 +1215,12 @@ async def assign_instances(
     try:
         decoder = await runtime.schedule("pick_decoder", decoder_score)
     except Exception:
-        await _abort_prefill_selection(runtime, prefiller_key, prefiller_score, is_initial_request=is_initial_request)
+        await _abort_prefill_selection(
+            runtime,
+            prefiller_key,
+            prefiller_score,
+            is_initial_request=is_initial_request,
+        )
         raise
 
     prefiller_client = await runtime.get_client(ServerRole.PREFILL, prefiller_key)
@@ -1145,9 +1246,19 @@ async def reassign_instances(
     previous_instance: InstanceInfo,
 ) -> InstanceInfo:
     runtime = get_runtime()
-    await runtime.schedule("release_prefill_kv", previous_instance.prefiller_key, previous_instance.prefiller_score)
-    await runtime.schedule("release_decoder", previous_instance.decoder_key, previous_instance.decoder_score)
-    return await assign_instances(api, req_data, request_length, is_initial_request=False)
+    await runtime.schedule(
+        "release_prefill_kv",
+        previous_instance.prefiller_key,
+        previous_instance.prefiller_score,
+    )
+    await runtime.schedule(
+        "release_decoder",
+        previous_instance.decoder_key,
+        previous_instance.decoder_score,
+    )
+    return await assign_instances(
+        api, req_data, request_length, is_initial_request=False
+    )
 
 
 async def handle_completions_impl(api: str, request: Request):
@@ -1159,7 +1270,9 @@ async def handle_completions_impl(api: str, request: Request):
         req_body = await request.body()
         request_length = len(req_body)
         try:
-            instance_info = await assign_instances(api, req_data, request_length, is_initial_request=True)
+            instance_info = await assign_instances(
+                api, req_data, request_length, is_initial_request=True
+            )
         except PayloadTooLargeError as exc:
             return JSONResponse(
                 status_code=PAYLOAD_TOO_LARGE_STATUS_CODE,
@@ -1200,7 +1313,9 @@ async def handle_completions_impl(api: str, request: Request):
                 nonlocal released_kv
                 if not released_kv:
                     await runtime.schedule(
-                        "release_prefill_kv", instance_info.prefiller_key, instance_info.prefiller_score
+                        "release_prefill_kv",
+                        instance_info.prefiller_key,
+                        instance_info.prefiller_score,
                     )
                     released_kv = True
 
@@ -1210,9 +1325,13 @@ async def handle_completions_impl(api: str, request: Request):
                     # Build a decoder-specific request that caps max_tokens
                     # so input + output fits within the model's context length.
                     decoder_req = build_decoder_request(
-                        req_data, instance_info.input_tokens, instance_info.context_length
+                        req_data,
+                        instance_info.input_tokens,
+                        instance_info.context_length,
                     )
-                    decoder_client = await runtime.get_client(ServerRole.DECODE, instance_info.decoder_key)
+                    decoder_client = await runtime.get_client(
+                        ServerRole.DECODE, instance_info.decoder_key
+                    )
                     async for chunk in stream_service_response_with_retry(
                         decoder_client,
                         api,
@@ -1247,7 +1366,12 @@ async def handle_completions_impl(api: str, request: Request):
                         choice = choices[0]
                         delta = choice.get("delta") or {}
                         message = choice.get("message") or {}
-                        content = delta.get("content") or message.get("content") or choice.get("text") or ""
+                        content = (
+                            delta.get("content")
+                            or message.get("content")
+                            or choice.get("text")
+                            or ""
+                        )
                         generated_token += content
 
                         stop_reason = choice.get("stop_reason")
@@ -1264,9 +1388,15 @@ async def handle_completions_impl(api: str, request: Request):
                                 messages[0]["content"] = origin_prompt + generated_token
                             else:
                                 req_data["prompt"] = origin_prompt + generated_token
-                            req_data["max_tokens"] = origin_max_tokens - completion_tokens + retry_count
-                            tmp_request_length = len(json.dumps(req_data).encode("utf-8"))
-                            instance_info = await reassign_instances(api, req_data, tmp_request_length, instance_info)
+                            req_data["max_tokens"] = (
+                                origin_max_tokens - completion_tokens + retry_count
+                            )
+                            tmp_request_length = len(
+                                json.dumps(req_data).encode("utf-8")
+                            )
+                            instance_info = await reassign_instances(
+                                api, req_data, tmp_request_length, instance_info
+                            )
                             released_kv = False
                             break
                         if retry_count > 0 and not stream_flag:
@@ -1293,11 +1423,15 @@ async def handle_completions_impl(api: str, request: Request):
                     instance_info.request_id,
                 )
             finally:
-                await _finish_instance(runtime, instance_info, release_prefill_kv=not released_kv)
+                await _finish_instance(
+                    runtime, instance_info, release_prefill_kv=not released_kv
+                )
                 released_kv = True
                 request_released = True
 
-        media_type = "text/event-stream; charset=utf-8" if stream_flag else "application/json"
+        media_type = (
+            "text/event-stream; charset=utf-8" if stream_flag else "application/json"
+        )
         return StreamingResponse(generate_stream(), media_type=media_type)
     except Exception:
         import traceback
@@ -1347,13 +1481,22 @@ async def adjust_instances_impl(adjust_mode: str, request: Request):
     snapshot = scheduler.get_snapshot()
     return {
         "message": all_msg,
-        "current_prefill_instances": [f"{server['host']}:{server['port']}" for server in snapshot["prefill_instances"]],
-        "current_decode_instances": [f"{server['host']}:{server['port']}" for server in snapshot["decode_instances"]],
+        "current_prefill_instances": [
+            f"{server['host']}:{server['port']}"
+            for server in snapshot["prefill_instances"]
+        ],
+        "current_decode_instances": [
+            f"{server['host']}:{server['port']}"
+            for server in snapshot["decode_instances"]
+        ],
     }
 
 
 def parse_server_addresses(instances: list[str]) -> list[tuple[str, int]]:
-    return [(host, int(port)) for host, port in (instance.split(":") for instance in instances)]
+    return [
+        (host, int(port))
+        for host, port in (instance.split(":") for instance in instances)
+    ]
 
 
 async def _fetch_backend_models() -> list[dict[str, Any]]:
@@ -1377,7 +1520,12 @@ async def _fetch_backend_models() -> list[dict[str, Any]]:
             if isinstance(models, list):
                 return models
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            logger.debug("Failed to fetch /models from %s:%s: %s", server["host"], server["port"], exc)
+            logger.debug(
+                "Failed to fetch /models from %s:%s: %s",
+                server["host"],
+                server["port"],
+                exc,
+            )
             continue
     return []
 
@@ -1388,7 +1536,10 @@ async def list_models():
     models = await _fetch_backend_models()
     if models:
         return {"object": "list", "data": models}
-    return JSONResponse(status_code=503, content={"error": "No healthy backend available to list models"})
+    return JSONResponse(
+        status_code=503,
+        content={"error": "No healthy backend available to list models"},
+    )
 
 
 @app.get("/v1/models/{model_id:path}")
@@ -1397,7 +1548,9 @@ async def retrieve_model(model_id: str):
     for m in models:
         if m.get("id") == model_id:
             return {"object": "model", **m}
-    return JSONResponse(status_code=404, content={"error": f"Model '{model_id}' not found"})
+    return JSONResponse(
+        status_code=404, content={"error": f"Model '{model_id}' not found"}
+    )
 
 
 @app.get("/version")
@@ -1408,7 +1561,10 @@ async def get_version():
 @app.get("/v1/props")
 @app.get("/props")
 async def get_props():
-    return {"name": "vllm-lb-proxy", "description": "vLLM Ascend load-balance proxy server"}
+    return {
+        "name": "vllm-lb-proxy",
+        "description": "vLLM Ascend load-balance proxy server",
+    }
 
 
 @app.get("/api/tags")
@@ -1423,7 +1579,12 @@ async def ollama_list_models():
             "modified_at": m.get("created", 0),
             "size": 0,
             "digest": m.get("id", ""),
-            "details": {"parent_model": "", "format": "gguf", "family": "llama", "families": ["llama"]},
+            "details": {
+                "parent_model": "",
+                "format": "gguf",
+                "family": "llama",
+                "families": ["llama"],
+            },
         }
         for m in models
     ]
@@ -1454,7 +1615,9 @@ async def ollama_show_model(request: Request):
                 },
                 "model_info": {"general.architecture": "llama"},
             }
-    return JSONResponse(status_code=404, content={"error": f"Model '{model_name}' not found"})
+    return JSONResponse(
+        status_code=404, content={"error": f"Model '{model_name}' not found"}
+    )
 
 
 @app.post("/v1/completions")
@@ -1475,14 +1638,16 @@ async def reset_prefix_cache(request: Request):
     runtime = get_runtime()
     await runtime.sync_clients()
     snapshot = runtime.scheduler.get_snapshot()
-    backend_instances = [(ServerRole.PREFILL, server) for server in snapshot["prefill_instances"]] + [
-        (ServerRole.DECODE, server) for server in snapshot["decode_instances"]
-    ]
+    backend_instances = [
+        (ServerRole.PREFILL, server) for server in snapshot["prefill_instances"]
+    ] + [(ServerRole.DECODE, server) for server in snapshot["decode_instances"]]
     failures: list[str] = []
     for role, server in backend_instances:
         base_url = build_server_url(server["host"], server["port"])
         try:
-            client = await runtime.get_client(role, server_key(server["host"], server["port"]))
+            client = await runtime.get_client(
+                role, server_key(server["host"], server["port"])
+            )
             resp = await client.post(f"{base_url}/reset_prefix_cache", params=params)
             resp.raise_for_status()
         except Exception as e:

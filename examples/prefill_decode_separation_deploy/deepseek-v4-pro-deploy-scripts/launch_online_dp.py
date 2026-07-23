@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# launch_online_dp.py — 通用 DP 启动器（PNode / DNode 共用）
+# launch_online_dp.py — 通用 DP 启动器(PNode / DNode 共用)
 # ==============================================================================
-# 原始文档为每个节点维护一份完全相同的 launch_online_dp.py，唯一差异是
-# 内部硬编码的脚本名（pnode0.sh / pnode1.sh / ... / dnode3.sh）。
-# 本脚本增加 --script 参数，将脚本名外部化，实现"一份代码，所有节点共用"。
+# 原始文档为每个节点维护一份完全相同的 launch_online_dp.py,唯一差异是
+# 内部硬编码的脚本名(pnode0.sh / pnode1.sh / ... / dnode3.sh).
+# 本脚本增加 --script 参数,将脚本名外部化,实现"一份代码,所有节点共用".
 #
-# 使用方式（通常由 start_pnode.sh / start_dnode.sh 自动调用）：
+# 使用方式(通常由 start_pnode.sh / start_dnode.sh 自动调用):
 #   python launch_online_dp.py \
 #       --script ./pnode.sh \
 #       --dp-size 4 --tp-size 8 --dp-size-local 1 \
@@ -75,8 +75,16 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_command(script, visible_devices, dp_rank, vllm_engine_port,
-                 dp_size, dp_address, dp_rpc_port, tp_size):
+def run_command(
+    script,
+    visible_devices,
+    dp_rank,
+    vllm_engine_port,
+    dp_size,
+    dp_address,
+    dp_rpc_port,
+    tp_size,
+):
     command = [
         "bash",
         script,

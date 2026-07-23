@@ -3,13 +3,13 @@
 @@ -491,14 +491,26 @@
          # NOTE: it imposes a limit on the number of input tokens and conflicts with FlashComm
          self.enable_mlapo = get_ascend_config().enable_mlapo
- 
+
 -        assert self.indexer is not None, "Indexer is required for DSA."
 +        assert self.indexer is not None or self.skip_topk, (
 +            "Indexer is required for DSA unless skip_topk is set "
 +            "(IndexCache 'shared' layer reusing a previous layer's top-k)."
 +        )
- 
+
          self.local_num_heads = self.num_heads
          self.vllm_config = get_current_vllm_config()
 -        self.use_index_cache = self.skip_topk or getattr(
@@ -34,7 +34,7 @@
              self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
 @@ -506,11 +518,20 @@
          self.layer_name = kwargs.get("layer_name")
- 
+
          # indexer param
 -        self.n_head: int = self.indexer.n_head  # 64
 -        self.head_dim: int = self.indexer.head_dim  # 128
@@ -75,7 +75,7 @@
 @@ -1277,7 +1303,12 @@
              assert self.q_a_layernorm is not None, "q_a_layernorm must be initialized"
              q_c = self.q_a_layernorm(q_c)
- 
+
 -            k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
 +            if self.indexer is not None:
 +                k_li, k_li_scale = self.indexer_select_pre_process(x=hidden_states, cos=cos, sin=sin)
@@ -83,19 +83,18 @@
 +                # IndexCache "shared" layer: no indexer weights; the indexer
 +                # k cache of this layer is never used for selection.
 +                k_li, k_li_scale = None, None
- 
+
              wait_for_kv_layer_from_connector(layer_name)
- 
+
 @@ -1375,9 +1406,10 @@
                          slot_mapping=slot_mapping[: attn_metadata.num_actual_tokens],
                      )
- 
+
 -            k_li = self._get_full_kv(k_li, attn_metadata)
 +            if k_li is not None:
 +                k_li = self._get_full_kv(k_li, attn_metadata)
- 
+
 -        if kv_cache is not None:
 +        if kv_cache is not None and k_li is not None:
              if self.is_kv_producer:
                  attn_metadata.reshape_cache_event = torch.npu.Event()
- 

@@ -105,10 +105,10 @@ nohup vllm serve "$model_path" \
         }
     }' \
 	--additional-config '{
-		"enable_cpu_binding": true, 
-		"recompute_scheduler_enable": true, 
+		"enable_cpu_binding": true,
+		"recompute_scheduler_enable": true,
 		"ascend_compilation_config": {"enable_npugraph_ex": true,"enable_static_kernel":false}
 	}' 2>&1 | tee "$log_dir/dnode_${local_ip}_rank${dp_rank}.log" &
-		
-		
+
+
 # "use_ascend_direct": true,
