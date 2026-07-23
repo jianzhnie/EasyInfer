@@ -92,7 +92,15 @@ def patch_enable_native_zero_expert(module: object) -> None:
             and router.zero_expert_type is not None
         ):
             # Derive zero-expert count from the routing bias width
-            # (real + zero) minus the logical expert count.
+            # (real + zero) minus the PER-RANK logical expert count.
+            #
+            # IMPORTANT: router.num_logical_experts is the GLOBAL total
+            # across all EP ranks, but bias.shape[-1] only covers the
+            # experts LOCAL to this rank.  For EP that mismatch gives a
+            # negative n_zero → native path stays off → zero-expert IDs
+            # reach the dispatch kernel → garbled output.
+            #
+            # Use self.global_num_experts (per-rank count) instead.
             n_zero = 0
             bias = getattr(router, "e_score_correction_bias", None)
             if bias is not None:
@@ -106,7 +114,7 @@ def patch_enable_native_zero_expert(module: object) -> None:
                         tuple(bias.shape),
                         bias.ndim,
                     )
-                n_zero = bias.shape[-1] - router.num_logical_experts
+                n_zero = bias.shape[-1] - self.global_num_experts
             # max(...,0): when n_zero==0 the model truly has no zero
             # experts — do NOT enable the native path (Bug #3 in review).
             # Previously ``max(n_zero, 1)`` forced the path on for every
@@ -133,13 +141,13 @@ def patch_enable_native_zero_expert(module: object) -> None:
                 raise RuntimeError(
                     "[fix_ep_zero_expert] zero_expert_type=%s is set but "
                     "derived n_zero=0 "
-                    "(bias.shape=%s, num_logical=%s).  "
+                    "(bias.shape=%s, global_num_experts=%s).  "
                     "Cannot enable native zero-expert path — the model "
                     "will crash without ID sanitization.  "
                     "The vllm-ascend version may be incompatible.",
                     router.zero_expert_type,
                     tuple(bias.shape) if bias is not None else "N/A",
-                    router.num_logical_experts,
+                    self.global_num_experts,
                 )
 
     module.AscendFusedMoE.__init__ = _init
