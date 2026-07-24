@@ -83,82 +83,9 @@ bash examples/deepseek_v4_flash/vllm_server.sh
 nohup bash examples/deepseek_v4_flash/vllm_server.sh > deepseek_v4_flash_server.log 2>&1 &
 ```
 
-## 环境变量说明
+## 环境变量
 
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp` | 模型权重路径 |
-| `SERVED_MODEL_NAME` | `deepseek-v4-flash` | API 中的模型名称 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8000` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 (建议 = 单节点 NPU 数) |
-| `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 (多节点时设为节点数) |
-| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 模型必需) |
-| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
-
-### 内存与量化
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `ascend` | 量化方式 (W8A8 使用 Ascend 量化) |
-| `GPU_MEMORY_UTILIZATION` | `0.90` | NPU 显存利用率 |
-| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB) |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `65536` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `16` | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `8192` | 每 step 最大处理 token 数 |
-| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充开关 |
-
-### 投机解码 (MTP)
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SPECULATIVE_METHOD` | `mtp` | 投机解码方法 (A2: `mtp`, A3/PD: `deepseek_mtp`) |
-| `SPECULATIVE_NUM_TOKENS` | `1` | 每次投机生成的 token 数 (A2 推荐 1) |
-
-### 华为 NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `200` | HCCL 缓冲区大小 (MB) |
-| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `8` | OpenMP 线程数 (A2: 8, A3: 10) |
-| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配配置 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-| `USE_MULTI_GROUPS_KV_CACHE` | `1` | KV Cache 分组 |
-| `USE_MULTI_BLOCK_POOL` | `1` | 多 Block Pool |
-| `ACL_OP_INIT_MODE` | `1` | 算子初始化模式 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | 通信优化 |
-| `LD_PRELOAD` | `/usr/lib/aarch64-linux-gnu/libjemalloc.so.2` | 内存分配器 |
-
-### 加速特性
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PREFIX_CACHING` | `1` | 前缀缓存 |
-| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph (NPU 推荐) |
-| `NUM_SCHEDULER_STEPS` | `8` | 多步调度步数 |
-| `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 |
-
-### 工具调用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `deepseek_v4` | 工具调用解析器 (需同时设置 `--tokenizer-mode deepseek_v4` 和 `--reasoning-parser deepseek_v4`) |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
 
 ## 并行策略推荐
 

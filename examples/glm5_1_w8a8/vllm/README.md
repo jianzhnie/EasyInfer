@@ -83,19 +83,7 @@ curl http://localhost:8012/v1/chat/completions \
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../Eco-Tech/GLM-5.1-w8a8` | 模型权重路径 |
-| `PORT` | `8012` | 监听端口 |
-| `TP` | `8` | 张量并行度（**勿用 16，输出乱码**） |
-| `PP` | `2` | 流水线并行度（PP>1 时需 `ENABLE_MTP=0`） |
-| `MAX_MODEL_LEN` | `31744` | 最大上下文 |
-| `MAX_NUM_SEQS` | `8` | 最大并发序列 |
-| `GPU_MEM_UTIL` | `0.95` | 显存利用率 |
-| `ENABLE_MTP` | `0` | MTP 投机解码开关 |
-| `ENFORCE_EAGER` | `0` | =1 时用 `--enforce-eager` 替代 cudagraph 编译 |
-| `NIC_NAME` | 空 | 多节点高速网卡名（HCCL/GLOO 绑定） |
-| `RAY_ADDRESS` | 空 | Ray head 地址（如 `10.42.11.194:6379`） |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
 
 ## 验证记录
 

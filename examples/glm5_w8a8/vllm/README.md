@@ -79,17 +79,7 @@ curl http://localhost:8011/v1/chat/completions \
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../Eco-Tech/GLM-5-w8a8` | 模型权重路径 |
-| `PORT` | `8011` | 监听端口 |
-| `TP` | `16` | 张量并行度 |
-| `MAX_MODEL_LEN` | `32768` | 最大上下文 |
-| `MAX_NUM_SEQS` | `48` | 最大并发序列 |
-| `GPU_MEM_UTIL` | `0.95` | 显存利用率 |
-| `ENABLE_MTP` | `0` | MTP 投机解码开关 |
-| `NIC_NAME` | 空 | 多节点高速网卡名（HCCL/GLOO 绑定） |
-| `RAY_ADDRESS` | 空 | Ray head 地址（如 `10.42.11.194:6379`） |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
 
 ## 验证记录
 

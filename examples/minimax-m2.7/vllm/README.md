@@ -87,82 +87,8 @@ curl http://localhost:8004/v1/chat/completions \
 
 ## 环境变量
 
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/MiniMaxAI/MiniMax-M2.7` | 模型权重路径 |
-| `SERVED_MODEL_NAME` | `minimax-m2.7` | API 中的模型名称 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8004` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TP` / `TENSOR_PARALLEL_SIZE` | `4` | 张量并行度 (A2 官方推荐) |
-| `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
-| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
-
-### 内存与量化
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `fp8` | FP8 量化 (float8_e4m3fn, 模型内置) |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.85` | NPU 显存利用率 |
-| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB) |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `16` | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `8192` | 每 step 最大 token 数 |
-| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
-
-### NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `1024` | HCCL 缓冲区大小 (MB) |
-| `VLLM_ASCEND_ENABLE_FUSED_MC2` | `1` | MiniMax 专用融合 MC2 算子 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | FlashComm 通信优化 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-
-### 加速特性
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PREFIX_CACHING` | `1` | 前缀缓存 |
-| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph |
-| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
-| `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展 |
-| `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
-| `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
-
-### 工具调用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `minimax_m2` | MiniMax 工具调用解析器 |
-
-## Claude Code 集成
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:8004 \
-ANTHROPIC_API_KEY=dummy \
-ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=minimax-m2.7 \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=minimax-m2.7 \
-ANTHROPIC_DEFAULT_OPUS_MODEL=minimax-m2.7 \
-claude
-```
-
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 ## 功能验证清单
 
 ### 基础功能

@@ -92,85 +92,8 @@ curl http://localhost:8018/v1/chat/completions \
 
 ## 环境变量
 
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Qwen/Qwen3-235B-A22B-Instruct-2507` | 模型权重路径 |
-| `SERVED_MODEL_NAME` | `qwen3-235b-a22b` | API 中的模型名称 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8018` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TP` / `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 |
-| `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
-| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (128 专家 MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
-
-### 内存与量化
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `ascend` | W4A8 量化 (单节点必需) |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.90` | NPU 显存利用率 |
-| `SWAP_SPACE` | `32` | CPU 交换空间 (GiB, 128 专家需较大空间) |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `16` | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `16384` | 每 step 最大 token 数 |
-| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
-| `CHAT_TEMPLATE_CONTENT_FORMAT` | `string` | Chat Template 内容格式 |
-
-### NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `800` | HCCL 缓冲区大小 (MB) |
-| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
-| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `1` | FlashComm 通信优化 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-
-### 加速特性
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PREFIX_CACHING` | `1` | 前缀缓存 (Agent 优化) |
-| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph (NPU 推荐) |
-| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
-| `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展 |
-| `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
-| `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
-
-### 工具调用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `hermes` | Qwen3 工具调用解析器 |
-
-## Claude Code 集成
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:8018 \
-ANTHROPIC_API_KEY=dummy \
-ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=qwen3-235b-a22b \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3-235b-a22b \
-ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3-235b-a22b \
-claude
-```
-
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 ## 功能验证清单
 
 ### 基础功能

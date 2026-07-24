@@ -70,15 +70,8 @@ curl http://localhost:8013/v1/chat/completions \
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../Eco-Tech/Kimi-K2.7-Code-w4a8` | 模型权重路径 |
-| `PORT` | `8013` | 监听端口 |
-| `TP` / `PP` | `8` / `2` | 并行度 |
-| `MAX_MODEL_LEN` | `32768` | 最大上下文 |
-| `MAX_NUM_SEQS` | `16` | 最大并发序列 |
-| `GPU_MEM_UTIL` | `0.92` | 显存利用率 |
-
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 ## 验证记录
 
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |

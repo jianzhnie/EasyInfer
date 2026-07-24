@@ -82,74 +82,8 @@ curl http://localhost:8001/v1/chat/completions \
 
 ## 环境变量
 
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5` | 模型权重路径 |
-| `SERVED_MODEL_NAME` | `glm-5` | API 中的模型名称 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8001` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TP` / `TENSOR_PARALLEL_SIZE` | `8` | 张量并行度 |
-| `PP` / `PIPELINE_PARALLEL_SIZE` | `1` | 流水线并行度 |
-| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `1` | 数据并行度 |
-
-### 内存与量化
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `ascend` | Ascend W4A8 量化 |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `0.94` | NPU 显存利用率 |
-| `SWAP_SPACE` | `16` | CPU 交换空间 (GiB) |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `8` | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `16384` | 每 step 最大 token 数 |
-| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
-| `CHAT_TEMPLATE_CONTENT_FORMAT` | `string` | Chat Template 内容格式 |
-
-### NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `200` | HCCL 缓冲区大小 (MB) |
-| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
-| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `0` | 通信优化 (GLM 必须为 0) |
-| `VLLM_ASCEND_ENABLE_MLAPO` | `1` | MLA 算子融合优化 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-
-### 投机解码 (MTP)
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SPECULATIVE_METHOD` | `mtp` | 投机解码方法 |
-| `SPECULATIVE_NUM_TOKENS` | `3` | 每次投机 token 数 |
-
-## Claude Code 集成
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:8001 \
-ANTHROPIC_API_KEY=dummy \
-ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5 \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5 \
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5 \
-claude
-```
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 
 ## 功能验证清单
 

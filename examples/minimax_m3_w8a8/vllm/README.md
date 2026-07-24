@@ -57,14 +57,8 @@ bash examples/minimax_m3_w8a8/vllm/curl_test.sh
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../Eco-Tech/MiniMax-M3-w8a8` | 模型权重路径 |
-| `PORT` | `8014` | 监听端口 |
-| `TP` / `PP` | `8` / `1` | 并行度 |
-| `MAX_MODEL_LEN` | `32768` | 最大上下文 |
-| `GPU_MEM_UTIL` | `0.95` | 显存利用率 |
-
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 ## 验证记录
 
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |

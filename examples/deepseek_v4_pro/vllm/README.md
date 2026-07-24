@@ -82,41 +82,10 @@ bash examples/deepseek_v4_pro/vllm/run_vllm.sh
 nohup bash examples/deepseek_v4_pro/vllm/run_vllm.sh > deepseek_v4_pro.log 2>&1 &
 ```
 
-## 环境变量说明
+## 环境变量
 
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/DeepSeek-V4-Pro-w4a8-mtp` | 模型权重路径 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8000` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TP` | `8` | 张量并行度 (单节点 = 8) |
-| `PP` | `1` | 流水线并行度 (多节点时增加) |
-| `GPU_MEM_UTIL` | `0.92` | NPU 显存利用率 |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `32768` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `64` | 最大并发请求数 |
-
-### 华为 NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `400` | HCCL 缓冲区大小 (MB, 384 专家需更大) |
-| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
-| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 
 ## 并行策略推荐
 
@@ -192,18 +161,6 @@ curl http://localhost:8000/v1/chat/completions \
     "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
     "max_tokens": 100
   }'
-```
-
-## Claude Code 集成
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:8000 \
-ANTHROPIC_API_KEY=dummy \
-ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-pro \
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro \
-claude
 ```
 
 ## 常见问题

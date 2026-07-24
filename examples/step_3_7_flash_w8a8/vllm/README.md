@@ -60,16 +60,8 @@ curl http://localhost:8015/v1/chat/completions \
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../Eco-Tech/Step-3.7-Flash-w8a8-mtp` | 模型权重路径 |
-| `PORT` | `8015` | 监听端口 |
-| `TP` / `PP` | `8` / `1` | 并行度 |
-| `MAX_MODEL_LEN` | `32768` | 最大上下文 |
-| `MAX_NUM_SEQS` | `32` | 最大并发序列 |
-| `GPU_MEM_UTIL` | `0.92` | 显存利用率 |
-| `ENABLE_MTP` | `1` | MTP 投机解码开关 |
-
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
+> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
 ## 验证记录
 
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
