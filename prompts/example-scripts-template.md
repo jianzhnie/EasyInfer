@@ -197,6 +197,7 @@ vllm serve "$MODEL_PATH" \
 | DeepSeek-V4-Pro | 8005 |
 | MiniMax-M2.5 | 8006 |
 | GLM-5.2-W8A8 | 8007 |
+| GLM-5.2-W4A8C8 | 8008 |
 | LongCat | 8010 |
 | GLM-5-W8A8 | 8011 |
 | GLM-5.1-W8A8 | 8012 |

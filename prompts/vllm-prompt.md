@@ -4,8 +4,8 @@
 
 - **集群**: <N> 节点 × 8 昇腾 NPU (Atlas 800 A2/A3, 每卡 64G)
 - **框架**: vLLM-Ascend + Ray 分布式
-- **镜像**: `<镜像名>` (quay.io/ascend/vllm-ascend)
-- **容器**: `<容器名>`
+- **镜像**: `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` (quay.io/ascend/vllm-ascend)
+- **容器**: `vllm-ascend-env`
 - **挂载**: `/home/jianzhnie/llmtuner` → 容器内同路径
 - **节点文件**: /home/jianzhnie/llmtuner/llm/EasyInfer/node_list0.txt
 
@@ -13,7 +13,7 @@
 
 为指定模型完成部署脚本、测试脚本和文档，并验证模型功能正常。
 
-> 模型基路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech`
+模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech` 下的所有模型
 
 ## 输出要求
 
