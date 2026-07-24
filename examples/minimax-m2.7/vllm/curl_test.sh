@@ -15,6 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 
 export PORT="${PORT:-8004}"
-export MODEL_NAME="${MODEL_NAME:-minimax-m2.7}"
+export MODEL_NAME="${MODEL_NAME:-MiniMax-M2.7}"
 # export ENABLE_VISION=1  # 多模态模型取消注释
 exec bash "${SCRIPT_DIR}/../../curl_test.sh" "$@"
