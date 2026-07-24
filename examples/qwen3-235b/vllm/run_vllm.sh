@@ -48,6 +48,7 @@ export VLLM_USE_MODELSCOPE=False
 
 # Fallback variables for older versions
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export VLLM_ASCEND_ENABLE_MLAPO=0
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 
 # v0.20.2 additional_config format

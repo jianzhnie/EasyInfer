@@ -58,6 +58,14 @@ curl http://localhost:8015/v1/chat/completions \
   -d '{"model":"step-3.7-flash","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
 
+## 并行策略
+
+| 场景 | TP | PP | DP | NPU | 上下文 | 量化 | 状态 |
+|------|-----|-----|-----|-----|--------|------|------|
+| 单节点 | 8 | 1 | 1 | 8 | 32K | W8A8 | ❌ |
+
+> 待上游修复 Step3p7 checkpoint 兼容性后验证。
+
 ## 环境变量
 
 > 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。

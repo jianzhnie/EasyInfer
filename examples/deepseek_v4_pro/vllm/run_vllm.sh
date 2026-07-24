@@ -2,7 +2,7 @@
 # DeepSeek-V4-Pro W4A8 — vLLM Ascend 0.22.1rc1 Deployment
 # Architecture: DeepseekV4ForCausalLM | 384 Experts | MoE | MTP=1
 # Max Position: 1048576 | Deploy: 4K context (2-node default to fit KV cache)
-set -eo pipefail
+set -euo pipefail
 
 # CANN environment
 set +u

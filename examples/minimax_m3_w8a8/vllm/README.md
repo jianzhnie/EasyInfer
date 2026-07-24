@@ -55,6 +55,14 @@ nohup bash examples/minimax_m3_w8a8/vllm/run_vllm.sh > minimax_m3_vllm.log 2>&1 
 bash examples/minimax_m3_w8a8/vllm/curl_test.sh
 ```
 
+## 并行策略
+
+| 场景 | TP | PP | DP | NPU | 上下文 | 量化 | 状态 |
+|------|-----|-----|-----|-----|--------|------|------|
+| 单节点 | 8 | 1 | 1 | 8 | 32K | W8A8 | ❌ |
+
+> 待 vllm-ascend 支持 MiniMaxM3SparseForConditionalGeneration 后验证。
+
 ## 环境变量
 
 > 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。

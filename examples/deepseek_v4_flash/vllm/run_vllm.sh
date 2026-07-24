@@ -6,7 +6,7 @@
 #  早已移除，当前脚本直接按原架构部署。）
 # 默认 TP=8 PP=1 (单节点)
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
 # Load Ascend CANN environment (required for libascend_hal.so)
 # CANN scripts reference unset vars; disable nounset during source
