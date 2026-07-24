@@ -4,6 +4,11 @@
 
 通用 Shell 规范（缩进、引号、函数命名等）见 CLAUDE.md，本文档仅描述模板特有的格式要求。
 
+> **相关文档**：
+> - [vllm_env_vars.md](vllm_env_vars.md) — 环境变量完整参考（脚本中所有可用变量及其含义）
+> - [example-readme-template.md](example-readme-template.md) — 模型 README 模板（与脚本配套的文档模板）
+> - [vllm-prompt.md](vllm-prompt.md) — 模型部署工作流（如何使用生成的脚本进行部署）
+
 ## 1. 文件结构
 
 每个模型在 `examples/<model>/vllm/` 下至少包含以下 3 个文件：

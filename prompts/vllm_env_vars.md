@@ -2,6 +2,11 @@
 
 本文档为 `vllm serve` 部署时的完整环境变量参考。模型特定的推荐值见各 `examples/<model>/vllm/run_vllm.sh`。
 
+> **相关文档**：
+> - [vllm-prompt.md](vllm-prompt.md) — 模型部署工作流（使用本文件中的变量）
+> - [example-scripts-template.md](example-scripts-template.md) — `run_vllm.sh` 脚本模板（如何引用这些变量）
+> - [example-readme-template.md](example-readme-template.md) — 模型 README 模板（如何文档化变量选择）
+
 ## 基础配置
 
 模型路径、服务地址和 API 名称。

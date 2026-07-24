@@ -6,10 +6,15 @@
 > - `<占位符>` 必须全部替换为实际值；`✅/⚠️/❌` 标记需根据验证结果更新
 > - 非 MoE 模型删专家相关内容，非 MTP 模型删投机解码章节，纯文本模型删多模态章节
 > - 环境变量表以 `glm5_2_w8a8` 为最完整参考；简化版以 `kimi_k2_7_code_w4a8` 为参考
+>
+> **相关文档**：
+> - [example-scripts-template.md](example-scripts-template.md) — 配套的 `run_vllm.sh` 脚本模板
+> - [vllm_env_vars.md](vllm_env_vars.md) — 环境变量参考（README 中配置参数的含义）
+> - [vllm-prompt.md](vllm-prompt.md) — 模型部署工作流（部署与验证流程）
 
 ---
 
-```
+```text
 # <模型名> <量化> 部署指南
 
 > **<框架版本>** | 端口: **<PORT>**
