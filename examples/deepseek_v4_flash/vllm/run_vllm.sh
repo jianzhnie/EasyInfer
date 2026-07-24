@@ -43,6 +43,7 @@ export USE_MULTI_GROUPS_KV_CACHE=1
 export USE_MULTI_BLOCK_POOL=1
 export ACL_OP_INIT_MODE=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export VLLM_ASCEND_ENABLE_MLAPO=1
 export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
 
 echo "[INFO] Starting DeepSeek-V4-Flash W8A8 MTP"

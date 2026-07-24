@@ -1,6 +1,6 @@
 # Kimi-K2.5 W4A8 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8005**
+> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8017**
 > 架构: KimiK25ForConditionalGeneration | 384 Experts | MoE | MLA | Vision (多模态) | W4A8 量化
 > 文本骨干: DeepseekV3ForCausalLM | max_position_embeddings: 262,144
 > Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (kimi_k2) ✅ | Anthropic Messages API ✅
@@ -75,8 +75,8 @@ nohup bash examples/kimi-k2.5/vllm/run_vllm.sh > kimi_k25_vllm.log 2>&1 &
 bash examples/kimi-k2.5/vllm/curl_test.sh
 
 # 手动验证
-curl http://localhost:8005/v1/models
-curl http://localhost:8005/v1/chat/completions \
+curl http://localhost:8017/v1/models
+curl http://localhost:8017/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"kimi-k2.5","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
@@ -100,7 +100,7 @@ curl http://localhost:8005/v1/chat/completions \
 | `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/moonshotai/Kimi-K2.5` | 模型权重路径 |
 | `SERVED_MODEL_NAME` | `kimi-k2.5` | API 中的模型名称 |
 | `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8005` | 监听端口 |
+| `PORT` | `8017` | 监听端口 |
 
 ### 并行配置
 
@@ -173,7 +173,7 @@ curl http://localhost:8005/v1/chat/completions \
 ## Claude Code 集成
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8005 \
+ANTHROPIC_BASE_URL=http://localhost:8017 \
 ANTHROPIC_API_KEY=dummy \
 ANTHROPIC_AUTH_TOKEN=dummy \
 ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5 \

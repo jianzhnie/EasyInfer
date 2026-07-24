@@ -189,15 +189,24 @@ vllm serve "$MODEL_PATH" \
 
 | 模型 | 端口 |
 |------|------|
-| GLM-5 | 8001 |
-| GLM-5.1 | 8002 |
-| Kimi-K2.6 | 8003 |
-| MiniMax-M2.7 | 8004 |
-| DeepSeek-V4 | 8005 |
+| DeepSeek-V4-Flash | 8000 |
+| GLM-5 / GLM-5-W4A8 | 8001 |
+| GLM-5.1-W4A8 | 8002 |
+| Kimi-K2.6-W4A8 | 8003 |
+| MiniMax-M2.7 / W8A8 | 8004 |
+| DeepSeek-V4-Pro | 8005 |
+| MiniMax-M2.5 | 8006 |
+| GLM-5.2-W8A8 | 8007 |
 | LongCat | 8010 |
-| Qwen3 | 8011 |
-| Step-3.7 | 8012 |
-| PCL-Model | 8013 |
+| GLM-5-W8A8 | 8011 |
+| GLM-5.1-W8A8 | 8012 |
+| Kimi-K2.7-Code-W4A8 | 8013 |
+| MiniMax-M3-W8A8 | 8014 |
+| Step-3.7-Flash-W8A8 | 8015 |
+| Kimi-K2-Thinking | 8016 |
+| Kimi-K2.5 | 8017 |
+| Qwen3-235B | 8018 |
+| LongCat-2Layer | 8300 |
 | <新模型> | 按顺序递增，避免冲突 |
 
 ---

@@ -29,6 +29,16 @@
 # =============================================================================
 set -euo pipefail
 
+# Load Ascend CANN environment
+set +u
+if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
+    source /usr/local/Ascend/cann/set_env.sh
+fi
+if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+set -u
+
 # Base configuration
 readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-2layer}"
 # readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Thinking-2601-2layer}"
@@ -86,6 +96,9 @@ export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-2048}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
+export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 export HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-1800}"
 export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 

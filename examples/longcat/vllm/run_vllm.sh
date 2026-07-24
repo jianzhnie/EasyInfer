@@ -27,6 +27,16 @@
 # =============================================================================
 set -euo pipefail
 
+# Load Ascend CANN environment
+set +u
+if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
+    source /usr/local/Ascend/cann/set_env.sh
+fi
+if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+fi
+set -u
+
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat}"
@@ -92,6 +102,8 @@ export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 
 # Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
 
 # ------------------------------------------------------------------------------
 # Expert Parallel (optional)
@@ -100,7 +112,10 @@ if [[ "$ENABLE_EP" == "1" ]]; then
     export ENABLE_EXPERT_PARALLEL=1
     # MC2 MoE comm breaks with zero-expert weight zeroing; the EasyInfer
     # plugin overrides the comm method to ALLGATHER (see fix_ep_zero_expert.py).
-    export EASYINFER_MOE_COMM="${EASYINFER_MOE_COMM:-allgather}"
+    # NOTE: ALLGATHER may cause float32/bfloat16 dtype mismatch in
+    # aclnnAddRmsNormBias (EZ1001).  Set EASYINFER_MOE_COMM=allgather to
+    # force ALLGATHER; leave empty (=default) to try MC2 first.
+    export EASYINFER_MOE_COMM="${EASYINFER_MOE_COMM:-}"
 fi
 
 # 前置检查

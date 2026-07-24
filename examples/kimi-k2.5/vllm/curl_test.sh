@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 
-export PORT="${PORT:-8005}"
+export PORT="${PORT:-8017}"
 export MODEL_NAME="${MODEL_NAME:-kimi-k2.5}"
 # export ENABLE_VISION=1  # 多模态模型取消注释
 exec bash "${SCRIPT_DIR}/../../curl_test.sh" "$@"

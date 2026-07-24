@@ -31,7 +31,7 @@ set -u
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Qwen"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Qwen3-235B-A22B-Instruct-2507}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8006}"
+readonly PORT="${PORT:-8018}"
 readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"

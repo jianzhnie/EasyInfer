@@ -1,6 +1,6 @@
 # Qwen3-235B-A22B 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8006**
+> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8018**
 > 架构: Qwen3MoeForCausalLM | 128 Experts | MoE | BF16
 > 已验证配置: TP=8 PP=1 (单节点) | 上下文: 32K | max_position_embeddings: 262,144
 > Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (hermes) ✅ | Anthropic Messages API ✅
@@ -74,8 +74,8 @@ bash examples/qwen3-235b-a22b-instruct-2507/vllm/vllm_server.sh
 bash examples/qwen3-235b-a22b-instruct-2507/vllm/curl_test.sh
 
 # 手动验证
-curl http://localhost:8006/v1/models
-curl http://localhost:8006/v1/chat/completions \
+curl http://localhost:8018/v1/models
+curl http://localhost:8018/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"qwen3-235b-a22b","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
@@ -99,7 +99,7 @@ curl http://localhost:8006/v1/chat/completions \
 | `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Qwen/Qwen3-235B-A22B-Instruct-2507` | 模型权重路径 |
 | `SERVED_MODEL_NAME` | `qwen3-235b-a22b` | API 中的模型名称 |
 | `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `8006` | 监听端口 |
+| `PORT` | `8018` | 监听端口 |
 
 ### 并行配置
 
@@ -162,7 +162,7 @@ curl http://localhost:8006/v1/chat/completions \
 ## Claude Code 集成
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8006 \
+ANTHROPIC_BASE_URL=http://localhost:8018 \
 ANTHROPIC_API_KEY=dummy \
 ANTHROPIC_AUTH_TOKEN=dummy \
 ANTHROPIC_DEFAULT_SONNET_MODEL=qwen3-235b-a22b \

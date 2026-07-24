@@ -33,7 +33,7 @@ set -u
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/moonshotai"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/Kimi-K2.5}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8005}"
+readonly PORT="${PORT:-8017}"
 readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"

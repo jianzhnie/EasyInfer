@@ -7,13 +7,13 @@
 - **镜像**: `<镜像名>` (quay.io/ascend/vllm-ascend)
 - **容器**: `<容器名>`
 - **挂载**: `/home/jianzhnie/llmtuner` → 容器内同路径
-- **节点文件**: `<node_list.txt>`
+- **节点文件**: /home/jianzhnie/llmtuner/llm/EasyInfer/node_list0.txt
 
 ## 任务目标
 
 为指定模型完成部署脚本、测试脚本和文档，并验证模型功能正常。
 
-> 模型基路径: `/home/jianzhnie/llmtuner/hfhub/models`
+> 模型基路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech`
 
 ## 输出要求
 
