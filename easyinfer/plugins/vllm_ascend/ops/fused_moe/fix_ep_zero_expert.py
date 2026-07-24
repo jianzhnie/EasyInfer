@@ -15,16 +15,34 @@ fails, the op never launches, and later collectives hang (AllGather
 timeout).  The ALLGATHER comm method computes MoE locally after a gather,
 where zero-weight slots are harmless (same semantics as the GPU path).
 
+Problem 3: the native path adds the zero-expert result at the WRONG point
+-------------------------------------------------------------------------
+``AscendUnquantizedFusedMoEMethod.apply`` adds ``zero_expert_result`` onto
+the fused-experts output *before* ``finalize`` and before the runner's
+final TP/EP all-reduce.  With EP the MoE input is replicated across all
+EP ranks, so every rank computes the SAME full identity contribution —
+the downstream all-reduce then sums it ``world_size`` times (×64 on a
+TP=EP=64 deployment), drowning the real output → garbled text (乱码).
+Upstream adds the zero-expert output at the very END of
+``MoERunner.forward`` (``_maybe_add_zero_expert_output``), AFTER
+``_maybe_reduce_final_output``'s all-reduce — exactly once.
+
 Fix
 ---
 0b. Mirror ``ZeroExpertRouter`` config onto ``AscendFusedMoE`` so the native
-    zero-expert path in ``apply`` runs (id sanitization + result add);
+    zero-expert path in ``apply`` runs (id sanitization is still needed);
     teach ``FusedExpertsResult`` ``+=`` for the native add.
+0b2. Wrap ``zero_experts_compute`` in ``fused_moe.py``: stash the real
+    identity contribution and return zeros instead, so the premature
+    ``final_hidden_states += zero_expert_result`` in ``apply`` becomes a
+    no-op (Problem 3).
 0c. Optionally force the ALLGATHER MoE comm method
     (``EASYINFER_MOE_COMM=allgather``) to bypass MC2.
-3.  Safety net in ``_maybe_add_zero_expert_output`` (the runner asserts on
-    ``router.zero_expert_output``; inject a scalar zero as a no-op add,
-    which also avoids double-counting the native contribution).
+3.  In ``_maybe_add_zero_expert_output``, feed the stashed identity
+    contribution to the runner so it is added once, at the end, after the
+    final all-reduce (same semantics as upstream GPU).  Falls back to a
+    scalar zero no-op when no stashed value is available (also satisfies
+    the runner's ``assert zero_expert_output is not None``).
 """
 
 from __future__ import annotations
@@ -45,7 +63,8 @@ from easyinfer.plugins.registry import register_patch
 # ``AscendUnquantizedFusedMoEMethod.apply``'s gate
 # ``getattr(layer, "zero_expert_num", 0) > 0`` is always False and the
 # native path (id sanitization + zero_expert_result add) never runs.
-# Re-enable it by mirroring the router's config onto the layer.
+# Re-enable it by mirroring the router's config onto the layer.  The id
+# sanitization is required; the premature add is neutralized by Patch 0b2.
 
 
 @register_patch(target="vllm_ascend.ops.fused_moe.fused_moe_0_23_0")
@@ -92,15 +111,16 @@ def patch_enable_native_zero_expert(module: object) -> None:
             and router.zero_expert_type is not None
         ):
             # Derive zero-expert count from the routing bias width
-            # (real + zero) minus the PER-RANK logical expert count.
+            # (real + zero) minus the logical (real) expert count.
             #
-            # IMPORTANT: router.num_logical_experts is the GLOBAL total
-            # across all EP ranks, but bias.shape[-1] only covers the
-            # experts LOCAL to this rank.  For EP that mismatch gives a
-            # negative n_zero → native path stays off → zero-expert IDs
-            # reach the dispatch kernel → garbled output.
-            #
-            # Use self.global_num_experts (per-rank count) instead.
+            # NOTE: both the bias (768 = 512 real + 256 zero) and
+            # router.num_logical_experts (512) are GLOBAL, unsharded
+            # values on every EP rank — vllm 0.23 builds FusedMoE with
+            # num_experts = real experts only and passes the full-width
+            # bias to the router.  Do NOT use self.global_num_experts
+            # here: it includes EPLB redundant experts
+            # (global_redundant_expert_num), which would undercount
+            # n_zero when EPLB is enabled.
             n_zero = 0
             bias = getattr(router, "e_score_correction_bias", None)
             if bias is not None:
@@ -114,7 +134,7 @@ def patch_enable_native_zero_expert(module: object) -> None:
                         tuple(bias.shape),
                         bias.ndim,
                     )
-                n_zero = bias.shape[-1] - self.global_num_experts
+                n_zero = bias.shape[-1] - router.num_logical_experts
             # max(...,0): when n_zero==0 the model truly has no zero
             # experts — do NOT enable the native path (Bug #3 in review).
             # Previously ``max(n_zero, 1)`` forced the path on for every
@@ -124,12 +144,12 @@ def patch_enable_native_zero_expert(module: object) -> None:
             if n_zero > 0:
                 self.zero_expert_num = n_zero
                 self.zero_expert_type = router.zero_expert_type
-                # Flag consumed by Patch 3 to avoid double-counting the
-                # zero-expert contribution in the runner.
+                # Flag consumed by Patch 3: the runner must re-add the
+                # stashed contribution (Patch 0b2) instead of its own.
                 router._ez_native_handled = True  # type: ignore[attr-defined]
                 patch_logger.info(
                     "[fix_ep_zero_expert] Enabled native zero-expert path: "
-                    "num=%s, type=%s",
+                    "num={}, type={}",
                     self.zero_expert_num,
                     self.zero_expert_type,
                 )
@@ -151,6 +171,55 @@ def patch_enable_native_zero_expert(module: object) -> None:
                 )
 
     module.AscendFusedMoE.__init__ = _init
+
+
+# ===========================================================================
+# Patch 0b2: relocate the native zero-expert add (fix Problem 3)
+# ===========================================================================
+# ``AscendUnquantizedFusedMoEMethod.apply`` (vllm_ascend/ops/fused_moe/
+# fused_moe.py) adds ``zero_expert_result`` onto the fused-experts output
+# BEFORE ``finalize`` and BEFORE the runner's final TP/EP all-reduce.
+# With EP the MoE input is replicated across EP ranks, so every rank
+# contributes the SAME full identity value and the downstream all-reduce
+# sums it world_size times (×64 at TP=EP=64) → garbled output.
+#
+# The wrapper below keeps the native call (its id/weight sanitization is
+# required to keep zero-expert ids out of the dispatch kernel) but stashes
+# the real identity contribution and returns zeros, making the premature
+# ``final_hidden_states += zero_expert_result`` a no-op.  Patch 3 then
+# hands the stashed value to the runner, which adds it once at the very
+# end of ``MoERunner.forward`` — the same point upstream uses on GPU.
+
+# Stash for the identity contribution computed inside ``apply``.  Written
+# by the ``zero_experts_compute`` wrapper, consumed (and cleared) by the
+# ``_maybe_add_zero_expert_output`` wrapper — a strict 1:1 sequence per
+# MoE layer per forward pass, so a single slot is sufficient.
+_pending_zero_expert_output: torch.Tensor | None = None
+
+
+@register_patch(target="vllm_ascend.ops.fused_moe.fused_moe")
+def patch_relocate_zero_expert_add(module: object) -> None:
+    # Guard against repeated patching (consistent with the other patches).
+    if getattr(module, "_ez_reloc_patched", False):
+        return
+    module._ez_reloc_patched = True  # type: ignore[attr-defined]
+
+    _orig_zec = module.zero_experts_compute
+
+    def _zero_experts_compute_stashing(*args, **kwargs):
+        global _pending_zero_expert_output
+        expert_indices, expert_scales, result = _orig_zec(*args, **kwargs)
+        _pending_zero_expert_output = result
+        # Zeros, not the real result: ``apply`` unconditionally adds this
+        # to the fused-experts output pre-finalize, where it would be
+        # all-reduced world_size times (Problem 3).
+        return expert_indices, expert_scales, torch.zeros_like(result)
+
+    module.zero_experts_compute = _zero_experts_compute_stashing
+    patch_logger.info(
+        "[fix_ep_zero_expert] Wrapped zero_experts_compute: identity "
+        "contribution relocated to the runner (post all-reduce)"
+    )
 
 
 # ===========================================================================
@@ -194,8 +263,12 @@ def patch_force_allgather_moe_comm(module: object) -> None:
 
 
 # ===========================================================================
-# Patch 3: MoERunner._maybe_add_zero_expert_output — safety net
+# Patch 3: MoERunner._maybe_add_zero_expert_output — add once, at the end
 # ===========================================================================
+# Upstream calls this at the very END of ``MoERunner.forward``, AFTER
+# ``_maybe_reduce_final_output``'s TP/EP all-reduce.  That is the only
+# correct place to add the zero-expert identity contribution (Problem 3).
+# Here we hand the runner the real contribution stashed by Patch 0b2.
 
 
 @register_patch(target="vllm.model_executor.layers.fused_moe.runner.moe_runner")
@@ -210,38 +283,60 @@ def patch_moe_runner_zero_expert(module: object) -> None:
     _orig_maybe = MoERunner._maybe_add_zero_expert_output
 
     def _maybe(self, result):
+        global _pending_zero_expert_output
         if (
             isinstance(self.router, ZeroExpertRouter)
             and self.router.zero_expert_type is not None
         ):
-            # Only suppress the runner addition when the native path in
+            # Only redirect the runner addition when the native path in
             # ``apply`` actually handled zero experts (flag set by
             # ``patch_enable_native_zero_expert``).  Otherwise preserve
             # the original ``_zero_expert_output`` so the runner can add
             # it normally (future versions where the native path is off).
             if getattr(self.router, "_ez_native_handled", False):
-                # The native zero-expert path in ``apply`` already added
-                # the contribution.  Replace ``_zero_expert_output`` with
-                # a scalar zero so ``result += ...`` is a true no-op,
-                # avoiding double-counting that produces garbled output.
-                #
                 # ``result`` may be a plain Tensor (current vllm-ascend)
                 # or a FusedExpertsResult (future versions).
                 if isinstance(result, torch.Tensor):
-                    dev = result.device
-                    dt = result.dtype
+                    ref = result
                 elif hasattr(result, "routed_out"):
-                    dev = result.routed_out.device
-                    dt = result.routed_out.dtype
+                    ref = result.routed_out
                 else:
                     raise TypeError(
                         "[fix_ep_zero_expert] Unexpected result type: "
                         "%s.  Expected Tensor or object with 'routed_out'."
                         % type(result).__name__
                     )
-                self.router._zero_expert_output = torch.tensor(
-                    0.0, device=dev, dtype=dt
-                )
+
+                stashed = _pending_zero_expert_output
+                _pending_zero_expert_output = None
+                if stashed is not None:
+                    # The stashed identity was computed from the prepared
+                    # (pre-finalize) hidden states; the runner result is
+                    # post-finalize, post-all-reduce.  Both must cover the
+                    # same tokens — true for DP=1 (prepare is a no-op).
+                    # DP>1 + ALLGATHER gathers tokens in prepare, so the
+                    # layouts diverge; fail fast instead of silently
+                    # producing wrong output.
+                    if stashed.shape != ref.shape:
+                        raise RuntimeError(
+                            "[fix_ep_zero_expert] Stashed zero-expert "
+                            "output shape %s does not match the runner "
+                            "result shape %s.  This deployment config "
+                            "(e.g. DP>1 with ALLGATHER MoE comm) is not "
+                            "supported by the zero-expert relocation."
+                            % (tuple(stashed.shape), tuple(ref.shape))
+                        )
+                    # Added once by ``_orig_maybe`` below, after the final
+                    # all-reduce — exactly the upstream GPU semantics.
+                    self.router._zero_expert_output = stashed
+                else:
+                    # No stashed value (native path did not run this
+                    # forward, e.g. non-MoE call).  Inject a scalar zero
+                    # as a no-op add so the runner's
+                    # ``assert zero_expert_output is not None`` holds.
+                    self.router._zero_expert_output = torch.tensor(
+                        0.0, device=ref.device, dtype=ref.dtype
+                    )
         return _orig_maybe(self, result)
 
     MoERunner._maybe_add_zero_expert_output = _maybe
