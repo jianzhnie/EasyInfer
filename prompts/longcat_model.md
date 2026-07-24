@@ -8,7 +8,7 @@
 - **容器名**: `vllm-ascend-env`
 - **挂载**: `/home/jianzhnie/llmtuner` → 容器内同路径
 - **插件**: `/home/jianzhnie/llmtuner/llm/EasyInfer/easyinfer/plugins` → vLLM 插件系统
-- **节点文件**: `node_list3.txt`
+- **节点文件**: `node_list1.txt`
 
 ## 任务目标
 
@@ -26,14 +26,14 @@
 
 ```bash
 bash scripts/docker/manage_npuslim_containers.sh start \
-    --file node_list3.txt
+    --file node_list1.txt
 ```
 
 ### Step 2: 启动 Ray 集群
 
 ```bash
-bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start \
-    --file node_list3.txt
+bash scripts/ray_cluster/manage_npuslim_ray_cluster.sh start \
+    --file node_list1.txt
 
 # 验证: 确认所有节点 NPU 可用
 ssh $HEAD "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
@@ -44,7 +44,7 @@ ssh $HEAD "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
 进入容器内执行：
 
 ```bash
-ssh 10.42.11.194
+ssh 10.42.11.130
 docker exec -it vllm-ascend-env /bin/bash
 cd /home/jianzhnie/llmtuner/llm/EasyInfer
 bash examples/longcat/vllm/run_vllm.sh

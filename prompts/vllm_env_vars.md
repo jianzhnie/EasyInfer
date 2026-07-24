@@ -123,3 +123,29 @@ Claude Code / 工具调用场景下的推荐参数：
 --max-num-seqs <N>              # 最大并发请求数
 --max-num-batched-tokens <N>    # 预填充吞吐量
 ```
+
+## 其他常用变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VLLM_USE_MODELSCOPE` | `False` | 使用 ModelScope 下载模型（国内网络推荐 `True`） |
+| `TASK_QUEUE_ENABLE` | `0` | 任务队列开关 |
+| `VLLM_ALLOW_LONG_MAX_MODEL_LEN` | `0` | 允许超长 max_model_len（绕过上限检查） |
+
+
+## 常用 export 代码块
+
+可直接复制到 `run_vllm.sh` 中使用：
+
+```bash
+export VLLM_USE_MODELSCOPE=True
+# To reduce memory fragmentation and avoid out of memory
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export HCCL_BUFFSIZE=512
+export HCCL_OP_EXPANSION_MODE="AIV"
+export OMP_PROC_BIND=false
+export OMP_NUM_THREADS=1
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+export TASK_QUEUE_ENABLE=1
+export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+```
