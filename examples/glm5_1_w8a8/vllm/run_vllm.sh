@@ -40,8 +40,8 @@ readonly TP="${TP:-8}"
 readonly PP="${PP:-2}"
 readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 readonly ENABLE_MTP="${ENABLE_MTP:-0}"
 
@@ -108,9 +108,9 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
+    --api-server-count 1 \
     --served-model-name "glm-5.1" \
     --trust-remote-code \
-    --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
@@ -127,6 +127,7 @@ vllm serve "$MODEL_PATH" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
+    --async-scheduling \
     --additional-config "$ADDITIONAL_CONFIG" \
     "${COMPILE_ARGS[@]}" \
     --seed 1024 \

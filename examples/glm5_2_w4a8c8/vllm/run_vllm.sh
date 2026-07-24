@@ -40,8 +40,8 @@ readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables (official docs)
@@ -93,7 +93,9 @@ fi
 
 # Compilation config (official docs)
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
-readonly ADDITIONAL_CONFIG='{"multistream_overlap_shared_expert": true}'
+readonly ADDITIONAL_CONFIG='{"enable_dsa_cp": true,"enable_sparse_sfa_c8": false, \
+    "enable_sparse_li_c8": true,"enable_balance_scheduling": true,"multistream_overlap_shared_expert":true}'
+
 # MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
 # ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
 # to off; enable only with PP=1.
@@ -120,9 +122,9 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
+    --api-server-count 1 \
     --served-model-name "glm-5.2" \
     --trust-remote-code \
-    --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
