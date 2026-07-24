@@ -40,12 +40,14 @@ fi
 set -u
 
 # Base configuration
-readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Chat-2layer}"
-# readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/expand/LongCat-Flash-Thinking-2601-2layer}"
+readonly BASE_MODEL_PATH="${BASE_MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/expand/LongCat-Flash-Chat-2layer}"
+readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/expand/LongCat-Flash-Thinking-2601-2layer}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8300}"
 readonly TP="${TP:-8}"
 readonly PP="${PP:-1}"
+readonly DP="${DP:-1}"
 readonly ENABLE_EP="${EP:-0}"
 readonly EXECUTOR="${EXECUTOR:-ray}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
@@ -62,7 +64,7 @@ readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
 # ------------------------------------------------------------------------------
 # Ensure EasyInfer plugins are registered (required for the EP fixes)
 # ------------------------------------------------------------------------------
-pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
+pip install --no-build-isolation --no-deps -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # Log file (default: <repo>/logs/vllm_longcat_<timestamp>.log, override with LOG_FILE)
@@ -96,11 +98,15 @@ export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-2048}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
+
+# HCCL multi-node communication
+export HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-1800}"
+export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
+
+# Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
 export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
-export HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-1800}"
-export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 
 # ------------------------------------------------------------------------------
 # Expert Parallel (optional)
@@ -124,11 +130,11 @@ command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127
 
 echo "============================================"
 echo "[INFO] LongCat-Flash 2-Layer Deployment"
-echo "[INFO] Model:   $MODEL_PATH"
-echo "[INFO] TP=$TP, PP=$PP, EP=$ENABLE_EP, Backend=$EXECUTOR"
-echo "[INFO] Host:    ${HOST}:${PORT}"
-echo "[INFO] MaxLen:  $MAX_MODEL_LEN  Seqs: $MAX_NUM_SEQS"
-echo "[INFO] MemUtil: $GPU_MEM_UTIL"
+echo "[INFO] Model: $MODEL_PATH"
+echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
+echo "[INFO] Host: ${HOST}:${PORT}"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "============================================"
 
 EP_FLAGS=()
@@ -136,7 +142,7 @@ if [[ "$ENABLE_EP" == "1" ]]; then
     EP_FLAGS=(--enable-expert-parallel)
 fi
 
-PREFILL_FLAGS=()
+PREFILL_FLAGS=(--enable-chunked-prefill)
 if [[ "$CHUNKED_PREFILL" == "0" ]]; then
     PREFILL_FLAGS=(--no-enable-chunked-prefill)
 fi
@@ -149,6 +155,7 @@ vllm serve "$MODEL_PATH" \
     --dtype "$DTYPE" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
+    --data-parallel-size "$DP" \
     "${EP_FLAGS[@]}" \
     "${PREFILL_FLAGS[@]}" \
     --block-size "$BLOCK_SIZE" \

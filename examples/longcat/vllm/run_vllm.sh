@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# LongCat-Flash-Chat-1024E-512Zero-Topk24-v2 — Direct vllm serve deployment
+# LongCat-Flash-Chat — Direct vllm serve deployment
 # =============================================================================
 # Architecture: LongcatFlashForCausalLM | 1024 Routed Experts + 512 Zero | MLA
 # Default: TP=64 PP=1 (multi-node via Ray, 8 nodes × 8 NPU)
@@ -127,7 +127,7 @@ command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127
 #=============================================================================
 
 echo "============================================"
-echo "[INFO] LongCat-Flash-Chat-1024E-512Zero-Topk24-v2 — Deployment"
+echo "[INFO] LongCat-Flash-Chat— Deployment"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
