@@ -79,18 +79,9 @@ bash examples/longcat-2layer/vllm/curl_test.sh
 
 > 单卡无法容纳 512 专家模型（需 ≈41 GB 权重 + KV Cache），EP 模式使用 2 卡。
 
-## 关键配置
+## 环境变量
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| TP | 8 | 张量并行度（2 卡调试推荐 TP=2） |
-| EP | 0 | 专家并行开关（2 卡必须开启） |
-| PORT | 8300 | 服务端口 |
-| MAX_MODEL_LEN | 4096 | 最大序列长度 |
-| MAX_NUM_SEQS | 32 | 最大并发序列数 |
-| GPU_MEM_UTIL | 0.90 | 显存利用率 |
-| BLOCK_SIZE | 128 | MLA 注意力 block size |
-| HCCL_BUFFSIZE | 2048 | HCCL EP 缓冲区 |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
 
 ## EasyInfer EP 修复插件
 

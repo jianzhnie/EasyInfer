@@ -95,18 +95,9 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 > EP=1 模式下使用 ALLGATHER comm 避免 MC2 冲突。模型加载约需 16-20 分钟。
 
-## 关键配置
+## 环境变量
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| TP | 64 | 张量并行度 (8 节点 × 8 卡) |
-| PP | 1 | 流水线并行度 |
-| PORT | 8010 | 服务端口 |
-| MAX_MODEL_LEN | 4096 | 最大序列长度 |
-| MAX_NUM_SEQS | 128 | 最大并发序列数 |
-| GPU_MEM_UTIL | 0.90 | 显存利用率 |
-| BLOCK_SIZE | 128 | MLA 注意力 block size |
-| HCCL_BUFFSIZE | 800 | HCCL 缓冲区大小 |
+> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
 
 ## 常见问题
 
