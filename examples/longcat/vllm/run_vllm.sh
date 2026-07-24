@@ -51,7 +51,7 @@ readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
 # ------------------------------------------------------------------------------
 # Ensure EasyInfer plugins are registered (required for the EP fixes)
 # ------------------------------------------------------------------------------
-pip install -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
+pip install --no-build-isolation --no-deps -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # Log file (default: <repo>/logs/vllm_longcat_<timestamp>.log, override with LOG_FILE)
