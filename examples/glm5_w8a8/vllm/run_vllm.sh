@@ -28,37 +28,6 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-# =============================================================================
-# Cache directory layout:
-#   <project>/.cache/glm5-w8a8 (shared NFS/home mount) → temp files, runtime logs, home
-#   /root/.cache/... (overlay, exec) → triton/torchinductor (need .so loading)
-# =============================================================================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-readonly CACHE_ROOT="${CACHE_ROOT:-$ROOT_DIR/.cache/glm5-w8a8}"
-readonly EXEC_CACHE_ROOT="${EXEC_CACHE_ROOT:-/root/.cache/glm5-w8a8-cache}"
-
-export PYTHONDONTWRITEBYTECODE=1
-export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
-export VLLM_CACHE_ROOT="${CACHE_ROOT}/vllm"
-export TMPDIR="${CACHE_ROOT}/tmp"
-export TEMP="${TMPDIR}"
-export TMP="${TMPDIR}"
-export HOME="${CACHE_ROOT}/home"
-export ASCEND_PROCESS_LOG_PATH="${CACHE_ROOT}/ascend-log"
-export ASCEND_GLOBAL_LOG_PATH="${ASCEND_PROCESS_LOG_PATH}"
-export TRITON_CACHE_DIR="${EXEC_CACHE_ROOT}/triton"
-export TORCHINDUCTOR_CACHE_DIR="${EXEC_CACHE_ROOT}/torchinductor"
-
-umask 0077
-mkdir -p "${XDG_CACHE_HOME}" "${VLLM_CACHE_ROOT}" \
-    "${TMPDIR}" "${HOME}" "${ASCEND_PROCESS_LOG_PATH}" \
-    "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}"
-
-# Remove stale compilation caches to avoid .so mapping errors
-find "${TRITON_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -rf {} + 2>/dev/null || true
-find "${TORCHINDUCTOR_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -rf {} + 2>/dev/null || true
-
 # Base configuration
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5-w8a8}"

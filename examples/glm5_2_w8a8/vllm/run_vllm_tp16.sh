@@ -16,29 +16,6 @@ if [[ -f "/usr/local/Ascend/nnal/atb/set_env.sh" ]]; then
 fi
 set -u
 
-readonly CACHE_ROOT="${CACHE_ROOT:-/dev/shm/glm52-cache}"
-readonly EXEC_CACHE_ROOT="${EXEC_CACHE_ROOT:-/root/.cache/glm52-cache}"
-
-export PYTHONDONTWRITEBYTECODE=1
-export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
-export VLLM_CACHE_ROOT="${CACHE_ROOT}/vllm"
-export TMPDIR="${CACHE_ROOT}/tmp"
-export TEMP="${TMPDIR}"
-export TMP="${TMPDIR}"
-export HOME="${CACHE_ROOT}/home"
-export ASCEND_PROCESS_LOG_PATH="${CACHE_ROOT}/ascend-log"
-export ASCEND_GLOBAL_LOG_PATH="${ASCEND_PROCESS_LOG_PATH}"
-export TRITON_CACHE_DIR="${EXEC_CACHE_ROOT}/triton"
-export TORCHINDUCTOR_CACHE_DIR="${EXEC_CACHE_ROOT}/torchinductor"
-
-umask 0077
-mkdir -p "${XDG_CACHE_HOME}" "${VLLM_CACHE_ROOT}" \
-    "${TMPDIR}" "${HOME}" "${ASCEND_PROCESS_LOG_PATH}" \
-    "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}"
-
-find "${TRITON_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -rf {} + 2>/dev/null || true
-find "${TORCHINDUCTOR_CACHE_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime +0 -exec rm -rf {} + 2>/dev/null || true
-
 readonly MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/ZhipuAI/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
