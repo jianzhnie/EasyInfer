@@ -2,11 +2,10 @@
 
 本文件为 `examples/<model>/vllm/README.md` 的统一模板。新增模型时，复制本模板并替换 `<占位符>`。
 
-> **设计原则**（面向模板使用者）：
-> - 按需保留/删除章节：非 MoE 模型删专家相关内容，非 MTP 模型删投机解码章节，纯文本模型删多模态章节
+> **使用原则**：
 > - `<占位符>` 必须全部替换为实际值；`✅/⚠️/❌` 标记需根据验证结果更新
+> - 非 MoE 模型删专家相关内容，非 MTP 模型删投机解码章节，纯文本模型删多模态章节
 > - 环境变量表以 `glm5_2_w8a8` 为最完整参考；简化版以 `kimi_k2_7_code_w4a8` 为参考
-> - 端口分配见 `prompts/example-scripts-template.md` 中的端口替换表
 
 ---
 
@@ -19,25 +18,25 @@
 > <如模型有已知问题/版本依赖/IP 限制等，在此行简要提示>
 > 验证状态: <✅ PASS / ⚠️ 待验证 / 见文末「验证记录」>
 
-<一句话描述模型定位，如"DeepSeek-V4-Flash W8A8 MTP..."。>
+<一句话描述模型定位。>
 
 ## 模型简介
 
 | 属性 | 值 |
 |------|-----|
 | **架构** | <Arch> (<备注，如 MoE + DSA + MLA>) |
-| **参数量** | <总参数量> (<激活参数量>) — 如无法确定则省略本行 |
+| **参数量** | <总参数量> (<激活参数量>) — 无法确定则省略本行 |
 | **路由专家** | <N> (每 Token 激活 <N> 专家) — 非 MoE 模型删除本行 |
 | **隐藏维度** | <N> |
-| **FFN 维度** | <N> / MoE FFN: <N> — 仅 dense 或混合结构保留 |
+| **FFN 维度** | <N> / MoE FFN: <N> |
 | **网络层数** | <N> |
-| **注意力头** | <N> (GQA: <N> KV head) — 可选，有 GQA 时推荐填写 |
+| **注意力头** | <N> (GQA: <N> KV head) — 可选 |
 | **MLA** | kv_lora_rank=<N>, q_lora_rank=<N>, qk_head_dim=<N>, v_head_dim=<N> — 非 MLA 模型删除本行 |
 | **Head Dim** | <N> — 非 MLA 模型使用 |
 | **rope_theta** | <N> |
 | **原生上下文** | **<max_position_embeddings>** |
-| **量化方式** | <Quant> (<说明，如 "8-bit 权重 + 8-bit 激活">)，权重 ≈<N>G |
-| **MTP** | num_nextn_predict_layers=<N>（默认<开/关>；<PP/特定条件限制>）— 无 MTP 填 ❌ 不支持 |
+| **量化方式** | <Quant> (<说明>)，权重 ≈<N>G |
+| **MTP** | num_nextn_predict_layers=<N>（默认<开/关>；<条件限制>）— 无 MTP 填 ❌ 不支持 |
 | **PP 支持** | ✅/❌ 支持 Pipeline Parallelism (<备注>) |
 | **多模态** | ✅/❌ <Vision/Audio/...> (<N> 层) |
 | **词表大小** | <N> |
@@ -50,20 +49,20 @@
 - FLASHCOMM1 必须为 0 及原因
 - 必须使用特定 tool parser 及原因
 - DSA CP 路径不兼容等
-- 已知的量化路径缺陷（如 TP=16 乱码）
+- 已知的量化路径缺陷
 - Indexer/TopK 等特殊配置说明
 >
 
 ### 官方文档参考
 
-<如模型无特定 vLLM-Ascend 文档，可省略本节，仅保留 vLLM 官方文档。>
+<如模型无特定 vLLM-Ascend 文档，可省略本节。>
 
 - <vLLM-Ascend 模型文档>: <url>
 - vLLM 官方文档: https://docs.vllm.ai/en/stable/
 
 ### 硬件要求
 
-<按需保留 A2/A3 或单节点/多节点小节。如模型支持多种硬件，推荐分小节列出。>
+<按需保留 A2/A3 或单节点/多节点小节。>
 
 | 硬件 | 配置 | 推荐上下文 | 备注 |
 |------|------|-----------|------|
@@ -73,9 +72,9 @@
 **<硬件> 注意事项**:
 - <关键约束，如 "A2 单节点 OOM，需 PP=2" 或 "A3 128G 单节点直接起">
 
-<如模型有内存/权重占用分析，保留以下小节：>
-
 ### 内存分析（<Quant> @ <硬件>）
+
+> <如不需要详细内存分析，可省略本节。>
 
 | 组件 | 消耗 (<配置>) | 说明 |
 |------|-------------|------|
@@ -98,8 +97,6 @@ bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
 bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ```
 
-<快速确认 NPU 内存的提示，如：>
-
 ```bash
 # 确认 NPU 内存（容器内执行）
 npu-smi info | grep "HBM-Usage" | head -1
@@ -118,14 +115,9 @@ TP=<TP> PP=<PP> MAX_MODEL_LEN=<LEN> bash examples/<model_dir>/vllm/run_vllm.sh
 # 后台运行
 nohup bash examples/<model_dir>/vllm/run_vllm.sh > <log_file>.log 2>&1 &
 
-# <可选：传统包装器部署>
-bash examples/<model_dir>/vllm/vllm_server.sh
-
-# <可选：MTP 版本 / 无 MTP 版本 / 特殊配置>
+# <可选：MTP 版本>
 ENABLE_MTP=1 bash examples/<model_dir>/vllm/run_vllm.sh
 ```
-
-<如有多节点部署的特殊要求，添加小节：>
 
 ### 多节点部署前提（TP>8 或 PP>1）
 
@@ -141,8 +133,6 @@ print(ray.get_runtime_context().gcs_address)
 # 部署时导出
 RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
 ```
-
-<如有量化文件修复/版本升级注意事项等，添加为可选小节。>
 
 ### 验证
 
@@ -164,8 +154,7 @@ curl http://localhost:<PORT>/v1/chat/completions \
 | 单节点 | <TP> | 1 | 1 | <N> | <N>K | <Quant> | ✅/⚠️/❌ |
 | 多节点 | <TP> | <PP> | <DP> | <N> | <N>K | <Quant> | ✅/⚠️/❌ |
 
-> <模型特定约束说明，例如"不支持 PP，多节点必须使用大 TP"或"PP>1 与 MTP 互斥"等。>
-
+> <模型特定约束说明。>
 
 ## 常见问题
 
@@ -173,19 +162,11 @@ curl http://localhost:<PORT>/v1/chat/completions \
 
 A: <回答>
 
-### Q: <与同类模型的部署配置有什么不同>?
-
-A: <对比说明>
-
 ### Q: 为什么必须设置 FLASHCOMM1=<0/1>?
 
 A: <根因说明>
 
-### Q: <并行/量化对内存有什么影响>?
-
-A: <说明>
-
-### Q: 为什么 TP 默认是 <N> 而不是 <N>?
+### Q: 为什么 TP 默认是 <N>?
 
 A: <硬件/量化约束说明>
 
@@ -193,11 +174,9 @@ A: <硬件/量化约束说明>
 
 A: <架构/版本限制说明>
 
-<根据模型特性增减以下 FAQ 条目：>
-
 ### Q: MTP 投机解码对内存有什么影响?
 
-A: MTP 加载第二份模型权重，减少 KV cache 可用空间。
+A: MTP 加载第二份模型权重，减少 KV Cache 可用空间。
 
 ### Q: 多节点网络如何配置?
 
@@ -220,10 +199,6 @@ docker exec vllm-ascend-env bash -c 'rm -rf <CACHE_ROOT>/*'
 ### Q: <专家数>对部署有什么影响?
 
 A: EP_SIZE 需能整除 <N> (推荐 <值>)。<N> 专家的 all-to-all 通信开销<较大/较小>。
-
-### Q: W8A8 和 W4A8 有什么区别?
-
-A: W8A8 精度更高但显存占用更大 (约 2× W4A8)；W4A8 省显存但精度略低。
 
 ## 验证记录
 
