@@ -18,11 +18,10 @@
 #   TP=32 MAX_MODEL_LEN=202752 bash run_vllm.sh  # 4 nodes
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.2.html
+#   https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/GLM5.2.html#1m
 # =============================================================================
 set -euo pipefail
 
-# Load Ascend CANN environment
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then
     source /usr/local/Ascend/cann/set_env.sh
@@ -37,29 +36,30 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/GLM-5.2-w8a8}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8007}"
-readonly TP="${TP:-8}"
+readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
-readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
+readonly ENABLE_MTP="${ENABLE_MTP:-1}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-1024000}"
+readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"
 
-# NPU environment variables (official docs)
-export HCCL_OP_EXPANSION_MODE=AIV
+export VLLM_ASCEND_ENABLE_NZ=1
+export HCCL_OP_EXPANSION_MODE="AIV"
 export OMP_PROC_BIND=false
-export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=200
+export OMP_NUM_THREADS=20
+export HCCL_BUFFSIZE=768
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_V1=1
-
-# Runtime / debug
 export ASCEND_LAUNCH_BLOCKING=0
 export VLLM_ENGINE_READY_TIMEOUT_S=1800
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export TASK_QUEUE_ENABLE=1
 
 # =============================================================================
 # Multi-node network interface binding (optional)
@@ -76,12 +76,8 @@ export VLLM_ENGINE_READY_TIMEOUT_S=1800
 #   For A2 (64GB) hardware, TP=8 OOMs (~60.4 GiB weights per NPU).
 #   Use A3 (128GB) hardware with TP=8 for production deployment.
 # =============================================================================
-readonly RAY_ADDRESS="${RAY_ADDRESS:-}"
 readonly NIC_NAME="${NIC_NAME:-}"
 readonly HCCL_IF_IP="${HCCL_IF_IP:-}"
-if [[ -n "$RAY_ADDRESS" ]]; then
-    export RAY_ADDRESS
-fi
 if [[ -n "$HCCL_IF_IP" ]]; then
     export HCCL_IF_IP
 fi
@@ -92,14 +88,14 @@ if [[ -n "$NIC_NAME" ]]; then
 fi
 
 # Compilation config (official docs)
-readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
-readonly ADDITIONAL_CONFIG='{"enable_dsa_cp": true,"enable_sparse_sfa_c8": false, \
-    "enable_sparse_li_c8": true,"enable_balance_scheduling": true,"multistream_overlap_shared_expert":true}'
-
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 128]}'
+readonly ADDITIONAL_CONFIG='{"enable_flashcomm1": true, "enable_dsa_cp": true, \
+    "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, \
+    "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, 
+    "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}'
 # MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
 # ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
 # to off; enable only with PP=1.
-readonly ENABLE_MTP="${ENABLE_MTP:-0}"
 SPEC_ARGS=()
 if [[ "$ENABLE_MTP" == "1" ]]; then
     SPEC_ARGS+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}')
@@ -128,6 +124,9 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
+    --prefill-context-parallel-size 1 \
+    --decode-context-parallel-size 16 \
+    --cp-kv-cache-interleave-size 128 \
     --distributed-executor-backend ray \
     --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
@@ -138,10 +137,6 @@ vllm serve "$MODEL_PATH" \
     --enable-chunked-prefill \
     --enable-prefix-caching \
     --enable-expert-parallel \
-    --enable-auto-tool-choice \
-    --tool-call-parser glm47 \
-    --reasoning-parser glm45 \
-    --async-scheduling \
     ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     --additional-config "$ADDITIONAL_CONFIG" \
     --compilation-config "$COMPILATION_CONFIG" \
