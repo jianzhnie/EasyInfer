@@ -2,49 +2,93 @@
 
 本文件为 `examples/<model>/vllm/README.md` 的统一模板。新增模型时，复制本模板并替换 `<占位符>`。
 
+> **设计原则**（面向模板使用者）：
+> - 按需保留/删除章节：非 MoE 模型删专家相关内容，非 MTP 模型删投机解码章节，纯文本模型删多模态章节
+> - `<占位符>` 必须全部替换为实际值；`✅/⚠️/❌` 标记需根据验证结果更新
+> - 环境变量表以 `glm5_2_w8a8` 为最完整参考；简化版以 `kimi_k2_7_code_w4a8` 为参考
+> - 端口分配见 `prompts/example-scripts-template.md` 中的端口替换表
+
 ---
 
-```markdown
+```
 # <模型名> <量化> 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **<PORT>**
-> 架构: <Arch> | <Experts> Experts | <MoE/MLA/...> | <量化> 量化
-> 已验证配置: <TP> PP=<PP> (<节点描述>) | 上下文: <MAX_LEN> | <关键特性>
+> **<框架版本>** | 端口: **<PORT>**
+> 架构: <Arch> | <N> Experts | <MoE/MLA/Dense/...> | <MTP/无> | <量化> 量化
+> 已验证配置: **<TP/PP/DP>** (<节点描述>) | 上下文: <MAX_LEN> | <关键特性>
+> <如模型有已知问题/版本依赖/IP 限制等，在此行简要提示>
+> 验证状态: <✅ PASS / ⚠️ 待验证 / 见文末「验证记录」>
+
+<一句话描述模型定位，如"DeepSeek-V4-Flash W8A8 MTP..."。>
 
 ## 模型简介
 
 | 属性 | 值 |
 |------|-----|
-| **架构** | <Arch> (<备注>) |
-| **路由专家** | <N> (<每 token 激活数>) |
+| **架构** | <Arch> (<备注，如 MoE + DSA + MLA>) |
+| **参数量** | <总参数量> (<激活参数量>) — 如无法确定则省略本行 |
+| **路由专家** | <N> (每 Token 激活 <N> 专家) — 非 MoE 模型删除本行 |
 | **隐藏维度** | <N> |
+| **FFN 维度** | <N> / MoE FFN: <N> — 仅 dense 或混合结构保留 |
 | **网络层数** | <N> |
-| **MLA** | <kv_lora_rank>, <q_lora_rank>, <head_dim> |
-| **原生上下文** | **<MAX_POSITION_EMBEDDINGS>** |
-| **量化方式** | <Quant> |
-| **MTP** | <支持/不支持> (num_nextn_predict_layers=<N>) |
-| **PP 支持** | ✅/❌ 支持 Pipeline Parallelism |
-| **多模态** | ✅/❌ <Vision/...> |
+| **注意力头** | <N> (GQA: <N> KV head) — 可选，有 GQA 时推荐填写 |
+| **MLA** | kv_lora_rank=<N>, q_lora_rank=<N>, qk_head_dim=<N>, v_head_dim=<N> — 非 MLA 模型删除本行 |
+| **Head Dim** | <N> — 非 MLA 模型使用 |
+| **rope_theta** | <N> |
+| **原生上下文** | **<max_position_embeddings>** |
+| **量化方式** | <Quant> (<说明，如 "8-bit 权重 + 8-bit 激活">)，权重 ≈<N>G |
+| **MTP** | num_nextn_predict_layers=<N>（默认<开/关>；<PP/特定条件限制>）— 无 MTP 填 ❌ 不支持 |
+| **PP 支持** | ✅/❌ 支持 Pipeline Parallelism (<备注>) |
+| **多模态** | ✅/❌ <Vision/Audio/...> (<N> 层) |
 | **词表大小** | <N> |
 | **工具调用解析器** | <parser> |
 | **推理解析器** | <parser> / 不适用 |
 
 ### 架构注意事项
 
-<关键兼容性说明，例如 FLASHCOMM1 必须为 0、必须使用特定 tool parser、DSA CP 路径不兼容等。>
+<关键兼容性说明，例如：
+- FLASHCOMM1 必须为 0 及原因
+- 必须使用特定 tool parser 及原因
+- DSA CP 路径不兼容等
+- 已知的量化路径缺陷（如 TP=16 乱码）
+- Indexer/TopK 等特殊配置说明
+>
 
 ### 官方文档参考
 
 <如模型无特定 vLLM-Ascend 文档，可省略本节，仅保留 vLLM 官方文档。>
 
-- vLLM-Ascend 模型文档: <url>
+- <vLLM-Ascend 模型文档>: <url>
 - vLLM 官方文档: https://docs.vllm.ai/en/stable/
+
+### 硬件要求
+
+<按需保留 A2/A3 或单节点/多节点小节。如模型支持多种硬件，推荐分小节列出。>
+
+| 硬件 | 配置 | 推荐上下文 | 备注 |
+|------|------|-----------|------|
+| Atlas 800 A2 (64G × 8) | <Quant>, TP=<N> | <N>K | <备注> |
+| Atlas 800 A3 (64G × 16) | <Quant>, TP=<N> | <N>K | <备注> |
+
+**<硬件> 注意事项**:
+- <关键约束，如 "A2 单节点 OOM，需 PP=2" 或 "A3 128G 单节点直接起">
+
+<如模型有内存/权重占用分析，保留以下小节：>
+
+### 内存分析（<Quant> @ <硬件>）
+
+| 组件 | 消耗 (<配置>) | 说明 |
+|------|-------------|------|
+| 模型权重 | ≈<N> GiB | <备注> |
+| KV Cache (<N>K ctx) | ≈<N> GiB | 随 max_model_len 变化 |
+| 编译缓存 + 临时 | ≈<N> GiB | Triton/算子缓存 |
+| **总计** | **≈<N> GiB** | **<结论>** |
 
 ## 快速开始
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/<MODEL_REL_PATH>`
+模型路径: `<绝对路径>`
 
 ```bash
 # 1. 启动 NPU Docker 容器
@@ -54,10 +98,18 @@ bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
 bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ```
 
+<快速确认 NPU 内存的提示，如：>
+
+```bash
+# 确认 NPU 内存（容器内执行）
+npu-smi info | grep "HBM-Usage" | head -1
+# 65536 MB = 64GB (A2) | 131072 MB = 128GB (A3)
+```
+
 ### 部署
 
 ```bash
-# 单节点 (<默认上下文>, TP=<TP>)
+# 单节点 (<默认上下文>, TP=<N>)
 bash examples/<model_dir>/vllm/run_vllm.sh
 
 # 多节点 (<大上下文>)
@@ -66,9 +118,31 @@ TP=<TP> PP=<PP> MAX_MODEL_LEN=<LEN> bash examples/<model_dir>/vllm/run_vllm.sh
 # 后台运行
 nohup bash examples/<model_dir>/vllm/run_vllm.sh > <log_file>.log 2>&1 &
 
-# 使用传统包装器部署
+# <可选：传统包装器部署>
 bash examples/<model_dir>/vllm/vllm_server.sh
+
+# <可选：MTP 版本 / 无 MTP 版本 / 特殊配置>
+ENABLE_MTP=1 bash examples/<model_dir>/vllm/run_vllm.sh
 ```
+
+<如有多节点部署的特殊要求，添加小节：>
+
+### 多节点部署前提（TP>8 或 PP>1）
+
+跨节点部署时，**必须设置 `RAY_ADDRESS`**，否则 Engine Core 子进程无法连接到 Ray 集群：
+
+```bash
+# 获取 Ray 集群地址
+docker exec vllm-ascend-env python3 -c "
+import ray; ray.init(address='auto', ignore_reinit_error=True)
+print(ray.get_runtime_context().gcs_address)
+"
+
+# 部署时导出
+RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
+```
+
+<如有量化文件修复/版本升级注意事项等，添加为可选小节。>
 
 ### 验证
 
@@ -85,146 +159,13 @@ curl http://localhost:<PORT>/v1/chat/completions \
 
 ## 并行策略
 
-| 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
-|------|-----|-----|-----|-----|--------|------|
-| 单节点 | <TP> | 1 | 1 | <N> | <32K> | ✅/⚠️ |
-| 多节点 | <TP> | <PP> | <DP> | <N> | <LEN> | ✅/⚠️ |
+| 场景 | TP | PP | DP | NPU | 上下文 | 量化 | 状态 |
+|------|-----|-----|-----|-----|--------|------|------|
+| 单节点 | <TP> | 1 | 1 | <N> | <N>K | <Quant> | ✅/⚠️/❌ |
+| 多节点 | <TP> | <PP> | <DP> | <N> | <N>K | <Quant> | ✅/⚠️/❌ |
 
-> 模型特定约束说明，例如"不支持 PP，多节点必须使用大 TP"。>
+> <模型特定约束说明，例如"不支持 PP，多节点必须使用大 TP"或"PP>1 与 MTP 互斥"等。>
 
-## 环境变量
-
-### 基础配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODEL_PATH` | `.../<MODEL>` | 模型权重路径 |
-| `SERVED_MODEL_NAME` | `<api-name>` | API 中的模型名称 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `PORT` | `<PORT>` | 监听端口 |
-
-### 并行配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TP` / `TENSOR_PARALLEL_SIZE` | `<TP>` | 张量并行度 |
-| `PP` / `PIPELINE_PARALLEL_SIZE` | `<PP>` | 流水线并行度 |
-| `ENABLE_EXPERT_PARALLEL` | `1` | 专家并行开关 (MoE 必需) |
-| `DATA_PARALLEL_SIZE` | `<DP>` | 数据并行度 |
-
-### 内存与量化
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DTYPE` | `bfloat16` | 计算数据类型 |
-| `QUANTIZATION` | `ascend` | Ascend 量化 |
-| `GPU_MEM_UTIL` / `GPU_MEMORY_UTILIZATION` | `<0.XX>` | NPU 显存利用率 |
-| `SWAP_SPACE` | `<N>` | CPU 交换空间 (GiB) |
-
-### 序列调度
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_MODEL_LEN` | `<N>` | 最大上下文长度 |
-| `MAX_NUM_SEQS` | `<N>` | 最大并发请求数 |
-| `MAX_NUM_BATCHED_TOKENS` | `<N>` | 每 step 最大 token 数 |
-| `ENABLE_CHUNKED_PREFILL` | `1` | 分块预填充 |
-| `CHAT_TEMPLATE_CONTENT_FORMAT` | `string` | Chat Template 内容格式 |
-
-### NPU 专用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HCCL_OP_EXPANSION_MODE` | `AIV` | HCCL 操作扩展模式 |
-| `HCCL_BUFFSIZE` | `<N>` | HCCL 缓冲区大小 (MB) |
-| `OMP_PROC_BIND` | `false` | 禁用 OpenMP 线程绑定 |
-| `OMP_NUM_THREADS` | `1` | OpenMP 线程数 |
-| `PYTORCH_NPU_ALLOC_CONF` | `expandable_segments:True` | NPU 内存分配 |
-| `VLLM_ASCEND_ENABLE_FLASHCOMM1` | `<0/1>` | FlashComm 通信优化 |
-| `VLLM_ASCEND_ENABLE_MLAPO` | `<0/1>` | MLA 算子融合优化 |
-| `VLLM_ASCEND_BALANCE_SCHEDULING` | `1` | 负载均衡调度 |
-
-### 加速特性
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PREFIX_CACHING` | `1` | 前缀缓存 |
-| `ENFORCE_EAGER` | `1` | 禁用 CUDA Graph |
-| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | CUDA Graph 模式 |
-| `ENABLE_NPUGRAPH_EX` | `true` | NPU Graph 扩展 |
-| `FUSE_MULS_ADD` | `true` | 融合乘法加法 |
-| `MULTISTREAM_OVERLAP_SHARED_EXPERT` | `true` | 多流共享专家重叠 |
-| `NUM_SCHEDULER_STEPS` | `<N>` | 多步调度步数 |
-| `ENABLE_ASYNC_SCHEDULING` | `1` | 异步调度 |
-
-### 工具调用
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_TOOL_CALLING` | `1` | 工具调用开关 |
-| `TOOL_CALL_PARSER` | `<parser>` | 工具调用解析器 |
-
-### 投机解码 (MTP)
-
-> 仅 MTP 模型保留本节；非 MTP 模型删除本节，并在功能验证清单中标注 ❌ 不支持。
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SPECULATIVE_METHOD` | `mtp` | 投机解码方法 |
-| `SPECULATIVE_NUM_TOKENS` | `3` | 每次投机 token 数 |
-
-### 多模态 (如适用)
-
-> 仅多模态模型保留本节；纯文本模型删除本节。
-
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| `--allowed-local-media-path` | `/home/jianzhnie/llmtuner/` | 本地媒体文件路径 |
-| `--mm-encoder-tp-mode` | `data` | 视觉编码器 TP 模式 |
-| `--language-model-only` | 默认启用 | 纯文本 Agent 场景跳过 Vision Encoder |
-
-### Agent 优化参数
-
-```bash
---enable-prefix-caching          # Claude Code 系统提示缓存复用
---enable-chunked-prefill         # 长上下文分块预填充
---enable-auto-tool-choice        # Anthropic API tool_use 必需
---tool-call-parser <parser>     # 工具调用解析器
---max-num-seqs <N>              # 最大并发请求数
---max-num-batched-tokens <N>    # 预填充吞吐量
-```
-
-## Claude Code 集成
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:<PORT> \
-ANTHROPIC_API_KEY=dummy \
-ANTHROPIC_AUTH_TOKEN=dummy \
-ANTHROPIC_DEFAULT_SONNET_MODEL=<api-name> \
-ANTHROPIC_DEFAULT_HAIKU_MODEL=<api-name> \
-ANTHROPIC_DEFAULT_OPUS_MODEL=<api-name> \
-claude
-```
-
-## 功能验证清单
-
-### 基础功能
-
-| 功能 | 状态 | 脚本 |
-|------|------|------|
-| 基础 Chat Completion | ✅/⚠️ | `run_vllm.sh` |
-| Tool Calling (<parser>) | ✅/⚠️ | `curl_test.sh` |
-| Anthropic Messages API | ✅/⚠️ | `curl_test.sh` |
-| MTP 投机解码 | ✅/❌ | `run_vllm.sh` |
-
-### 高级功能
-
-| 功能 | 状态 | 脚本 | 硬件要求 |
-|------|------|------|----------|
-| 基于 Mooncake 多实例 PD 共置部署 | 📋/❌ | `run_pd_colocated.sh` | 多节点 + Mooncake + RoCE |
-| 预填充-解码分离部署 | 📋/⚠️/❌ | `run_pd_disaggregated.sh` | 多节点 + Mooncake |
-| 长序列上下文并行 | 📋/⚠️/❌ | `run_long_seq_cp.sh` | Atlas A3 |
-| 动态分块流水线并行 | 📋/❌ | `run_dynamic_chunked_pp.sh` | PP ≥ 2 |
 
 ## 常见问题
 
@@ -232,27 +173,67 @@ claude
 
 A: <回答>
 
-### Q: <问题 2>?
+### Q: <与同类模型的部署配置有什么不同>?
 
-A: <回答>
+A: <对比说明>
+
+### Q: 为什么必须设置 FLASHCOMM1=<0/1>?
+
+A: <根因说明>
+
+### Q: <并行/量化对内存有什么影响>?
+
+A: <说明>
+
+### Q: 为什么 TP 默认是 <N> 而不是 <N>?
+
+A: <硬件/量化约束说明>
+
+### Q: 为什么不能用 PP / 为什么 PP 与 MTP 互斥?
+
+A: <架构/版本限制说明>
+
+<根据模型特性增减以下 FAQ 条目：>
+
+### Q: MTP 投机解码对内存有什么影响?
+
+A: MTP 加载第二份模型权重，减少 KV cache 可用空间。
+
+### Q: 多节点网络如何配置?
+
+A: 设置 `NIC_NAME` 和 `HCCL_IF_IP` 环境变量绑定高速网卡：
+```bash
+NIC_NAME=enp66s0f0 HCCL_IF_IP=10.42.11.130 RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
 ```
 
----
+### Q: 部署时一直卡在 "Waiting for creating a placement group"?
 
-## 填写检查清单
+A: Engine Core 子进程未连接到集群 Ray。设置 `RAY_ADDRESS` 环境变量指向 Ray Head 节点。
 
-复制模板后，逐项确认：
+### Q: 启动时报 "failed to map segment from shared object" 错误?
 
-- [ ] H1 模型名与量化正确
-- [ ] 顶部 banner 包含 vLLM 版本、端口、已验证配置、架构
-- [ ] 模型简介属性表完整（架构/专家/隐藏维度/层数/MLA/上下文/量化/MTP/PP/多模态/词表/parser/推理解析器）
-- [ ] 非 MTP 模型已删除"投机解码 (MTP)"环境变量表
-- [ ] 非多模态模型已删除"多模态"参数表
-- [ ] 快速开始中的 `MODEL_PATH` 和脚本路径正确
-- [ ] 并行策略表包含 TP/PP/DP/NPU/上下文/状态六列
-- [ ] 环境变量按基础/并行/内存/序列/NPU/加速/工具/MTP/多模态分组
-- [ ] Claude Code 集成中的端口和模型名正确
-- [ ] 功能验证清单状态符号统一（✅ ⚠️ ❌ 📋）
-- [ ] 常见问题覆盖模型特异性问题
-- [ ] 无重复标题
-- [ ] 所有代码块语法正确
+A: 编译缓存损坏。清理缓存后重启：
+```bash
+docker exec vllm-ascend-env bash -c 'rm -rf <CACHE_ROOT>/*'
+```
+
+### Q: <专家数>对部署有什么影响?
+
+A: EP_SIZE 需能整除 <N> (推荐 <值>)。<N> 专家的 all-to-all 通信开销<较大/较小>。
+
+### Q: W8A8 和 W4A8 有什么区别?
+
+A: W8A8 精度更高但显存占用更大 (约 2× W4A8)；W4A8 省显存但精度略低。
+
+## 验证记录
+
+| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
+|------|------|------|------|------|------|------|
+| <YYYY-MM-DD> | `<镜像名>` | <节点描述> | <配置> | ✅/⚠️/❌ | `<日志路径>` | <说明> |
+
+<多轮验证时保留多行。有重要结论/根因分析时，在表格后追加小节。>
+
+### <YYYY-MM-DD 结论：一句话总结>
+
+<关键发现、根因分析、版本差异等。>
+```
