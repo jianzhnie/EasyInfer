@@ -107,6 +107,11 @@ export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
 export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 
 # ------------------------------------------------------------------------------
 # Expert Parallel (optional)
@@ -165,6 +170,7 @@ vllm serve "$MODEL_PATH" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
     --no-enable-prefix-caching \
+    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
     --enforce-eager \
     --seed 1024 \
     "$@"

@@ -54,8 +54,14 @@ export VLLM_USE_MODELSCOPE=False
 # Fallback variables for older versions
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_ENABLE_MLAPO=0
+export VLLM_ASCEND_ENABLE_MLAPO=1
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
 readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
 
 # MTP speculative decoding (Step3p5MTP is registered in vLLM 0.22.1)
@@ -65,11 +71,12 @@ if [[ "$ENABLE_MTP" == "1" ]]; then
 fi
 
 echo "============================================"
-echo "[INFO] Step-3.7-Flash W8A8 MTP Deployment"
-echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL MTP=$ENABLE_MTP"
+echo "[INFO] Step-3.7-Flash W8A8 MTP — vLLM-Ascend Deployment"
+echo "[INFO] Model:    $MODEL_PATH"
+echo "[INFO] TP=$TP  PP=$PP  PORT=$PORT"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL  MTP=$ENABLE_MTP"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: step3p5 parser"
 echo "============================================"
 
@@ -90,12 +97,13 @@ vllm serve "$MODEL_PATH" \
     --chat-template-content-format string \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser step3p5 \
     --language-model-only \
+    --async-scheduling \
+    "${SPEC_ARGS[@]}" \
+    --compilation-config "$COMPILATION_CONFIG" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
-    ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     "$@"

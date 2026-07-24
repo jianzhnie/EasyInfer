@@ -1,19 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# Kimi-K2.7-Code W4A8 — Agent-optimized vLLM deployment with max context
+# Kimi-K2.7-Code W4A8 — vllm serve deployment (Code-tuned, multimodal)
 # =============================================================================
 # Architecture: KimiK25ForConditionalGeneration | 384 Experts | MLA | Vision
-# Deploy: 2-node TP=8 PP=2 (weights ~500G, single A2 node too tight)
-# Note: Kimi-K2.x supports Pipeline Parallelism and multimodal (Vision).
-#       Code-tuned variant of Kimi-K2.7; deployment mirrors Kimi-K2.6.
+# Deploy: TP=8 PP=2 (weights ~500G, 2-node A2 minimum)
+#
+# Hardware:
+#   - 2× Atlas 800 A2 (64G × 8):  TP=8 PP=2
+#   - 1× Atlas 800 A3 (64G × 16): TP=8 PP=1 or TP=16
 #
 # Usage:
-#   bash run_vllm.sh                       # TP=8 PP=2 (2 nodes via Ray)
-#   TP=16 PP=1 bash run_vllm.sh            # 2-node large TP
-#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh
+#   bash run_vllm.sh                                    # TP=8 PP=2 (2-node A2)
+#   TP=16 PP=1 bash run_vllm.sh                         # 2-node A3 large TP
+#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh     # Long context
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
+#   https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/Kimi-K2.6.html
 # =============================================================================
 set -euo pipefail
 
@@ -37,47 +39,51 @@ readonly PP="${PP:-2}"
 readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.87}"
 
-# NPU environment variables
+# DFlash draft model for speculative decoding
+readonly DFLASH_MODEL="${DFLASH_MODEL:-z-lab/Kimi-K2.5-DFlash}"
+
+# NPU environment variables (Kimi-K2.x family)
 export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=800
+export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-600}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export TASK_QUEUE_ENABLE=1
 export VLLM_USE_MODELSCOPE=False
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_MLAPO=1
+export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-0}"
 
-# Feature toggles (1=on, 0=off), overridable via environment.
-# NOTE: FLASHCOMM1=0 is a workaround for "QuantMatmul not support to process
-# empty tensor" (aclnnQuantMatmulWeightNz 161002) in profile_run: the flashcomm1
-# custom ops (maybe_all_gather_and_maybe_unpad / maybe_chunk_residual) can
-# produce empty tensors on some TP ranks, which npu_quant_matmul rejects.
-FLASHCOMM1="${FLASHCOMM1:-0}"
-MLAPO="${MLAPO:-1}"
-BALANCE_SCHEDULING="${BALANCE_SCHEDULING:-1}"
+# Multi-node network (set NIC_NAME + HCCL_IF_IP for cross-node)
+readonly NIC_NAME="${NIC_NAME:-}"
+readonly HCCL_IF_IP="${HCCL_IF_IP:-}"
+if [[ -n "$HCCL_IF_IP" ]]; then
+    export HCCL_IF_IP
+fi
+if [[ -n "$NIC_NAME" ]]; then
+    export GLOO_SOCKET_IFNAME="$NIC_NAME"
+    export TP_SOCKET_IFNAME="$NIC_NAME"
+    export HCCL_SOCKET_IFNAME="$NIC_NAME"
+fi
 
-# Fallback variables for older versions
-export VLLM_ASCEND_ENABLE_MLAPO="$MLAPO"
-export VLLM_ASCEND_ENABLE_FLASHCOMM1="$FLASHCOMM1"
-export VLLM_ASCEND_BALANCE_SCHEDULING="$BALANCE_SCHEDULING"
-
-_to_bool() { [[ "$1" == "1" || "$1" == "true" ]] && echo true || echo false; }
-
-# v0.20.2 additional_config format
-BS_BOOL="$(_to_bool "$BALANCE_SCHEDULING")"
-FC1_BOOL="$(_to_bool "$FLASHCOMM1")"
-MLAPO_BOOL="$(_to_bool "$MLAPO")"
-readonly ADDITIONAL_CONFIG="{\"enable_balance_scheduling\": ${BS_BOOL}, \"enable_flashcomm1\": ${FC1_BOOL}, \"enable_mlapo\": ${MLAPO_BOOL}}"
+# Compilation config
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
+readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true}'
 
 echo "============================================"
-echo "[INFO] Kimi-K2.7-Code W4A8 — Agent-Optimized Deployment"
-echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP DP=$DP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] Kimi-K2.7-Code W4A8 — vLLM-Ascend Deployment"
+echo "[INFO] Model:    $MODEL_PATH"
+echo "[INFO] TP=$TP  PP=$PP  DP=$DP  PORT=$PORT"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
-echo "[INFO] FLASHCOMM1=$FLASHCOMM1 MLAPO=$MLAPO BALANCE_SCHEDULING=$BALANCE_SCHEDULING"
-echo "[INFO] Prefix Caching: ENABLED"
+echo "[INFO] FLASHCOMM1=$VLLM_ASCEND_ENABLE_FLASHCOMM1  BALANCE_SCHEDULING=$VLLM_ASCEND_BALANCE_SCHEDULING"
+echo "[INFO] Speculative: DFlash ($DFLASH_MODEL, 15 tokens)"
+echo "[INFO] Prefix Caching: DISABLED (official recommendation)"
+echo "[INFO] Parser: kimi_k2 (tool + reasoning)"
 echo "============================================"
 
 vllm serve "$MODEL_PATH" \
@@ -85,25 +91,24 @@ vllm serve "$MODEL_PATH" \
     --port "$PORT" \
     --served-model-name "kimi-k2.7-code" \
     --trust-remote-code \
-    --dtype bfloat16 \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
-    --distributed-executor-backend ray \
     --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
-    --max-num-batched-tokens 16384 \
-    --enable-chunked-prefill \
-    --enable-prefix-caching \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    --no-enable-prefix-caching \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser kimi_k2 \
-    --language-model-only \
+    --reasoning-parser kimi_k2 \
+    --async-scheduling \
     --mm-encoder-tp-mode data \
     --allowed-local-media-path /home/jianzhnie/llmtuner/ \
-    --cudagraph-capture-sizes 1 2 4 8 16 32 \
+    --compilation-config "$COMPILATION_CONFIG" \
+    --speculative-config "{\"method\":\"dflash\",\"model\":\"$DFLASH_MODEL\",\"num_speculative_tokens\":15}" \
     --additional-config "$ADDITIONAL_CONFIG" \
-    --seed 1024 \
+    --seed 42 \
     "$@"

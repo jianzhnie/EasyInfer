@@ -44,12 +44,18 @@ export USE_MULTI_BLOCK_POOL=1
 export ACL_OP_INIT_MODE=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_ENABLE_MLAPO=1
-export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
+export LD_PRELOAD="${LD_PRELOAD:-/usr/lib/aarch64-linux-gnu/libjemalloc.so.2}"
 
 echo "[INFO] Starting DeepSeek-V4-Flash W8A8 MTP"
 echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
 echo "[INFO] COMPILATION_CONFIG=$COMPILATION_CONFIG"
 echo "[INFO] SPECULATIVE_CONFIG=$SPECULATIVE_CONFIG"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
@@ -71,7 +77,7 @@ vllm serve "$MODEL_PATH" \
     --tokenizer-mode deepseek_v4 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
+    --async-scheduling \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v4 \
     --reasoning-parser deepseek_v4 \

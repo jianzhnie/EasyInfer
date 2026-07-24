@@ -33,14 +33,24 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_ENABLE_MLAPO=1
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 export VLLM_USE_MODELSCOPE=False
 
+# Compilation config
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
+
 echo "============================================"
-echo "[INFO] DeepSeek-V4-Pro W4A8 Deployment"
-echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] DeepSeek-V4-Pro W4A8 — vLLM-Ascend Deployment"
+echo "[INFO] Model:    $MODEL_PATH"
+echo "[INFO] TP=$TP  PP=$PP  PORT=$PORT"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
+echo "[INFO] MTP: ON (1 token, deepseek_mtp)"
 echo "============================================"
 
 vllm serve "$MODEL_PATH" \
@@ -60,8 +70,11 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens 8192 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
     --enable-auto-tool-choice \
     --tool-call-parser deepseek_v4 \
+    --reasoning-parser deepseek_v4 \
+    --async-scheduling \
+    --compilation-config "$COMPILATION_CONFIG" \
+    --speculative-config '{"num_speculative_tokens": 1, "method": "deepseek_mtp", "enforce_eager": true}' \
     --seed 1024 \
     "$@"

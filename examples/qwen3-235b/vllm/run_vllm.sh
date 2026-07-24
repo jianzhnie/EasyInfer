@@ -45,22 +45,26 @@ export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE=800
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
-
-# Fallback variables for older versions
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
-export VLLM_ASCEND_ENABLE_MLAPO=0
+export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 
-# v0.20.2 additional_config format
+# Compilation config
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
 readonly ADDITIONAL_CONFIG='{"enable_balance_scheduling": true, "enable_flashcomm1": true}'
 
 echo "============================================"
-echo "[INFO] Qwen3-235B-A22B — Deployment"
-echo "[INFO] Model: $MODEL_PATH"
-echo "[INFO] TP=$TP PP=$PP PORT=$PORT"
-echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
+echo "[INFO] Qwen3-235B-A22B — vLLM-Ascend Deployment"
+echo "[INFO] Model:    $MODEL_PATH"
+echo "[INFO] TP=$TP  PP=$PP  PORT=$PORT"
+echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
-echo "[INFO] Prefix Caching: ENABLED"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Note: 128-expert MoE, use multi-node for BF16 full precision"
 echo "============================================"
 
@@ -79,10 +83,11 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens 16384 \
     --enable-chunked-prefill \
     --enable-prefix-caching \
-    --enforce-eager \
     --enable-expert-parallel \
     --enable-auto-tool-choice \
     --tool-call-parser hermes \
+    --async-scheduling \
+    --compilation-config "$COMPILATION_CONFIG" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --seed 1024 \
     "$@"

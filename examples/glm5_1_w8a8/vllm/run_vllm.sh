@@ -1,23 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.1 W8A8 — Direct vllm serve deployment (2-node TP=8 PP=2)
+# GLM-5.1 W8A8 — vllm serve deployment (2-node TP=8 PP=2)
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
-# Max Position: 202752 | Deploy: 32K context (override with MAX_MODEL_LEN)
-# Note: Weights ~718G (W8A8) — a single A2 node (8 x 64G) cannot hold them.
-#   ⚠️  TP=16 produces GIBBERISH output with this static-W8A8 checkpoint on
-#       vllm-ascend v0.22.1/v0.23.0 (both eager and cudagraph modes) — the
-#       TP=16 static-quant DSA path is numerically broken. Use TP=8 PP=2
-#       (verified PASS, coherent output). GLM-5.2-w8a8 works fine with the
-#       same stack, so the issue is specific to this checkpoint at TP=16.
+# Max Position: 202752 | Weights ~718G (W8A8)
+#
+# Note: TP=16 produces GIBBERISH with this static-W8A8 checkpoint on
+#   vllm-ascend v0.22.1/v0.23.0. Use TP=8 PP=2 (verified PASS).
+#   DSA path is incompatible with FLASHCOMM1.
 #
 # Usage:
-#   bash run_vllm.sh                              # TP=8 PP=2 (2 nodes via Ray, verified)
-#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh   # larger context
-#   ENABLE_MTP=1 bash run_vllm.sh                 # enable MTP speculative decoding
+#   bash run_vllm.sh                                   # TP=8 PP=2 (2 nodes)
+#   TP=8 PP=2 MAX_MODEL_LEN=131072 bash run_vllm.sh    # larger context
+#   ENABLE_MTP=1 bash run_vllm.sh                      # MTP (PP=1 only)
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.1.html
+#   https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/GLM5.2.html
 # =============================================================================
 set -euo pipefail
 
@@ -58,6 +56,11 @@ export VLLM_USE_V1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 
 # Runtime / debug
 export ASCEND_LAUNCH_BLOCKING=0
@@ -97,11 +100,13 @@ if [[ "$ENABLE_MTP" == "1" ]]; then
 fi
 
 echo "============================================"
-echo "[INFO] GLM-5.1 W8A8 — vLLM-Ascend Deployment (2-node TP=16)"
+echo "[INFO] GLM-5.1 W8A8 — vLLM-Ascend Deployment (TP=$TP PP=$PP)"
 echo "[INFO] Model:    $MODEL_PATH"
 echo "[INFO] TP=$TP  PP=$PP  DP=$DP  PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL  MTP=$ENABLE_MTP  ENFORCE_EAGER=$ENFORCE_EAGER"
+echo "[INFO] FLASHCOMM1=0 (DSA CP incompatible)"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
 echo "============================================"
 
@@ -130,6 +135,6 @@ vllm serve "$MODEL_PATH" \
     --async-scheduling \
     --additional-config "$ADDITIONAL_CONFIG" \
     "${COMPILE_ARGS[@]}" \
+    "${SPEC_ARGS[@]}" \
     --seed 1024 \
-    ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     "$@"

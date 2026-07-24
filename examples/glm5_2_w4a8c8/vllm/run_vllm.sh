@@ -1,23 +1,25 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5.2 W4A8C8 — Direct vllm serve deployment (official config)
+# GLM-5.2 W4A8C8 — vllm serve deployment (official config)
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
 # Max Position: 1048576 | Deploy: 32K context (override with MAX_MODEL_LEN)
-# Note: GLM-5.2 does not support Pipeline Parallelism; use large TP across nodes.
 #
 # Hardware:
-#   - Atlas 800 A3 (128G x 16): TP=8 DP=2 (single node)
-#   - Atlas 800 A2 (64G x 8):   TP=8 DP=1 (single node, 32K context)
+#   - Atlas 800 A3 (128G x 8):  TP=8 DP=2 PP=1 (single node, official)
+#   - Atlas 800 A2 (64G x 8):   TP=8 PP=1 (single node, 32K context)
+#
+# Note: TP=16 is NOT supported (MLA head_dim=192 × num_kv_heads=3 = 576
+#   not divisible by 16). PP>1 blocks MTP (vLLM 0.23.0 rejects PP+MTP).
+#   W4A8C8 reduces weight memory by ~50% vs W8A8.
 #
 # Usage:
-#   bash run_vllm.sh                      # TP=8 DP=1 single node (A2)
-#   DP=2 bash run_vllm.sh                 # TP=8 DP=2 single node (A3, 16 NPUs)
-#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh  # 2 nodes (A2, 32K+ context)
-#   TP=32 MAX_MODEL_LEN=202752 bash run_vllm.sh  # 4 nodes
+#   bash run_vllm.sh                           # TP=8 DP=1 single node
+#   DP=2 bash run_vllm.sh                      # TP=8 DP=2 single node (A3)
+#   ENABLE_MTP=1 bash run_vllm.sh              # MTP speculative decode (PP=1 only)
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.2.html
+#   https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/GLM5.2.html
 # =============================================================================
 set -euo pipefail
 
@@ -52,7 +54,14 @@ export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+# W4A8C8 supports FLASHCOMM1 (unlike W8A8 which triggers DSA CP incompatibility)
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+# Fused MC2: enable for multi-node (PP>1 or TP>8), disable for single-node
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_V1=1
 
@@ -62,17 +71,15 @@ export VLLM_ENGINE_READY_TIMEOUT_S=1800
 
 # =============================================================================
 # Multi-node network interface binding (optional)
-# Required for multi-node TP>8 deployments. Set NIC_NAME to your high-speed
-# interface (e.g., enp66s0f1). Leave empty for single-node auto-detect.
+# Set NIC_NAME to your high-speed interface (e.g., enp66s0f1). Leave empty for
+# single-node auto-detect.
 #
-# RAY_ADDRESS: For multi-node (TP>8), set this to the Ray head node address
-#   (e.g., RAY_ADDRESS=10.42.11.130:6379) to allow Engine Core subprocess
-#   to connect to the existing Ray cluster instead of starting a local one.
-#   Auto-detect: ray.init(address='auto') → get_runtime_context().gcs_address
+# RAY_ADDRESS: For multi-node (TP>8 or PP>1), set this to the Ray head node
+#   address (e.g., RAY_ADDRESS=10.42.11.130:6379) so Engine Core subprocesses
+#   connect to the existing Ray cluster instead of starting a local one.
 #
-# Note: GLM-5.2 does NOT support TP=16 due to MLA dimension incompatibility
-#   (head_dim=192 × num_kv_heads=3 = 576, not divisible by 16).
-#   W4A8C8 reduces weight memory by ~50% vs W8A8:
+# Note: TP=16 is NOT supported (MLA head_dim=192 × num_kv_heads=3 = 576
+#   not divisible by 16). W4A8C8 reduces weight memory by ~50% vs W8A8:
 #   - A2 (64GB): TP=8 single node ✅ (~35 GiB weights per NPU, 32K context)
 #   - A3 (128GB): TP=8 DP=2 single node ✅
 # =============================================================================
@@ -113,9 +120,11 @@ echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] RAY_ADDRESS=${RAY_ADDRESS:-auto-detect}"
-echo "[INFO] MTP: 3 tokens, method=deepseek_mtp"
+echo "[INFO] MTP: $([[ "$ENABLE_MTP" == "1" ]] && echo 'ON (3 tokens, deepseek_mtp)' || echo 'OFF')"
+echo "[INFO] FLASHCOMM1=$VLLM_ASCEND_ENABLE_FLASHCOMM1 (W4A8C8 compatible)"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
-echo "[INFO] Features: chunked-prefill, prefix-caching, eager MTP"
+echo "[INFO] Features: chunked-prefill, prefix-caching, async-scheduling"
 echo "[INFO] Hardware: A2 (64G) TP=8 single node ✅ | A3 (128G) TP=8 DP=2 ✅"
 echo "============================================"
 
@@ -142,7 +151,7 @@ vllm serve "$MODEL_PATH" \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
     --async-scheduling \
-    ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
+    "${SPEC_ARGS[@]}" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --compilation-config "$COMPILATION_CONFIG" \
     --seed 1024 \

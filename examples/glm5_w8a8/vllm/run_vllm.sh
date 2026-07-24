@@ -1,20 +1,19 @@
 #!/bin/bash
 # =============================================================================
-# GLM-5 W8A8 — Direct vllm serve deployment (2-node TP=16)
+# GLM-5 W8A8 — vllm serve deployment (2-node TP=16)
 # =============================================================================
 # Architecture: GlmMoeDsaForCausalLM | 256 Experts | MLA | MTP=1
-# Max Position: 202752 | Deploy: 32K context (override with MAX_MODEL_LEN)
-# Note: GLM-5 does not support Pipeline Parallelism; use large TP across nodes.
-#       Weights ~718G (W8A8) — a single A2 node (8 x 64G) cannot hold them,
-#       TP=16 (2 nodes) is the minimum viable configuration.
+# Max Position: 202752 | Weights ~718G (W8A8), TP=16 minimum
+#
+# Note: DSA path is incompatible with FLASHCOMM1. PP>1 blocks MTP.
 #
 # Usage:
-#   bash run_vllm.sh                              # TP=16 (2 nodes via Ray)
-#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh   # larger context
-#   ENABLE_MTP=1 bash run_vllm.sh                 # enable MTP speculative decoding
+#   bash run_vllm.sh                                   # TP=16 (2 nodes)
+#   TP=16 MAX_MODEL_LEN=131072 bash run_vllm.sh        # larger context
+#   ENABLE_MTP=1 bash run_vllm.sh                      # MTP (PP=1 only)
 #
 # Reference:
-#   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/GLM5.html
+#   https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/GLM5.2.html
 # =============================================================================
 set -euo pipefail
 
@@ -55,6 +54,11 @@ export VLLM_USE_V1=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
+if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+else
+    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+fi
 
 # Runtime / debug
 export ASCEND_LAUNCH_BLOCKING=0
@@ -86,11 +90,13 @@ if [[ "$ENABLE_MTP" == "1" ]]; then
 fi
 
 echo "============================================"
-echo "[INFO] GLM-5 W8A8 — vLLM-Ascend Deployment (2-node TP=16)"
+echo "[INFO] GLM-5 W8A8 — vLLM-Ascend Deployment (TP=$TP PP=$PP)"
 echo "[INFO] Model:    $MODEL_PATH"
 echo "[INFO] TP=$TP  PP=$PP  DP=$DP  PORT=$PORT"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN  MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL  MTP=$ENABLE_MTP"
+echo "[INFO] FLASHCOMM1=0 (DSA CP incompatible)"
+echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
 echo "============================================"
 
@@ -116,8 +122,8 @@ vllm serve "$MODEL_PATH" \
     --enable-auto-tool-choice \
     --tool-call-parser glm47 \
     --reasoning-parser glm45 \
+    "${SPEC_ARGS[@]}" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --compilation-config "$COMPILATION_CONFIG" \
     --seed 1024 \
-    ${SPEC_ARGS[@]+"${SPEC_ARGS[@]}"} \
     "$@"
