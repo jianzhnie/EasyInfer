@@ -72,3 +72,9 @@ def _patch_extract_layer_index(module: Any, target_name: str) -> None:
     patch_logger.info(
         "[fix_dual_attention] Patched extract_layer_index in %s", target_name
     )
+
+__all__ = [
+    "fix_dual_attention_utils",
+    "fix_dual_attention_deepseek_v2",
+    "fix_dual_attention_qwen3_mtp",
+]

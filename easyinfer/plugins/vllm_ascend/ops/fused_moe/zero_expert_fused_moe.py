@@ -408,3 +408,7 @@ class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
                 before_combine_evt=fused_experts_results.before_combine_evt,
             )
         return routed_out
+
+__all__ = [
+    "AscendZeroExpertFusedMoE",
+]

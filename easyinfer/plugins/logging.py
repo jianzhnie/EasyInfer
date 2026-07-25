@@ -12,3 +12,8 @@ def _prefix_patch_log(record: dict) -> None:
 
 
 patch_logger = _logger.patch(_prefix_patch_log)
+
+__all__ = [
+    "patch_logger",
+    "PATCH_LOG_PREFIX",
+]

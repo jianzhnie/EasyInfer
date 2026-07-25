@@ -120,3 +120,9 @@ def fix_mla_v1(module: Any) -> None:
 @register_patch(target="vllm_ascend.attention.sfa_v1")
 def fix_sfa_v1(module: Any) -> None:
     _patch_caller(module)
+
+__all__ = [
+    "fix_rotary_embedding",
+    "fix_mla_v1",
+    "fix_sfa_v1",
+]

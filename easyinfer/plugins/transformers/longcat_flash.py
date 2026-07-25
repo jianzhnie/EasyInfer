@@ -54,3 +54,7 @@ def patch_register_longcat_flash(_module: Any) -> None:
         )
     except ImportError as e:
         patch_logger.warning("[transformers] Could not register LongCat-Flash: %s", e)
+
+__all__ = [
+    "patch_register_longcat_flash",
+]

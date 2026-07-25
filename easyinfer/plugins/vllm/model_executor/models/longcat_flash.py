@@ -396,3 +396,8 @@ def patch_longcat_flash_mtp_filter(module: Any) -> None:
 
     module.LongcatFlashForCausalLM.load_weights = patched_load_weights
     patch_logger.info("[longcat_flash] MTP weight filter applied")
+
+__all__ = [
+    "patch_longcat_flash_grouped_routing",
+    "patch_longcat_flash_mtp_filter",
+]

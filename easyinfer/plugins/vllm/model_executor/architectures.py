@@ -137,3 +137,7 @@ def patch_vllm_model_registry(module: Any) -> None:
                 "custom arch %s registered in _VLLM_MODELS only",
                 arch_name,
             )
+
+__all__ = [
+    "patch_vllm_model_registry",
+]

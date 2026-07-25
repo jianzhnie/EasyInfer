@@ -36,3 +36,7 @@ def patch_model_arch_convertors(module: Any) -> None:
 
     module.MODEL_ARCH_CONFIG_CONVERTORS["pcl_model"] = PCLModelArchConfigConvertor
     logger.info("Registered ModelArchitectureConfig convertor for pcl_model")
+
+__all__ = [
+    "patch_model_arch_convertors",
+]

@@ -361,3 +361,10 @@ def patch_moe_runner_zero_expert(module: object) -> None:
     patch_logger.info(
         "[fix_ep_zero_expert] Patched MoERunner._maybe_add_zero_expert_output"
     )
+
+__all__ = [
+    "patch_enable_native_zero_expert",
+    "patch_relocate_zero_expert_add",
+    "patch_force_allgather_comm",
+    "patch_moe_runner_zero_expert",
+]

@@ -284,3 +284,7 @@ def patch_qwen3_moe_load_weights(module: Any) -> None:
 
     module.Qwen3MoeModel.load_weights = patched_load_weights
     patch_logger.info("Patched Qwen3MoeModel.load_weights for W4A16 MoE support")
+
+__all__ = [
+    "patch_qwen3_moe_load_weights",
+]

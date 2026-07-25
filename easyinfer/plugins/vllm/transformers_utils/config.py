@@ -76,3 +76,7 @@ def patch_vllm_config_registry(module: Any) -> None:
         "Patched PretrainedConfig.__init__ to auto-set num_hidden_layers "
         "from num_layers (LongCat compatibility)"
     )
+
+__all__ = [
+    "patch_vllm_config_registry",
+]

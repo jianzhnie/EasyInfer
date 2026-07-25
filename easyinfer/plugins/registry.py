@@ -316,3 +316,15 @@ def apply_all_patches() -> int:
 def get_patch_registry() -> dict[str, list[PatchSpec]]:
     """Get the global patch registry (for debugging/testing)."""
     return _PATCH_REGISTRY.copy()
+
+__all__ = ["test"]
+
+
+__all__ = [
+    "register_patch",
+    "apply_all_patches",
+    "discover_modules",
+    "PatchSpec",
+    "package_version_range",
+    "get_patch_registry",
+]
