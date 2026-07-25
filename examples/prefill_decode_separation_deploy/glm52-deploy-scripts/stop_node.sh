@@ -9,7 +9,8 @@
 #
 # 停止顺序: 先发 SIGTERM（优雅退出），等待 5 秒，若仍在则 SIGKILL。
 # ==============================================================================
-set -uo pipefail
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/deploy.conf"

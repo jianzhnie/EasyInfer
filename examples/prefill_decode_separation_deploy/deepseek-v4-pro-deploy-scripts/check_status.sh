@@ -10,7 +10,8 @@
 # 检查方式: 对每个节点发 GET /v1/models 请求，判断是否返回 200。
 # 需要 curl 和网络连通。
 # ==============================================================================
-set -uo pipefail
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/deploy.conf"

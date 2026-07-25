@@ -7,7 +7,7 @@
 # 4 节点: TP=32 PP=1 EP=32 (GLM-5 不支持 PP)
 # 单节点: TP=8 PP=1 EP=8
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
 set +u
 if [[ -f "/usr/local/Ascend/cann/set_env.sh" ]]; then

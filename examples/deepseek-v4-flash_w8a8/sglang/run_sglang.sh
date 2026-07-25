@@ -12,7 +12,7 @@
 #   - torch.distributed 原生多节点（无需 Ray）
 #   - EAGLE 推测解码（MTP 模型）
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
 # Load Ascend CANN environment (required for libascend_hal.so)
 # CANN scripts reference unset vars; disable nounset during source
