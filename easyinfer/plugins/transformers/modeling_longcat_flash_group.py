@@ -438,8 +438,12 @@ class LongcatFlashMLA(nn.Module):
 
         if config.mla_scale_q_lora:
             self.mla_scale_q_lora = (config.hidden_size / self.q_lora_rank) ** 0.5
+        else:
+            self.mla_scale_q_lora = None
         if config.mla_scale_kv_lora:
             self.mla_scale_kv_lora = (config.hidden_size / self.kv_lora_rank) ** 0.5
+        else:
+            self.mla_scale_kv_lora = None
         self.scaling = self.qk_head_dim ** (-0.5)
 
     def forward(
