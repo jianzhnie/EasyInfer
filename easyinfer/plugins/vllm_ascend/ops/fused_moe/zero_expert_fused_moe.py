@@ -32,7 +32,10 @@ on vLLM >= 0.23 the module skips itself below and nothing is registered.
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util as _importlib_util
+
+from packaging.version import Version
 
 if (
     _importlib_util.find_spec(
@@ -48,8 +51,6 @@ if (
         "ZeroExpertFusedMoE not found (vllm >= 0.23); "
         "AscendZeroExpertFusedMoE OOT registration skipped"
     )
-
-from typing import TYPE_CHECKING
 
 import torch
 from vllm.forward_context import get_forward_context
@@ -68,14 +69,7 @@ from vllm_ascend.ops.fused_moe.fused_moe import AscendFusedMoE, FusedMoEResult
 
 from easyinfer.plugins.registry import register_patch
 
-if TYPE_CHECKING:
-    pass
-
 # vllm-ascend < 0.19 uses ``global_num_experts``; >= 0.19 uses ``num_experts``.
-import importlib.metadata
-
-from packaging.version import Version
-
 _USE_GLOBAL_NUM_EXPERTS = Version(importlib.metadata.version("vllm_ascend")) < Version(
     "0.19"
 )
