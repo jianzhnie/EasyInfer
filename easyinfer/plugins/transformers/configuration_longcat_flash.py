@@ -196,7 +196,7 @@ class LongcatFlashConfig(PretrainedConfig):
         if self.attention_method == "MLA":
             self.head_dim = qk_rope_head_dim
         else:
-            ValueError('attention_method should be one of ["MLA"]')
+            raise ValueError('attention_method should be one of ["MLA"]')
 
         if num_key_value_heads is None:
             num_key_value_heads = num_attention_heads
