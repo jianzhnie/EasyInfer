@@ -19,6 +19,9 @@ Affected vllm_ascend modules:
 This patch auto-detects the dual-attention pattern and returns only the
 **layer-level** integer (first integer found).  Both attention sub-layers
 get the same ``layer_id``.
+
+Each target module gets its own independently named patch function so that
+log messages clearly identify which module was patched.
 """
 
 from __future__ import annotations
@@ -28,37 +31,44 @@ from typing import Any
 from easyinfer.plugins.logging import patch_logger
 from easyinfer.plugins.registry import register_patch
 
-_TARGETS = [
-    # Patch the source function so any late importers get the fix.
-    "vllm.model_executor.models.utils",
-    # Also patch consumer modules to rebind their local "from X import Y" references.
-    "vllm_ascend.patch.worker.patch_deepseek_v2",
-    "vllm_ascend.patch.worker.patch_qwen3_next_mtp",
-]
+
+@register_patch(target="vllm.model_executor.models.utils")
+def fix_dual_attention_utils(module: Any) -> None:
+    """Patch the source definition of ``extract_layer_index``."""
+    _patch_extract_layer_index(module, "vllm.model_executor.models.utils")
 
 
-def _make_patch(target: str):
-    @register_patch(target=target)
-    def fix_dual_attention(module: Any) -> None:
-        """Wrap module-level ``extract_layer_index`` for dual-attention."""
-        original_extract = module.extract_layer_index
-
-        def patched_extract(layer_name: str, num_attn_module: int = 1) -> int:
-            if num_attn_module == 1 and "attn" in layer_name:
-                int_count = sum(1 for p in layer_name.split(".") if p.isdigit())
-                if int_count >= 2:
-                    for part in layer_name.split("."):
-                        if part.isdigit():
-                            return int(part)
-            return original_extract(layer_name, num_attn_module)
-
-        module.extract_layer_index = patched_extract
-        patch_logger.info(
-            "[fix_dual_attention] Patched extract_layer_index in %s", target
-        )
-
-    return fix_dual_attention
+@register_patch(target="vllm_ascend.patch.worker.patch_deepseek_v2")
+def fix_dual_attention_deepseek_v2(module: Any) -> None:
+    """Rebind ``extract_layer_index`` in the DeepSeek V2 patch worker."""
+    _patch_extract_layer_index(module, "vllm_ascend.patch.worker.patch_deepseek_v2")
 
 
-for _target in _TARGETS:
-    _make_patch(_target)
+@register_patch(target="vllm_ascend.patch.worker.patch_qwen3_next_mtp")
+def fix_dual_attention_qwen3_mtp(module: Any) -> None:
+    """Rebind ``extract_layer_index`` in the Qwen3 Next MTP patch worker."""
+    _patch_extract_layer_index(module, "vllm_ascend.patch.worker.patch_qwen3_next_mtp")
+
+
+def _patch_extract_layer_index(module: Any, target_name: str) -> None:
+    """Wrap module-level ``extract_layer_index`` for dual-attention support.
+
+    When the layer name contains two or more integer components and
+    ``num_attn_module=1``, only the first integer (the layer index) is
+    returned.  Otherwise the original function is called unchanged.
+    """
+    original_extract = module.extract_layer_index
+
+    def patched_extract(layer_name: str, num_attn_module: int = 1) -> int:
+        if num_attn_module == 1 and "attn" in layer_name:
+            int_count = sum(1 for p in layer_name.split(".") if p.isdigit())
+            if int_count >= 2:
+                for part in layer_name.split("."):
+                    if part.isdigit():
+                        return int(part)
+        return original_extract(layer_name, num_attn_module)
+
+    module.extract_layer_index = patched_extract
+    patch_logger.info(
+        "[fix_dual_attention] Patched extract_layer_index in %s", target_name
+    )
