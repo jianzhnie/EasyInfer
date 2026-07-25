@@ -9,6 +9,12 @@ because their ``modeling_longcat.py`` relies on ``transformers.utils.LossKwargs`
 
 By registering the architecture here, vLLM uses its own built-in
 ``LongcatFlashForCausalLM`` implementation, avoiding the import altogether.
+
+Custom architectures such as ``PCLForCausalLM`` (for Kimi-K2 MCore checkpoints)
+are defined in EasyInfer's own plugin modules rather than inside
+``vllm.model_executor.models``.  They are registered via the
+``_CUSTOM_ARCHITECTURES`` table below, which bypasses vLLM's module-name
+resolution so the full module path is preserved.
 """
 
 from __future__ import annotations
@@ -29,6 +35,20 @@ _ARCH_ALIASES: dict[str, str] = {
     "LongcatCausalLM": "LongcatFlashForCausalLM",
 }
 
+# Custom architectures whose implementation lives outside
+# ``vllm.model_executor.models`` (i.e. inside EasyInfer's plugin tree).
+# Each entry maps an architecture name to (full_module_path, class_name).
+#
+# Unlike aliases above, these do NOT go through ``_resolve_module_name``
+# because that helper prepends ``vllm.model_executor.models.`` — which would
+# produce a non-existent path for EasyInfer modules.
+_CUSTOM_ARCHITECTURES: dict[str, tuple[str, str]] = {
+    "PCLForCausalLM": (
+        "easyinfer.plugins.vllm.model_executor.models.pcl_model",
+        "PCLForCausalLM",
+    ),
+}
+
 
 @register_patch(target="vllm.model_executor.models.registry")
 def patch_vllm_model_registry(module: Any) -> None:
@@ -41,6 +61,7 @@ def patch_vllm_model_registry(module: Any) -> None:
     register every alias in *both* places so the check passes.
     """
 
+    # ---- Phase 1: architecture aliases (name → existing vLLM class) ----
     for alias, canonical in _ARCH_ALIASES.items():
         # 1) Keep _VLLM_MODELS consistent (for older vLLM and for reference)
         if alias not in module._VLLM_MODELS:
@@ -76,4 +97,43 @@ def patch_vllm_model_registry(module: Any) -> None:
                 alias,
                 full_module_name,
                 cls_name,
+            )
+
+    # ---- Phase 2: custom architectures (EasyInfer-owned implementations) ----
+    for arch_name, (full_module, class_name) in _CUSTOM_ARCHITECTURES.items():
+        if arch_name in module._VLLM_MODELS:
+            continue  # already registered (idempotent)
+
+        # Register in _VLLM_MODELS with the full module path (not a relative
+        # name) so that older vLLM code paths can still find the module.
+        module._VLLM_MODELS[arch_name] = (full_module, class_name)
+        logger.info(
+            "Registered custom arch in _VLLM_MODELS: %s -> (%s, %s)",
+            arch_name,
+            full_module,
+            class_name,
+        )
+
+        # Register in ModelRegistry if available (vLLM >= 0.23.0).
+        # We bypass _resolve_module_name because custom architectures use
+        # absolute module paths.
+        if hasattr(module, "ModelRegistry") and hasattr(
+            module.ModelRegistry, "register_model"
+        ):
+            if arch_name not in module.ModelRegistry.models:
+                module.ModelRegistry.register_model(
+                    arch_name,
+                    f"{full_module}:{class_name}",
+                )
+                logger.info(
+                    "Registered custom arch in ModelRegistry: %s -> %s:%s",
+                    arch_name,
+                    full_module,
+                    class_name,
+                )
+        else:
+            logger.info(
+                "ModelRegistry not available (vLLM < 0.23.0); "
+                "custom arch %s registered in _VLLM_MODELS only",
+                arch_name,
             )

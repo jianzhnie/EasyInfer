@@ -7,6 +7,12 @@ Root Cause:
 - make_expert_params_mapping() generates param names like "experts.w2_weight"
 - W4A16 quantization registers params as "experts.w2_weight_packed"
 - load_weights fails because it looks for "w2_weight" but actual param is "w2_weight_packed"
+
+Compatibility:
+- vLLM < 0.20.1: W4A16 MoE loading is not natively supported → this patch is required.
+- vLLM >= 0.20.1: upstream may have its own W4A16 MoE support, but the patched
+  load_weights delegates to the original implementation for non-W4A16 models
+  (via ``_is_w4a16_quantized``), so it is safe to apply on all versions.
 """
 
 from collections.abc import Iterable
@@ -16,7 +22,7 @@ import torch
 from vllm.logger import init_logger
 
 from easyinfer.plugins.logging import patch_logger
-from easyinfer.plugins.registry import package_version_range, register_patch
+from easyinfer.plugins.registry import register_patch
 
 target_logger = init_logger(__name__)
 
@@ -42,12 +48,15 @@ def _get_w4a16_aux_suffixes() -> list[str]:
     return ["_scale", "_shape", "_offset"]
 
 
-@register_patch(
-    target="vllm.model_executor.models.qwen3_moe",
-    condition=package_version_range("vllm", max_version="0.20.1"),
-)
+@register_patch(target="vllm.model_executor.models.qwen3_moe")
 def patch_qwen3_moe_load_weights(module: Any) -> None:
-    """Patch Qwen3MoeModel.load_weights to handle W4A16 quantization."""
+    """Patch Qwen3MoeModel.load_weights to handle W4A16 quantization.
+
+    Applies to all vLLM versions.  The patched function internally checks
+    whether the loaded model actually uses W4A16 quantization and falls
+    back to the original load_weights implementation when it does not,
+    making this patch safe across vLLM upgrades.
+    """
 
     original_load_weights = module.Qwen3MoeModel.load_weights
 
@@ -136,90 +145,34 @@ def patch_qwen3_moe_load_weights(module: Any) -> None:
                     if remapped is None:
                         continue
                     name_mapped = remapped
-                if name_mapped not in params_dict:
-                    continue
 
-                param = params_dict[name_mapped]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                if weight_loader == default_weight_loader:
+                if name_mapped in params_dict:
+                    param = params_dict[name_mapped]
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     weight_loader(param, loaded_weight)
-                else:
-                    weight_loader(param, loaded_weight, shard_id)
-                loaded_params.add(name_mapped)
-                handled = True
-                break
+                    loaded_params.add(name_mapped)
+                    handled = True
+                    break
 
             if handled:
                 continue
 
-            # Handle expert weights
+            # Handle expert parameters
             is_expert_weight = False
             for mapping in expert_params_mapping:
-                param_name, weight_name, expert_id, shard_id = mapping
-                if weight_name not in name:
-                    continue
+                param_name, shard_id, expert_id, expert_name = mapping
+                if expert_name in name:
+                    is_expert_weight = True
+                    name_mapped = name.replace(expert_name, param_name)
 
-                is_expert_weight = True
-                name_mapped = name.replace(weight_name, param_name)
-
-                if is_pp_missing_parameter(name_mapped, self):
-                    continue
-
-                if (
-                    name_mapped.endswith(ignore_suffixes)
-                    and name_mapped not in params_dict
-                ):
-                    continue
-
-                # W4A16: Try to find the parameter with suffixes
-                param_found = False
-
-                # First, try loading weight with _packed suffix (or no suffix)
-                for suffix in w4a16_weight_suffixes:
-                    name_with_suffix = name_mapped + suffix
-                    if name_with_suffix in params_dict:
-                        param = params_dict[name_with_suffix]
-                        weight_loader = getattr(
-                            param, "weight_loader", default_weight_loader
-                        )
-                        try:
-                            # Try with return_success parameter
-                            success = weight_loader(
-                                param,
-                                loaded_weight,
-                                name_with_suffix,
-                                shard_id=shard_id,
-                                expert_id=expert_id,
-                                return_success=True,
-                            )
-                            if success:
-                                loaded_params.add(name_with_suffix)
-                                param_found = True
-                                break
-                        except TypeError:
-                            # Fallback if weight_loader doesn't accept return_success
-                            try:
-                                weight_loader(
-                                    param,
-                                    loaded_weight,
-                                    name_with_suffix,
-                                    shard_id=shard_id,
-                                    expert_id=expert_id,
-                                )
-                                loaded_params.add(name_with_suffix)
-                                param_found = True
-                                break
-                            except Exception as e:
-                                target_logger.debug(
-                                    f"Failed to load {name_with_suffix}: {e}"
-                                )
-
-                # If not found as weight, try loading as auxiliary params (_scale, _shape, _offset)
-                if not param_found:
-                    for aux_suffix in w4a16_aux_suffixes:
-                        name_with_aux = name_mapped + aux_suffix
-                        if name_with_aux in params_dict:
-                            param = params_dict[name_with_aux]
+                    # Try each W4A16 weight suffix
+                    param_found = False
+                    for weight_suffix in w4a16_weight_suffixes:
+                        name_with_suffix = name_mapped + weight_suffix
+                        if name_with_suffix in params_dict:
+                            param = params_dict[name_with_suffix]
                             weight_loader = getattr(
                                 param, "weight_loader", default_weight_loader
                             )
@@ -227,34 +180,74 @@ def patch_qwen3_moe_load_weights(module: Any) -> None:
                                 success = weight_loader(
                                     param,
                                     loaded_weight,
-                                    name_with_aux,
+                                    name_with_suffix,
                                     shard_id=shard_id,
                                     expert_id=expert_id,
                                     return_success=True,
                                 )
                                 if success:
-                                    loaded_params.add(name_with_aux)
+                                    loaded_params.add(name_with_suffix)
                                     param_found = True
                                     break
                             except TypeError:
+                                # Fallback if weight_loader doesn't accept return_success
                                 try:
                                     weight_loader(
+                                        param,
+                                        loaded_weight,
+                                        name_with_suffix,
+                                        shard_id=shard_id,
+                                        expert_id=expert_id,
+                                    )
+                                    loaded_params.add(name_with_suffix)
+                                    param_found = True
+                                    break
+                                except Exception as e:
+                                    target_logger.debug(
+                                        f"Failed to load {name_with_suffix}: {e}"
+                                    )
+
+                    # If not found as weight, try loading as auxiliary params
+                    if not param_found:
+                        for aux_suffix in w4a16_aux_suffixes:
+                            name_with_aux = name_mapped + aux_suffix
+                            if name_with_aux in params_dict:
+                                param = params_dict[name_with_aux]
+                                weight_loader = getattr(
+                                    param, "weight_loader", default_weight_loader
+                                )
+                                try:
+                                    success = weight_loader(
                                         param,
                                         loaded_weight,
                                         name_with_aux,
                                         shard_id=shard_id,
                                         expert_id=expert_id,
+                                        return_success=True,
                                     )
-                                    loaded_params.add(name_with_aux)
-                                    param_found = True
-                                    break
-                                except Exception as e:
-                                    target_logger.debug(
-                                        f"Failed to load {name_with_aux}: {e}"
-                                    )
+                                    if success:
+                                        loaded_params.add(name_with_aux)
+                                        param_found = True
+                                        break
+                                except TypeError:
+                                    try:
+                                        weight_loader(
+                                            param,
+                                            loaded_weight,
+                                            name_with_aux,
+                                            shard_id=shard_id,
+                                            expert_id=expert_id,
+                                        )
+                                        loaded_params.add(name_with_aux)
+                                        param_found = True
+                                        break
+                                    except Exception as e:
+                                        target_logger.debug(
+                                            f"Failed to load {name_with_aux}: {e}"
+                                        )
 
-                if param_found:
-                    break
+                    if param_found:
+                        break
 
             else:
                 if is_expert_weight:
