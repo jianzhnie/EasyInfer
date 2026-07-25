@@ -1,16 +1,17 @@
 # Qwen3-235B-A22B 部署指南
 
-> **vLLM-Ascend 0.20.2 + CANN 9.0.0** | 端口: **8018**
-> 架构: Qwen3MoeForCausalLM | 128 Experts | MoE | BF16
-> 已验证配置: TP=8 PP=1 (单节点) | 上下文: 32K | max_position_embeddings: 262,144
-> Agent 优化版: Prefix Caching ✅ | max_num_seqs=16 | Tool Calling (hermes) ✅ | Anthropic Messages API ✅
+> **vLLM-Ascend v0.21.0+** | 端口: **8018**
+> 架构: Qwen3MoeForCausalLM | 128 Experts | GQA (64H/4KVH) | W8A8/BF16
+> 首次支持: v0.8.4rc2 | 已验证版本: v0.21.0
+> 单节点: A3 (64G×16) 或 A2 (64G×8) | 上下文: 32K (可扩展至 135K)
 
 ## 模型简介
 
 | 属性 | 值 |
 |------|-----|
-| **架构** | Qwen3MoeForCausalLM (MoE) |
-| **总专家数** | 128 (每 Token 激活 8 专家) |
+| **架构** | Qwen3MoeForCausalLM (MoE + GQA) |
+| **总参数** | 235B (每 Token 激活 22B) |
+| **路由专家** | 128 (每 Token 激活 8) |
 | **隐藏维度** | 4096 |
 | **FFN 维度** | 12288 |
 | **MoE FFN 维度** | 1536 |
@@ -20,101 +21,108 @@
 | **原生上下文** | **262,144** |
 | **Head Dim** | 128 |
 | **rope_theta** | 5,000,000 |
+| **MLA** | ❌ 标准 GQA（非 MLA） |
 | **MTP** | ❌ 不支持 |
 | **多模态** | ❌ 纯文本 |
-| **词表大小** | 151,936 |
-| **工具调用解析器** | hermes |
-
-### 架构注意事项
-
-Qwen3-235B-A22B 是一个 235B 参数的巨型 MoE 模型，包含 128 个路由专家。由于参数量巨大，单节点 A2 (8 NPU × 64G) 部署必须使用 `--quantization ascend` 进行 W4A8 量化。多节点部署可以设置 `QUANTIZATION=none` 使用 BF16 全精度。
-
-### 官方文档参考
-
-- vLLM 官方文档: https://docs.vllm.ai/en/stable/
-- vLLM-Ascend 模型文档: https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
 
 ## 快速开始
 
 ### 前置条件
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Qwen/Qwen3-235B-A22B-Instruct-2507`
-
 ```bash
-# 1. 启动 NPU Docker 容器
-bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
+# 模型权重 (BF16 或 W8A8 量化版)
+# BF16:    https://www.modelscope.cn/models/Qwen/Qwen3-235B-A22B
+# W8A8:    https://modelers.cn/models/Modelers_Park/Qwen3-235B-A22B-w8a8
 
-# 2. 启动 Ray 集群
-bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
+# 启动 NPU Docker 容器
+bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
 ```
 
 ### 部署
 
 ```bash
-# 单节点 (32K 上下文, TP=8, W4A8)
-bash examples/qwen3-235b-a22b-instruct-2507/vllm/run_vllm.sh
+# 单节点 W8A8 (默认, TP=8)
+bash examples/qwen3-235b/vllm/run_vllm.sh
 
-# 大 TP 扩展上下文
-TP=16 MAX_MODEL_LEN=65536 bash examples/qwen3-235b-a22b-instruct-2507/vllm/run_vllm.sh
+# 高吞吐模式 (A3, TP=4 DP=4)
+TP=4 DP=4 DP_LOCAL=4 HCCL_IF_IP=<ip> DP_ADDRESS=<ip> bash examples/qwen3-235b/vllm/run_vllm.sh
 
-# 多节点 BF16 全精度 (不推荐单节点跑)
-QUANTIZATION=none TP=16 bash examples/qwen3-235b-a22b-instruct-2507/vllm/run_vllm.sh
+# 低延迟模式 (A3, TP=16)
+TP=16 bash examples/qwen3-235b/vllm/run_vllm.sh
+
+# 长上下文 (135K, yarn rope-scaling)
+MAX_MODEL_LEN=135000 bash examples/qwen3-235b/vllm/run_vllm.sh
+
+# BF16 全精度
+QUANTIZATION=none bash examples/qwen3-235b/vllm/run_vllm.sh
 
 # 后台运行
-nohup bash examples/qwen3-235b-a22b-instruct-2507/vllm/run_vllm.sh > qwen3_235b_vllm.log 2>&1 &
-
-# 使用传统包装器部署
-bash examples/qwen3-235b-a22b-instruct-2507/vllm/vllm_server.sh
+nohup bash examples/qwen3-235b/vllm/run_vllm.sh > qwen3_235b.log 2>&1 &
 ```
 
 ### 验证
 
 ```bash
-# 运行测试脚本
-bash examples/qwen3-235b-a22b-instruct-2507/vllm/curl_test.sh
+bash examples/qwen3-235b/vllm/curl_test.sh
 
-# 手动验证
-curl http://localhost:8018/v1/models
+# 手动测试
 curl http://localhost:8018/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3-235b-a22b","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
+  -d '{"model":"qwen3","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
 
 ## 并行策略
 
-| 场景 | TP | PP | DP | NPU | 上下文 | 量化 | 状态 |
-|------|-----|-----|-----|-----|--------|------|------|
-| 单节点 | 8 | 1 | 1 | 8 | 32K | W4A8 | ⚠️ 待验证 |
-| 2 节点 | 16 | 1 | 1 | 16 | 65K | W4A8 | ⚠️ 待验证 |
-| 4 节点 | 16 | 1 | 2 | 32 | 65K | BF16 | ⚠️ 待验证 |
+| 场景 | TP | DP | NPU | 上下文 | 量化 | FUSED_MC2 |
+|------|-----|-----|-----|--------|------|-----------|
+| 默认单节点 | 8 | 1 | 8/16 | 32K | W8A8 | 0 |
+| 高吞吐 (A3) | 4 | 4 | 16 | 32K | W8A8 | 1 |
+| 低延迟 (A3) | 16 | 1 | 16 | 32K | W8A8 | 0 |
+| 长上下文 | 8 | 1 | 8/16 | 135K | W8A8 | 1 |
 
-> 128 专家 MoE 推荐至少 2 节点部署，4 节点可支持 BF16 全精度。
+> 官方推荐：EP 始终开启 (`--enable-expert-parallel`)。128 专家 MoE，EP 配合 TP 自动分配。
 
 ## 环境变量
 
-> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
-> Claude Code 集成方式见 [prompts/vllm-prompt.md](../../../prompts/vllm-prompt.md)。
-## 功能验证清单
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MODEL_PATH` | Qwen3-235B-A22B-Instruct-2507 | 模型路径 |
+| `TP` | 8 | Tensor Parallel |
+| `DP` | 1 | Data Parallel (高吞吐设为 4) |
+| `QUANTIZATION` | ascend | 量化 (ascend / none) |
+| `MAX_MODEL_LEN` | 32768 | 最大上下文 (可设 135000) |
+| `MAX_NUM_SEQS` | 32 | 最大并发请求 |
+| `MAX_NUM_BATCHED_TOKENS` | 8096 | 每 batch 最大 token 数 |
+| `GPU_MEM_UTIL` | 0.95 | 显存利用率 |
+| `HCCL_BUFFSIZE` | 512 | HCCL 缓冲区 (MB) |
+| `NIC_NAME` | — | 多节点网卡名 |
+| `HCCL_IF_IP` | — | 多节点 HCCL IP |
+| `FUSED_MC2` | auto | Fused MC2 (高吞吐=1, 低延迟=0) |
 
-### 基础功能
+## 官方参考
 
-| 功能 | 状态 | 脚本 |
-|------|------|------|
-| 基础 Chat Completion | ⚠️ 待验证 | `run_vllm.sh` |
-| Tool Calling (hermes) | ⚠️ 待验证 | `curl_test.sh` |
-| Anthropic Messages API | ⚠️ 待验证 | `curl_test.sh` |
-| MTP 投机解码 | ❌ 不支持 | 模型无 MTP 模块 |
+- 模型文档: https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/Qwen3-235B-A22B.html
+- 环境变量: https://docs.vllm.ai/projects/ascend/zh-cn/latest/user_guide/configuration/env_vars.html
+- 性能调优: https://docs.vllm.ai/projects/ascend/zh-cn/latest/developer_guide/performance_and_debug/optimization_and_tuning.html
 
 ## 常见问题
 
-### Q: 为什么单节点部署需要 W4A8 量化？
+### Q: 硬件要求？
 
-A: Qwen3-235B 总参数量 235B，BF16 格式需 ~470GB 显存，远超单节点 A2 的 512GB 总显存（还需预留 KV Cache）。W4A8 量化后将模型压缩至 ~120GB，可以在单节点运行。
+BF16 需要 1× A3 (64G×16) 或 1× A2 (64G×8)。W8A8 量化版硬件需求相同但显存占用更小。
 
-### Q: 128 专家对部署有什么影响？
+### Q: Qwen3-235B 需要 MLA 优化吗？
 
-A: EP_SIZE 需能整除 128 (推荐 8, 16, 32, 64, 128)。128 专家的 all-to-all 通信开销较大，建议使用较大的 HCCL_BUFFSIZE (800MB)。
+不需要。Qwen3-235B 使用标准 GQA 注意力，非 MLA (Multi-head Latent Attention)。无需设置 VLLM_ASCEND_ENABLE_MLAPO。
 
-### Q: 和 Qwen3-32B 部署有什么区别？
+### Q: EP 是否必须开启？
 
-A: Qwen3-32B 是密集模型 (无 MoE)，不需要 `--enable-expert-parallel`。Qwen3-235B 是 MoE 模型，需要 EP，且由于参数量大，单节点需要 W4A8 量化。
+是。MoE 模型必须通过 `--enable-expert-parallel` 开启 EP，将 FFN 专家分布到多张 NPU 上以降低单卡计算量。
+
+### Q: 如何扩展长上下文？
+
+使用 yarn rope-scaling：`--hf-overrides '{"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"factor":4,"original_max_position_embeddings":32768}}'`。Qwen3-235B-A22B-Instruct-2507 原生支持长上下文，通常无需此参数。
+
+### Q: 什么时候用 PD 分离 vs 单节点？
+
+单节点部署更简单，适合模型能放入单节点的场景。PD 分离将 Prefill 和 Decode 分布到不同节点，适合大规模高吞吐服务。3 节点 A3 PD 分离可达单节点 ~3× 吞吐。
