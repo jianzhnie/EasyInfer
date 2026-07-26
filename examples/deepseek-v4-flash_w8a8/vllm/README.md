@@ -1,180 +1,120 @@
 # DeepSeek-V4-Flash W8A8 MTP 部署指南
 
-> ✅ **已验证 PASS** | vLLM-Ascend 0.22.1rc1 + CANN 8.5.1 | 端口: **8000**
-> 已验证配置: TP=8 PP=1 (单节点), MAX_MODEL_LEN=65536；2026-07-21 复测通过
-> 历史问题: vLLM-Ascend 0.18.0rc1 不支持 `DeepseekV4ForCausalLM`（0.22.1 起原生支持）
+> **vLLM-Ascend v0.22.1rc1+** | 端口: **8000**
+> 架构: DeepseekV4ForCausalLM | 256 Experts (+1 shared) | MLA | MTP=1 | W8A8
+> 原生上下文: **1,048,576** (1M) | 单节点 A3 (128G×8) 或 A2 (64G×8)
+> ✅ 已验证 PASS (2026-07-21 复测) | Hybrid KV Cache ✅ | Prefix Caching ✅
 
-本文档提供 DeepSeek-V4-Flash W8A8 MTP 模型在华为昇腾 NPU 环境下的部署指南。
+DeepSeek-V4-Flash 是 DeepSeek-V4 的轻量级变体：流形约束超连接 (mHC)、混合注意力 (Compress-4/128-Attention)、DeepSeekMoE (256 专家 + 1 共享)，每 Token 激活 6 专家。
 
 ## 模型简介
 
 | 属性 | 值 |
 |------|-----|
-| **架构** | DeepSeek V4 Flash (MoE + MLA) |
-| **参数量** | DeepSeek V4 Flash 版本 (精简高效) |
-| **路由专家** | 256 (+ 1 共享专家) |
-| **每 Token 激活专家** | 6 |
+| **架构** | DeepseekV4ForCausalLM (MoE + MLA + mHC) |
+| **路由专家** | 256 (+ 1 共享)，每 Token 激活 6 |
 | **隐藏维度** | 4096 |
 | **网络层数** | 43 |
 | **注意力头** | 64 (GQA: 1 KV head) |
-| **原生上下文** | 1,048,576 (1M tokens) |
-| **量化方式** | W8A8 (8-bit 权重 + 8-bit 激活) |
-| **投机解码** | MTP (Multi-Token Prediction), 1 nextn layer |
+| **原生上下文** | **1,048,576** (1M) |
+| **量化方式** | W8A8 (`--quantization ascend`) |
+| **MTP** | ✅ 1 nextn layer (method=`mtp`, tokens=1) |
 | **词表大小** | 129,280 |
+| **Tokenizer** | deepseek_v4 |
+| **工具调用解析器** | deepseek_v4 |
 
-## 官方文档参考
+### 架构注意事项
 
-- vLLM-Ascend 模型列表: https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
-- vLLM 官方文档: https://docs.vllm.ai/en/stable/
+- **Hybrid KV Cache Manager**: `--no-disable-hybrid-kv-cache-manager` 支持 Compress-4/128-Attention 混合注意力。
+- **Block Size 128**: MLA attention kernel 固定值。4K prefix caching 需改为 32（实验性）。
+- **Prefix Caching**: 官方推荐开启。PD 分离场景的解码节点需要关闭。
+- **MTP=1**: enforce_eager=true，1 token 推测解码。
 
-## 模型权重
+### 硬件要求
 
-模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp`
+| 硬件 | 配置 | 上下文 |
+|------|------|--------|
+| Atlas 800I A3 (128G × 8) | W8A8, TP=4 DP=4 | 1M |
+| Atlas 800I A2 (64G × 8) | W8A8, TP=8 DP=1 | 64K |
 
-## 硬件要求
+### 官方文档参考
 
-### 单节点部署
-
-| 硬件 | 配置 | 推荐上下文 |
-|------|------|-----------|
-| Atlas 800 A2 (64G × 8) | W8A8, TP=8 | 32k |
-| Atlas 800 A3 (64G × 16) | W8A8, TP=16 | 64k-128k |
-
-### 多节点部署
-
-| 节点数 | 配置 | 推荐上下文 |
-|--------|------|-----------|
-| 2 节点 × 8 NPU | TP=8, PP=2 | 64k |
-| 4 节点 × 8 NPU | TP=8, PP=4 | 128k |
-| 8 节点 × 8 NPU | TP=8, PP=8 | 256k+ |
+- vLLM-Ascend 模型文档: https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/DeepSeek-V4-Flash.html
 
 ## 快速开始
 
 ### 前置条件
 
+模型权重: https://www.modelscope.cn/models/Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp
+
 ```bash
-# 1. 启动 NPU Docker 容器 (所有节点)
 bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
-
-# 2. 启动 Ray 集群 (所有节点)
-bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
 ```
 
-### 单节点部署 (默认)
+### 部署
 
 ```bash
-# 在容器内执行
-cd /home/jianzhnie/llmtuner/llm/EasyInfer
-bash examples/deepseek-v4-flash_w8a8/vllm_server.sh
+# 默认 (TP=4 DP=4, 1M context, MTP on)
+bash examples/deepseek-v4-flash_w8a8/vllm/run_vllm.sh
+
+# 禁用 MTP
+ENABLE_MTP=0 bash examples/deepseek-v4-flash_w8a8/vllm/run_vllm.sh
+
+# 后台运行
+nohup bash examples/deepseek-v4-flash_w8a8/vllm/run_vllm.sh > dsv4_flash.log 2>&1 &
 ```
 
-### 多节点部署 (8 节点 × 8 NPU)
+### 验证
 
 ```bash
-# 在 Head 节点容器内执行
-PIPELINE_PARALLEL_SIZE=8 \
-MAX_MODEL_LEN=131072 \
-bash examples/deepseek-v4-flash_w8a8/vllm_server.sh
+bash examples/deepseek-v4-flash_w8a8/vllm/curl_test.sh
+
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"dsv4","messages":[{"role":"user","content":"Who are you?"}],"max_tokens":256}'
 ```
 
-### 后台运行
+## 并行策略
 
-```bash
-nohup bash examples/deepseek-v4-flash_w8a8/vllm_server.sh > deepseek_v4_flash_server.log 2>&1 &
-```
+| 场景 | TP | DP | NPU | 上下文 | MTP |
+|------|-----|-----|-----|--------|-----|
+| 默认 (高吞吐) | 4 | 4 | 16 | 1M | 1 |
+| 低延迟 | 8 | 1 | 8 | 64K | 1 |
+
+> 官方推荐 TP=4 DP=4。TP=8 DP=1 适用于低延迟场景。
 
 ## 环境变量
 
-> 完整环境变量说明见 [prompts/vllm_env_vars.md](../../../prompts/vllm_env_vars.md)。
-
-## 并行策略推荐
-
-### 8 节点 × 8 NPU (64 卡) 环境
-
-```
-场景               TP   PP   EP   DP   MAX_MODEL_LEN
-─────────────────────────────────────────────────────
-低延迟 (单节点)     8    1    8    1    65536
-均衡 (2 节点)       8    2    8    1    131072
-高吞吐 (4 节点)     8    4    8    1    131072
-长上下文 (8 节点)   8    8    8    1    262144
-```
-
-## 性能调优
-
-### 低延迟场景
-- 单节点部署 (TP=8)
-- 减小 `MAX_NUM_SEQS` (如 4-8)
-- 启用投机解码 (MTP tokens=3)
-- 减小 `MAX_NUM_BATCHED_TOKENS` (如 4096)
-
-### 高吞吐场景
-- 多节点部署，增大 `DATA_PARALLEL_SIZE`
-- 增大 `MAX_NUM_SEQS` (如 16-32)
-- 启用 Chunked Prefill 和 Prefix Caching
-- 启用异步调度
-- 增大 `NUM_SCHEDULER_STEPS` (如 8-16)
-
-### 长上下文场景
-- 多节点扩展 PP
-- 增大 `MAX_MODEL_LEN` (如 131072-262144)
-- 提高 `GPU_MEMORY_UTILIZATION` (如 0.95)
-- 增大 `SWAP_SPACE` (如 64-128)
-
-## 功能验证
-
-### 基础测试
-
-```bash
-bash examples/deepseek-v4-flash_w8a8/curl_test.sh
-```
-
-### 手动 API 测试
-
-```bash
-# 检查服务
-curl http://localhost:8000/v1/models
-
-# Chat Completion
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-v4-flash",
-    "messages": [{"role": "user", "content": "你好，请介绍一下自己"}],
-    "max_tokens": 200
-  }'
-
-# 流式输出
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-v4-flash",
-    "messages": [{"role": "user", "content": "写一首诗"}],
-    "max_tokens": 200,
-    "stream": true
-  }'
-```
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MODEL_PATH` | Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp | 模型路径 |
+| `TP` | 4 | Tensor Parallel |
+| `DP` | 4 | Data Parallel |
+| `ENABLE_MTP` | 1 | MTP 推测解码 |
+| `MAX_MODEL_LEN` | 1048576 | 最大上下文 (1M) |
+| `MAX_NUM_SEQS` | 64 | 最大并发请求 |
+| `MAX_NUM_BATCHED_TOKENS` | 10240 | 每 batch 最大 token |
+| `GPU_MEM_UTIL` | 0.90 | 显存利用率 |
+| `HCCL_BUFFSIZE` | 1024 | HCCL 缓冲区 (MB) |
+| `NIC_NAME` | — | 多节点网卡名 |
 
 ## 常见问题
 
-### Q: W8A8 和 W4A8 有什么区别？
-A: W8A8 精度更高但显存占用更大 (约 2× W4A8)。W8A8 需要更多 NPU 或更大显存。
+### Q: 为什么默认 TP=4 DP=4？
 
-### Q: MTP 是否必须启用？
-A: 不是必须的，但推荐启用。MTP (Multi-Token Prediction) 可显著加速解码阶段 (1.5-2× 加速)。不启用 MTP 时删除 `--speculative-config` 参数即可。
+官方推荐高吞吐配置。DP+TP 分布 256 MoE 专家到 16 NPU 最大化吞吐。
 
-### Q: 如何调整上下文长度？
-A: 通过 `MAX_MODEL_LEN` 环境变量。DeepSeek-V4-Flash 原生支持 1M 上下文，但实际可用长度受 NPU 显存限制。W8A8 量化下建议: 单节点 ≤64k, 多节点可按比例扩展。
+### Q: block_size 为什么是 128？
 
-### Q: DeepSeek V4 Flash 和 DeepSeek V3 的区别？
-A: DeepSeek V4 Flash 是更高效的版本，hidden_size 更小 (4096 vs 7168)，层数更少 (43 vs 61)，专家数相同 (256)。推理速度更快，显存占用更小。
+MLA attention kernel 绑定值。4K prefix caching 需改为 32（实验性，显存增加）。
+
+### Q: 和 DeepSeek V3 区别？
+
+V4 Flash: hidden_size 4096 vs 7168，层数 43 vs 61。推理更快，显存更小。
 
 ## 验证记录
 
-| 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 |
-|------|------|------|------|------|------|
-| 2026-07-20 | `quay.io/ascend/vllm-ascend:v0.22.1rc1-a3` (CANN 8.5.1) | pair0: 10.42.11.194/195 | TP=8 PP=1, MAX_MODEL_LEN=65536, PORT=8000 | ✅ PASS | `logs/parallel_deploy_v022_rerun/deepseek-v4-flash_*.log` |
-| 2026-07-21 | 同上 | pair0: 10.42.11.194/195 | TP=8 PP=1, PORT=8000 | ✅ PASS (复测) | `logs/dsv4_flash_reverify_vllm.log` |
-
-- 基础 Chat Completion、Tool Calling、流式输出测试均通过。
-- 流式测试曾因 `set -euo pipefail` 下 `head` 触发 `SIGPIPE` 被修正为 `|| true`。
+| 时间 | 镜像 | 配置 | 结果 |
+|------|------|------|------|
+| 2026-07-20 | v0.22.1rc1-a3 (CANN 8.5.1) | TP=8 PP=1, MAX_MODEL_LEN=65536 | ✅ PASS |
+| 2026-07-21 | 同上 | TP=8 PP=1, PORT=8000 | ✅ PASS (复测) |
