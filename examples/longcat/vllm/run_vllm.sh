@@ -41,7 +41,7 @@ set -u
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8010}"
+readonly PORT="${PORT:-8200}"
 readonly TP="${TP:-64}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
@@ -191,6 +191,28 @@ if [[ "$ENFORCE_EAGER" == "0" ]]; then
     EAGER_FLAGS=()
 fi
 
+# 图模式 (ENFORCE_EAGER=0) 下 vllm 校验 cudagraph_capture_sizes 必须含
+# TP 的倍数; 默认档 [1,2,4,8,16] 在 TP>16 时直接报错。自动生成:
+# 从 TP 起按 TP 步进, 覆盖到 >= MAX_NUM_SEQS, 最多 4 档 (可用
+# CUDAGRAPH_CAPTURE_SIZES='[32,64]' 覆盖)。
+COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
+if [[ "$ENFORCE_EAGER" == "0" ]]; then
+    if [[ -n "${CUDAGRAPH_CAPTURE_SIZES:-}" ]]; then
+        CAPTURE_SIZES="$CUDAGRAPH_CAPTURE_SIZES"
+    else
+        _sizes=()
+        _s=$TP
+        while (( ${#_sizes[@]} < 4 )); do
+            _sizes+=("$_s")
+            (( _s >= MAX_NUM_SEQS )) && break
+            _s=$((_s + TP))
+        done
+        CAPTURE_SIZES="[$(IFS=,; echo "${_sizes[*]}")]"
+    fi
+    COMPILATION_CONFIG="{\"cudagraph_mode\": \"FULL_DECODE_ONLY\", \"cudagraph_capture_sizes\": ${CAPTURE_SIZES}}"
+    echo "[INFO] 图模式 capture_sizes=$CAPTURE_SIZES"
+fi
+
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
@@ -209,7 +231,7 @@ vllm serve "$MODEL_PATH" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
     --no-enable-prefix-caching \
-    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+    --compilation-config "$COMPILATION_CONFIG" \
     "${EAGER_FLAGS[@]}" \
     --seed 1024 \
     "$@"
