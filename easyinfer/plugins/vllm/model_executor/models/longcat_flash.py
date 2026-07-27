@@ -396,33 +396,3 @@ def patch_longcat_flash_mtp_filter(module: Any) -> None:
 
     module.LongcatFlashForCausalLM.load_weights = patched_load_weights
     patch_logger.info("[longcat_flash] MTP weight filter applied")
-
-
-# ===========================================================================
-# Patch 3: Fix dtype mismatch on Ascend NPU (EZ1001)
-# ===========================================================================
-# On Ascend NPU, tensors can silently become float32 after passing through
-# MLA attention or MoE kernels.  The ``aclnnAddRmsNormBias`` operator inside
-# ``input_layernorm`` / ``post_attention_layernorm`` requires all inputs
-# (hidden_states, residual, gamma) to share the same dtype — either all
-# bfloat16, all float16, or all float32.  We cast both hidden_states and
-# residual back to the model's weight dtype (bfloat16) at the entry of
-# every decoder layer forward to keep the NPU kernels happy.
-#
-# NOTE: we use the first ``input_layernorm`` weight's dtype as the canonical
-# model dtype because ``hidden_states.dtype`` may already be float32 at the
-# point of the cast.
-
-
-# NOTE: The EZ1001 dtype fix has been moved to a central location —
-# ``easyinfer/plugins/vllm_ascend/fix_layernorm_dtype.py`` — where it
-# patches the vllm-ascend layer-norm operator directly rather than every
-# individual model call-site.  The patch below is kept for history / future
-# model-specific overrides but is currently empty (no-op).
-
-
-@register_patch(target="vllm.model_executor.models.longcat_flash")
-def patch_longcat_flash_residual_dtype(module: Any) -> None:
-    """Currently a no-op — see fix_layernorm_dtype.py for the real fix."""
-    _ = module
-    # The actual dtype fix lives in easyinfer.plugins.vllm_ascend.fix_layernorm_dtype

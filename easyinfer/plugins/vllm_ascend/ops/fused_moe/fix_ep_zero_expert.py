@@ -131,11 +131,13 @@ def patch_enable_native_zero_expert(module: object) -> None:
                     "[fix_ep_zero_expert] FusedExpertsResult.__iadd__ "
                     "expected a Tensor, got %s" % type(other).__name__
                 )
-            return FusedExpertsResult(
-                routed_out=self.routed_out + other,
-                before_dispatch_evt=self.before_dispatch_evt,
-                before_combine_evt=self.before_combine_evt,
-            )
+            # dataclasses.replace preserves every other field (expert_tokens,
+            # group_list_type, swiglu_limit, ...); a manual reconstruction
+            # would silently reset them to their defaults, breaking the
+            # dynamic-EPLB bookkeeping that reads them after ``apply``.
+            import dataclasses
+
+            return dataclasses.replace(self, routed_out=self.routed_out + other)
 
         FusedExpertsResult.__iadd__ = _fused_experts_result_iadd
         patch_logger.info(

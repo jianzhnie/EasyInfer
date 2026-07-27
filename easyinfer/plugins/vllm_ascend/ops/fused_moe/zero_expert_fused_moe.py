@@ -67,7 +67,7 @@ from vllm_ascend.ops.fused_moe.experts_selector import (
 )
 from vllm_ascend.ops.fused_moe.fused_moe import AscendFusedMoE, FusedMoEResult
 
-from easyinfer.plugins.registry import register_patch
+from easyinfer.plugins.registry import package_version_range, register_patch
 
 # vllm-ascend < 0.19 uses ``global_num_experts``; >= 0.19 uses ``num_experts``.
 _USE_GLOBAL_NUM_EXPERTS = Version(importlib.metadata.version("vllm_ascend")) < Version(
@@ -93,6 +93,11 @@ _EP_COMM_TYPES = frozenset(
 
 @register_patch(
     registrar=CustomOp.register_oot(name="ZeroExpertFusedMoE"),
+    # Same support window npuslim used: the OOT class is only validated
+    # against vllm_ascend <= 0.20.1.  On vllm >= 0.23 the module above
+    # already skipped itself; on the untested 0.21/0.22 window this
+    # condition keeps the registration from firing blindly.
+    condition=package_version_range("vllm_ascend", max_version="0.20.1"),
 )
 class AscendZeroExpertFusedMoE(ZeroExpertFusedMoE, AscendFusedMoE):
     """Ascend replacement for upstream ``ZeroExpertFusedMoE``.

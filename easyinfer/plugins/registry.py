@@ -317,8 +317,6 @@ def get_patch_registry() -> dict[str, list[PatchSpec]]:
     """Get the global patch registry (for debugging/testing)."""
     return _PATCH_REGISTRY.copy()
 
-__all__ = ["test"]
-
 
 __all__ = [
     "register_patch",
