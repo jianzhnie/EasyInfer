@@ -148,12 +148,17 @@ def patch_enable_native_zero_expert(module: object) -> None:
         # zero-expert path in ``apply`` can read it.
         router = self.router
         if isinstance(router, ZeroExpertRouter) and router.zero_expert_type is not None:
-            # Derive zero_expert_num from router's n_zero_experts or bias shape.
+            # Derive zero_expert_num from the bias shape when available
+            # (bias covers real + zero experts), otherwise from the router's
+            # own expert counts.  NOTE: ZeroExpertRouter has no
+            # ``n_zero_experts`` attribute — do not probe for it.
             bias = getattr(router, "e_score_correction_bias", None)
             if bias is not None:
                 n_zero = bias.shape[0] - self.global_num_experts
             else:
-                n_zero = getattr(router, "n_zero_experts", 0)
+                n_zero = getattr(router, "global_num_experts", 0) - getattr(
+                    router, "num_logical_experts", 0
+                )
             if n_zero > 0:
                 self.zero_expert_num = n_zero
                 self.zero_expert_type = router.zero_expert_type
@@ -314,6 +319,72 @@ def patch_force_allgather_comm(module: object) -> None:
 # in the module docstring.
 
 
+def _ep_group_size_and_rank() -> tuple[int, int]:
+    """Return ``(world_size, rank)`` of vllm's expert-parallel group.
+
+    Falls back to ``(1, 0)`` when the group is unavailable (EP disabled or
+    distributed state not initialised) — in that case no cross-rank token
+    gather happens and the stash already matches the local token count.
+    """
+    try:
+        from vllm.distributed.parallel_state import get_ep_group
+
+        group = get_ep_group()
+        return group.world_size, group.rank_in_group
+    except Exception:
+        return 1, 0
+
+
+_slice_layout_warned = False
+
+
+def _slice_zero_expert_output(
+    stashed: torch.Tensor, ref: torch.Tensor
+) -> torch.Tensor:
+    """Extract this rank's zero-expert contribution from the gathered stash.
+
+    With ALLGATHER MoE comm the stash is computed on the *gathered* tokens.
+    ``all_gather`` concatenates equal-sized per-rank blocks in rank order,
+    so rank r's tokens live at ``[r * block, r * block + n_local)`` with
+    ``block = stashed.rows // ep_size`` — this stays correct even when
+    prepare padded every rank to a uniform token count first (``block`` is
+    the padded size then, not ``n_local``).
+
+    The slice is cast to ``ref.dtype`` so the runner's final add does not
+    upcast the hidden states to float32 (the stash is float32 because
+    ``zero_experts_compute`` runs before apply casts topk weights).
+    """
+    global _slice_layout_warned
+    n_local = ref.shape[0]
+    total = stashed.shape[0]
+    if total == n_local:
+        return stashed.to(ref.dtype)
+    if n_local == 0:
+        # No local tokens: a scalar zero broadcasts to a no-op add.
+        return torch.tensor(0.0, device=ref.device, dtype=ref.dtype)
+    ep_size, ep_rank = _ep_group_size_and_rank()
+    if ep_size > 1 and total % ep_size == 0:
+        block = total // ep_size
+        offset = ep_rank * block
+        if offset + n_local <= total:
+            return stashed[offset : offset + n_local].contiguous().to(ref.dtype)
+    # Layout not understood (non-standard gather or uneven blocks).  Adding
+    # the wrong rows would silently corrupt output; add zeros instead and
+    # warn once — the identity contribution is lost for this call, which is
+    # bounded noise, whereas a wrong slice is arbitrary garbage.
+    if not _slice_layout_warned:
+        _slice_layout_warned = True
+        patch_logger.warning(
+            "[fix_ep_zero_expert] Cannot map gathered zero-expert stash "
+            "(rows={}) to local output (rows={}, ep_size={}); adding zeros "
+            "for this and later calls",
+            total,
+            n_local,
+            ep_size,
+        )
+    return torch.zeros_like(ref)
+
+
 @register_patch(target="vllm.model_executor.layers.fused_moe.runner.moe_runner")
 def patch_moe_runner_zero_expert(module: object) -> None:
     MoERunner = module.MoERunner
@@ -353,37 +424,9 @@ def patch_moe_runner_zero_expert(module: object) -> None:
                 stashed = _pending_zero_expert_output
                 _pending_zero_expert_output = None
                 if stashed is not None:
-                    if stashed.shape != ref.shape:
-                        # ALLGATHER MoE comm gathers tokens across EP ranks:
-                        # [rank0_tok, ..., rankN_tok].  Slice this rank's
-                        # segment.  Identity contribution is per-token, so
-                        # this is equivalent to computing on local tokens.
-                        n_local = ref.shape[0]
-                        if n_local == 0:
-                            self.router._zero_expert_output = torch.tensor(
-                                0.0, device=ref.device, dtype=ref.dtype
-                            )
-                        else:
-                            import torch.distributed as dist
-
-                            ep_size = (
-                                dist.get_world_size()
-                                if dist.is_initialized()
-                                else 1
-                            )
-                            ep_rank = (
-                                dist.get_rank()
-                                if dist.is_initialized()
-                                else 0
-                            )
-                            # Each rank contributes n_local tokens in
-                            # rank order; slice our own segment.
-                            offset = ep_rank * n_local
-                            self.router._zero_expert_output = stashed[
-                                offset : offset + n_local
-                            ].contiguous()
-                    else:
-                        self.router._zero_expert_output = stashed
+                    self.router._zero_expert_output = _slice_zero_expert_output(
+                        stashed, ref
+                    )
                 else:
                     # No stashed value (native path did not run this
                     # forward, e.g. non-MoE call).  Inject a scalar zero
