@@ -328,25 +328,37 @@ def patch_moe_runner_zero_expert(module: object) -> None:
                 stashed = _pending_zero_expert_output
                 _pending_zero_expert_output = None
                 if stashed is not None:
-                    # The stashed identity was computed from the prepared
-                    # (pre-finalize) hidden states; the runner result is
-                    # post-finalize, post-all-reduce.  Both must cover the
-                    # same tokens — true for DP=1 (prepare is a no-op).
-                    # DP>1 + ALLGATHER gathers tokens in prepare, so the
-                    # layouts diverge; fail fast instead of silently
-                    # producing wrong output.
                     if stashed.shape != ref.shape:
-                        raise RuntimeError(
-                            "[fix_ep_zero_expert] Stashed zero-expert "
-                            "output shape %s does not match the runner "
-                            "result shape %s.  This deployment config "
-                            "(e.g. DP>1 with ALLGATHER MoE comm) is not "
-                            "supported by the zero-expert relocation."
-                            % (tuple(stashed.shape), tuple(ref.shape))
-                        )
-                    # Added once by ``_orig_maybe`` below, after the final
-                    # all-reduce — exactly the upstream GPU semantics.
-                    self.router._zero_expert_output = stashed
+                        # ALLGATHER MoE comm gathers tokens across EP ranks:
+                        # [rank0_tok, ..., rankN_tok].  Slice this rank's
+                        # segment.  Identity contribution is per-token, so
+                        # this is equivalent to computing on local tokens.
+                        n_local = ref.shape[0]
+                        if n_local == 0:
+                            self.router._zero_expert_output = torch.tensor(
+                                0.0, device=ref.device, dtype=ref.dtype
+                            )
+                        else:
+                            import torch.distributed as dist
+
+                            ep_size = (
+                                dist.get_world_size()
+                                if dist.is_initialized()
+                                else 1
+                            )
+                            ep_rank = (
+                                dist.get_rank()
+                                if dist.is_initialized()
+                                else 0
+                            )
+                            # Each rank contributes n_local tokens in
+                            # rank order; slice our own segment.
+                            offset = ep_rank * n_local
+                            self.router._zero_expert_output = stashed[
+                                offset : offset + n_local
+                            ].contiguous()
+                    else:
+                        self.router._zero_expert_output = stashed
                 else:
                     # No stashed value (native path did not run this
                     # forward, e.g. non-MoE call).  Inject a scalar zero

@@ -1,27 +1,13 @@
-"""Fix ``extract_layer_index`` for dual-attention models in vllm_ascend.
+"""Fix ``extract_layer_index`` for dual-attention / multi-sub-layer models.
 
-LongCat-Flash uses dual self-attention (2 x :class:`DeepseekV2MLAAttention`)
-per decoder layer, stored in a ``nn.ModuleList``.  The vLLM built-in
-``FlashDecoderLayer`` passes ``prefix="...self_attn.{i}"`` (with the
-ModuleList index) so weight loading can match the checkpoint keys
-``model.layers.N.self_attn.0.*`` and ``model.layers.N.self_attn.1.*``.
+LongCat-Flash uses ``nn.ModuleList`` for dual-attention and multi-MLP,
+producing layer names like ``model.layers.0.self_attn.0`` or
+``model.layers.0.mlps.0.gate_up_proj`` that contain two integers.
 
-vllm_ascend modules that call ``extract_layer_index(prefix)`` with
-``num_attn_module=1`` fail because the prefix contains *two* integers
-(the layer index *and* the attention index)::
-
-    AssertionError: layer name ... should only contain one integer
-
-Affected vllm_ascend modules:
-- ``patch_deepseek_v2`` — attention __init__
-- ``patch_qwen3_next_mtp`` — KV cache binding
-
-This patch auto-detects the dual-attention pattern and returns only the
-**layer-level** integer (first integer found).  Both attention sub-layers
-get the same ``layer_id``.
-
-Each target module gets its own independently named patch function so that
-log messages clearly identify which module was patched.
+Strategy: replace the entire ``_deepseek_v2_mla_attention_init`` function
+on ``vllm_ascend.patch.worker.patch_deepseek_v2`` with a version that
+extracts the layer index from multi-integer prefixes.  This bypasses the
+fragile ``from X import Y`` binding issue entirely.
 """
 
 from __future__ import annotations
@@ -32,49 +18,75 @@ from easyinfer.plugins.logging import patch_logger
 from easyinfer.plugins.registry import register_patch
 
 
-@register_patch(target="vllm.model_executor.models.utils")
-def fix_dual_attention_utils(module: Any) -> None:
-    """Patch the source definition of ``extract_layer_index``."""
-    _patch_extract_layer_index(module, "vllm.model_executor.models.utils")
+def _extract_layer_index_safe(prefix: str, num_attn_module: int = 1) -> int:
+    """Like vllm's extract_layer_index but tolerates multi-integer prefixes."""
+    int_vals = [int(p) for p in prefix.split(".") if p.lstrip("-").isdigit()]
+    if num_attn_module == 1:
+        if not int_vals:
+            raise ValueError(f"No integer found in layer name: {prefix}")
+        return int_vals[0]
+    # Multi-attention: flatten.  Same logic as upstream vllm.
+    if len(int_vals) <= 2:
+        return (
+            int_vals[0] * num_attn_module + int_vals[1]
+            if len(int_vals) == 2
+            else int_vals[0]
+        )
+    raise ValueError(
+        f"layer name {prefix} should contain at most two integers"
+    )
+
+
+# We store the original init function so we can call it from the wrapper.
+_ORIG_INIT: Any = None
 
 
 @register_patch(target="vllm_ascend.patch.worker.patch_deepseek_v2")
-def fix_dual_attention_deepseek_v2(module: Any) -> None:
-    """Rebind ``extract_layer_index`` in the DeepSeek V2 patch worker."""
-    _patch_extract_layer_index(module, "vllm_ascend.patch.worker.patch_deepseek_v2")
+def fix_deepseek_v2_init(module: Any) -> None:
+    """Replace ``_deepseek_v2_mla_attention_init`` with a prefix-tolerant version."""
+    global _ORIG_INIT
+    if _ORIG_INIT is not None:
+        return
 
+    _ORIG_INIT = module._deepseek_v2_mla_attention_init
 
-@register_patch(target="vllm_ascend.patch.worker.patch_qwen3_next_mtp")
-def fix_dual_attention_qwen3_mtp(module: Any) -> None:
-    """Rebind ``extract_layer_index`` in the Qwen3 Next MTP patch worker."""
-    _patch_extract_layer_index(module, "vllm_ascend.patch.worker.patch_qwen3_next_mtp")
+    # Build wrapper source: we replace every
+    #   layer_id = extract_layer_index(prefix)
+    # with
+    #   layer_id = _extract_layer_index_safe(prefix)
+    # The wrapper simply delegates to _ORIG_INIT after toggling the import.
+    #
+    # Simpler: wrap _ORIG_INIT and intercept the call.
 
+    def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        # Replace the module-level extract_layer_index *temporarily* inside
+        # the called module so that _ORIG_INIT's globals resolve to our safe
+        # version.  This avoids the `from X import Y` stale-reference problem.
+        import vllm_ascend.patch.worker.patch_deepseek_v2 as _pdv2
 
-def _patch_extract_layer_index(module: Any, target_name: str) -> None:
-    """Wrap module-level ``extract_layer_index`` for dual-attention support.
+        _save = _pdv2.extract_layer_index
+        try:
+            _pdv2.extract_layer_index = _extract_layer_index_safe
+            return _ORIG_INIT(self, *args, **kwargs)
+        finally:
+            _pdv2.extract_layer_index = _save
 
-    When the layer name contains two or more integer components and
-    ``num_attn_module=1``, only the first integer (the layer index) is
-    returned.  Otherwise the original function is called unchanged.
-    """
-    original_extract = module.extract_layer_index
+    module._deepseek_v2_mla_attention_init = patched_init
 
-    def patched_extract(layer_name: str, num_attn_module: int = 1) -> int:
-        if num_attn_module == 1 and "attn" in layer_name:
-            int_count = sum(1 for p in layer_name.split(".") if p.isdigit())
-            if int_count >= 2:
-                for part in layer_name.split("."):
-                    if part.isdigit():
-                        return int(part)
-        return original_extract(layer_name, num_attn_module)
+    # vllm_ascend binds ``DeepseekV2MLAAttention.__init__`` to the original
+    # function object at import time (see the bottom of patch_deepseek_v2.py).
+    # Replacing the module attribute alone is therefore not enough: the class
+    # keeps a direct reference to the original init.  Rebind the class too.
+    try:
+        from vllm.model_executor.models.deepseek_v2 import DeepseekV2MLAAttention
 
-    module.extract_layer_index = patched_extract
+        DeepseekV2MLAAttention.__init__ = patched_init
+    except ImportError:
+        patch_logger.warning(
+            "[fix_dual_attention] could not import DeepseekV2MLAAttention; "
+            "only the module attribute was wrapped"
+        )
+
     patch_logger.info(
-        "[fix_dual_attention] Patched extract_layer_index in %s", target_name
+        "[fix_dual_attention] _deepseek_v2_mla_attention_init wrapped"
     )
-
-__all__ = [
-    "fix_dual_attention_utils",
-    "fix_dual_attention_deepseek_v2",
-    "fix_dual_attention_qwen3_mtp",
-]
