@@ -8,7 +8,7 @@
 # 调用方式（由 launch_online_dp.py 自动执行）:
 #   dnode.sh <devices> <port> <dp_size> <dp_rank> <dp_addr> <dp_rpc> <tp_size>
 #
-# 依赖环境变量: LOCAL_IP, NIC_NAME, MODEL_PATH, LOG_DIR
+# 依赖环境变量: LOCAL_IP, NIC_NAME, MODEL_PATH, LOG_DIR, ENGINE_ID
 # ==============================================================================
 set -euo pipefail
 
@@ -17,10 +17,15 @@ dp_address="$5"; dp_rpc_port="$6"; tp_size="$7"
 
 nic_name="${NIC_NAME}"; local_ip="${LOCAL_IP}"
 model_path="${MODEL_PATH}"; log_dir="${LOG_DIR}"
+engine_id="${ENGINE_ID:-4}"
+
+# ---- A2 PD official: proxy cleanup ----
+unset ftp_proxy https_proxy http_proxy 2>/dev/null || true
+rm -rf ~/ascend/log 2>/dev/null || true
 
 export LD_PRELOAD="/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:${LD_PRELOAD:-}"
 
-# ---- NPU environment (official §5.2) ----
+# ---- NPU environment (official §5.2 A2 DNode) ----
 export HCCL_OP_EXPANSION_MODE="AIV"
 export HCCL_IF_IP="$local_ip"
 export GLOO_SOCKET_IFNAME="$nic_name"
@@ -36,9 +41,11 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_BUFFSIZE=1024
 export TASK_QUEUE_ENABLE=1
 export ASCEND_RT_VISIBLE_DEVICES="$visible_devices"
+export TMPDIR=/tmp/ray
 
 mkdir -p "$log_dir"
 
+# ---- vllm serve (official §5.2 A2 DNode parameters) ----
 nohup vllm serve "$model_path" \
     --host 0.0.0.0 \
     --port "$port" \
@@ -77,10 +84,10 @@ nohup vllm serve "$model_path" \
     --kv-transfer-config \
     '{"kv_connector": "MooncakeHybridConnector",
       "kv_role": "kv_consumer",
-      "kv_port": "30400",
-      "engine_id": "4",
+      "kv_port": "'"$((30400 + engine_id - 4))"'",
+      "engine_id": "'"$engine_id"'",
       "kv_connector_extra_config": {
-          "prefill":  {"dp_size": 8,  "tp_size": 1},
-          "decode":   {"dp_size": 32, "tp_size": 1}
+          "prefill":  {"dp_size": 8,  "tp_size": 4},
+          "decode":   {"dp_size": 4,  "tp_size": 8}
       }}' \
     2>&1 | tee "$log_dir/dnode_${local_ip}_rank${dp_rank}.log" &
