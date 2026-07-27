@@ -115,8 +115,15 @@ curl -s http://localhost:8010/v1/chat/completions \
 其他关键参数: `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` (长上下文必须, 整吞 OOM)、
 `GPU_MEM_UTIL=0.92`、`EASYINFER_MOE_COMM=allgather` (EP 必须)。
 
-已知待探索: 脚本同时带 `--enforce-eager` 和 `cudagraph_mode=FULL_DECODE_ONLY`, 前者使后者失效。
-去掉 eager 若稳定可显著提升 decode 吞吐: `ENFORCE_EAGER=0 bash run_vllm_long-context.sh` (待验证)。
+图模式探索 (`ENFORCE_EAGER=0`): 脚本默认 `--enforce-eager` 使 `FULL_DECODE_ONLY` 失效。
+开启图模式的两条硬性要求 (2026-07-27 排查结论):
+① `cudagraph_capture_sizes` 必须含 TP 的倍数——脚本已自动生成 (TP 步进、覆盖
+   MAX_NUM_SEQS、最多 4 档, 可用 `CUDAGRAPH_CAPTURE_SIZES` 覆盖);
+② 必须 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`——FlashComm1 会激活
+   `SequenceParallelismPass` 编译 pass, 其在 FX 图里直接插入
+   `npu_add_rms_norm_bias` 调用, 绕过 fix_layernorm_dtype 的 dtype 保护,
+   float32 激活直送 ACLNN 报 EZ1001 (vllm-ascend 的 pass 缺陷, 待上游修复)。
+完整命令: `PORT=8010 PP=2 TP=32 EP=1 ENFORCE_EAGER=0 VLLM_ASCEND_ENABLE_FLASHCOMM1=0 bash run_vllm_long-context.sh`
 
 ## 并行策略
 
@@ -160,6 +167,14 @@ A: 编译缓存损坏。清理缓存后重启：
 ```bash
 docker exec vllm-ascend-env bash -c 'rm -rf /root/.cache/vllm/*'
 ```
+
+### Q: 服务为什么起在 8200 而不是 8010?
+
+A: 容器镜像预设了 `PORT=8200` 环境变量，`run_vllm.sh` 的 `PORT` 默认读取环境。部署命令显式带 `PORT=8010` 即可。
+
+### Q: 启动秒退, 报 "Ray 集群只有 X NPU, 当前配置需要 Y"?
+
+A: 这是 `run_vllm.sh` 的前置校验：并行配置 (TP×PP×DP) 超过了 Ray 集群实际 NPU 数——通常是容器/集群重启后节点变少，或节点文件用错（8 节点用 `node_list1.txt`/`node_list2.txt`，16 节点用 `node_list.txt`）。以前这种情况 vllm 会无报错挂死在 placement group 等待上，现在 fail-fast。同时脚本还会校验 PP 必须整除 28 层。
 
 ## 验证记录
 

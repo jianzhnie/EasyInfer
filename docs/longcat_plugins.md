@@ -25,7 +25,7 @@ easyinfer/plugins/
 | `vllm_ascend/ops/fused_moe/zero_expert_fused_moe.py` | OOT 注册 `ZeroExpertFusedMoE` | vllm < 0.23 的 EP 路由覆盖（prepare→route→过滤零号专家→apply→finalize）。当前镜像 vllm 0.23 下自动跳过，不生效 |
 | `vllm_ascend/fix_dual_attention.py` | `vllm_ascend.patch.worker.patch_deepseek_v2` | LongCat 双注意力/多 MLP 产生双整数层名（`model.layers.0.self_attn.0`），原生 `extract_layer_index` 断言失败。替换为容忍多整数前缀的版本并全局清扫所有引用 |
 | `vllm_ascend/fix_mla_rotary.py` | `vllm_ascend.ops.rotary_embedding` / `mla_v1` / `sfa_v1` | LongCat 的 `model_type="longcat"` 不在 `is_deepseek_mla()` 硬编码列表中，MLA 的 `_cos_mla`/`_sin_mla` 缓存未初始化导致后端崩溃。包装 `get_cos_and_sin_mla` 按需分配/扩容缓存 |
-| `vllm_ascend/fix_layernorm_dtype.py` | `vllm_ascend.ops.layernorm` | NPU 上 MLA/MoE 内核可能输出 float32 而 RMSNorm 权重为 bf16，ACLNN 算子报 EZ1001 dtype 不匹配。在算子入口把输入 cast 到权重 dtype |
+| `vllm_ascend/fix_layernorm_dtype.py` | `vllm_ascend.ops.layernorm` | NPU 上 MLA/MoE 内核可能输出 float32 而 RMSNorm 权重为 bf16，ACLNN 算子报 EZ1001 dtype 不匹配。在算子入口把输入 cast 到权重 dtype。**图模式局限**：仅包装 `forward_oot`；`VLLM_ASCEND_ENABLE_FLASHCOMM1=1` 激活的 `SequenceParallelismPass` 在 FX 图里直接插入 `npu_add_rms_norm_bias` 调用绕过本补丁，图模式 (`ENFORCE_EAGER=0`) 下必须关闭 FlashComm1（2026-07-27 实测） |
 
 #### fix_ep_zero_expert.py 的 4 个 patch
 
