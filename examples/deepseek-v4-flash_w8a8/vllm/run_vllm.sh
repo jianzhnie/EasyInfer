@@ -33,7 +33,7 @@ readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/DeepSeek-V4-Flash-w8a8-mtp}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8000}"
-readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-dsv4}"
+readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4-flash}"
 
 # ---- Parallelism (official: TP=4 DP=4 high-throughput) ----
 readonly TP="${TP:-4}"
@@ -156,10 +156,12 @@ fi
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
 
 ADDITIONAL_JSON="\"enable_cpu_binding\": true"
+ADDITIONAL_JSON="$ADDITIONAL_JSON, \"enable_dsa_cp\": true"
 ADDITIONAL_JSON="$ADDITIONAL_JSON, \"multistream_overlap_shared_expert\": true"
 if [[ "${ENABLE_SHARED_EXPERT_DP:-1}" == "1" ]]; then
     ADDITIONAL_JSON="$ADDITIONAL_JSON, \"enable_shared_expert_dp\": true"
 fi
+ADDITIONAL_JSON="$ADDITIONAL_JSON, \"ascend_compilation_config\": {\"enable_npugraph_ex\": true, \"enable_static_kernel\": false}"
 readonly ADDITIONAL_CONFIG="{$ADDITIONAL_JSON}"
 
 echo "============================================"
