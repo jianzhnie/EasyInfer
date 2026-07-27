@@ -70,12 +70,16 @@ def _patch_extract_layer_index_globally() -> None:
     for mod in list(sys.modules.values()):
         if mod is None or mod is _utils:
             continue
-        try:
-            if getattr(mod, "extract_layer_index", None) is original:
-                mod.extract_layer_index = _extract_layer_index_safe
-                swapped.append(mod.__name__)
-        except (AttributeError, TypeError):
+        # Inspect ``mod.__dict__`` directly instead of ``getattr``:
+        # attribute access on lazy modules (e.g. transformers'
+        # _LazyModule) fires their ``__getattr__`` hook, which logs
+        # an alias warning per module and may even trigger imports.
+        mod_dict = getattr(mod, "__dict__", None)
+        if not isinstance(mod_dict, dict):
             continue
+        if mod_dict.get("extract_layer_index") is original:
+            mod.extract_layer_index = _extract_layer_index_safe
+            swapped.append(mod.__name__)
     patch_logger.info(
         "[fix_dual_attention] extract_layer_index swapped in: %s",
         ", ".join(swapped) if swapped else "(none yet imported)",

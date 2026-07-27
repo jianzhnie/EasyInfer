@@ -293,20 +293,24 @@ def patch_force_allgather_comm(module: object) -> None:
 
     # Swap stale from-import bindings in already-imported caller modules
     # (same from-import stale-reference problem as fix_dual_attention).
+    # Inspect ``mod.__dict__`` directly instead of ``getattr``: attribute
+    # access on lazy modules (e.g. transformers' _LazyModule) fires their
+    # ``__getattr__`` hook, logging an alias warning per module and
+    # potentially triggering unwanted imports.
     import sys
 
     for mod in list(sys.modules.values()):
         if mod is None or mod is module:
             continue
-        try:
-            if getattr(mod, "select_moe_comm_method", None) is _orig:
-                mod.select_moe_comm_method = _select
-                patch_logger.info(
-                    "[fix_ep_zero_expert] Rebound select_moe_comm_method in %s",
-                    mod.__name__,
-                )
-        except (AttributeError, TypeError):
+        mod_dict = getattr(mod, "__dict__", None)
+        if not isinstance(mod_dict, dict):
             continue
+        if mod_dict.get("select_moe_comm_method") is _orig:
+            mod.select_moe_comm_method = _select
+            patch_logger.info(
+                "[fix_ep_zero_expert] Rebound select_moe_comm_method in %s",
+                mod.__name__,
+            )
 
 
 # ===========================================================================
