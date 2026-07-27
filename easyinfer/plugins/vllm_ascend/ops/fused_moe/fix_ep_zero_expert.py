@@ -46,12 +46,14 @@ Fix
 
 Version compatibility note
 ---------------------------
-Patch 0b and 0c target ``vllm_ascend.ops.fused_moe.fused_moe_0_23_0``, a
-module whose name encodes the vllm_ascend version.  If vllm_ascend changes
-its internal naming convention (e.g. ``fused_moe_0_24_0``), these patches
-will be silently skipped by ``apply_all_patches`` (ImportError).  When
-upgrading vllm_ascend, verify that the zero-expert EP path still works
-and update the target module name if needed.
+Patch 0b targets ``vllm_ascend.ops.fused_moe.fused_moe_0_23_0``, a
+module whose name encodes the vllm_ascend version, and Patch 0c targets
+``vllm_ascend.ascend_forward_context.select_moe_comm_method``.  If
+vllm_ascend changes its internal naming/layout (e.g. ``fused_moe_0_24_0``),
+these patches will be silently skipped by ``apply_all_patches``
+(ImportError/AttributeError).  When upgrading vllm_ascend, verify that the
+zero-expert EP path still works and update the target module names if
+needed.
 
 Cross-patch coordination via module-level state
 ------------------------------------------------
@@ -243,11 +245,17 @@ def patch_relocate_zero_expert_add(module: object) -> None:
 # collectives (AllGather timeout).  This patch optionally forces the
 # ALLGATHER comm method when the env var is set, bypassing MC2 entirely.
 #
-# NOTE: The target module name ``fused_moe_0_23_0`` is version-encoded.
-# See the module docstring for details.
+# NOTE: ``select_moe_comm_method`` is defined in
+# ``vllm_ascend.ascend_forward_context`` (NOT in the version-encoded
+# ``fused_moe_0_23_0`` module — an earlier revision of this patch targeted
+# that module and was silently skipped with an AttributeError, leaving MC2
+# active despite ``EASYINFER_MOE_COMM=allgather``).  Some callers
+# (``vllm_ascend.platform``, ``vllm_ascend.worker.v2.model_runner``) hold
+# from-import bindings, so after patching the defining module we also swap
+# any stale references in already-imported modules.
 
 
-@register_patch(target="vllm_ascend.ops.fused_moe.fused_moe_0_23_0")
+@register_patch(target="vllm_ascend.ascend_forward_context")
 def patch_force_allgather_comm(module: object) -> None:
     if os.environ.get("EASYINFER_MOE_COMM", "").lower() != "allgather":
         return
@@ -275,6 +283,23 @@ def patch_force_allgather_comm(module: object) -> None:
         return selected
 
     module.select_moe_comm_method = _select
+
+    # Swap stale from-import bindings in already-imported caller modules
+    # (same from-import stale-reference problem as fix_dual_attention).
+    import sys
+
+    for mod in list(sys.modules.values()):
+        if mod is None or mod is module:
+            continue
+        try:
+            if getattr(mod, "select_moe_comm_method", None) is _orig:
+                mod.select_moe_comm_method = _select
+                patch_logger.info(
+                    "[fix_ep_zero_expert] Rebound select_moe_comm_method in %s",
+                    mod.__name__,
+                )
+        except (AttributeError, TypeError):
+            continue
 
 
 # ===========================================================================

@@ -4,14 +4,24 @@ LongCat-Flash uses ``nn.ModuleList`` for dual-attention and multi-MLP,
 producing layer names like ``model.layers.0.self_attn.0`` or
 ``model.layers.0.mlps.0.gate_up_proj`` that contain two integers.
 
-Strategy: replace the entire ``_deepseek_v2_mla_attention_init`` function
-on ``vllm_ascend.patch.worker.patch_deepseek_v2`` with a version that
-extracts the layer index from multi-integer prefixes.  This bypasses the
-fragile ``from X import Y`` binding issue entirely.
+Strategy:
+
+1. Replace the entire ``_deepseek_v2_mla_attention_init`` function
+   on ``vllm_ascend.patch.worker.patch_deepseek_v2`` with a version that
+   extracts the layer index from multi-integer prefixes, and rebind
+   ``DeepseekV2MLAAttention.__init__`` (vllm_ascend binds it to the original
+   function object at import time).
+2. Globally swap every module-level ``extract_layer_index`` reference that
+   still points to vllm's strict version.  Other vllm_ascend call sites
+   (e.g. ``vllm_ascend.ops.linear_op.SequenceColumnParallelOp.apply_impl``)
+   call it during forward on prefixes like ``model.layers.0.mlps.0`` and hit
+   the same assertion.  Patching the source module also covers modules that
+   import it later.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from easyinfer.plugins.logging import patch_logger
@@ -41,6 +51,37 @@ def _extract_layer_index_safe(prefix: str, num_attn_module: int = 1) -> int:
 _ORIG_INIT: Any = None
 
 
+def _patch_extract_layer_index_globally() -> None:
+    """Swap ``extract_layer_index`` references to the prefix-tolerant version.
+
+    Modules that did ``from vllm.model_executor.models.utils import
+    extract_layer_index`` keep their own module-global binding, so the swap
+    must be applied per already-imported module *and* on the source module
+    (to cover modules imported afterwards).
+    """
+    import vllm.model_executor.models.utils as _utils
+
+    original = _utils.extract_layer_index
+    if original is _extract_layer_index_safe:
+        return  # already patched
+    _utils.extract_layer_index = _extract_layer_index_safe
+
+    swapped = []
+    for mod in list(sys.modules.values()):
+        if mod is None or mod is _utils:
+            continue
+        try:
+            if getattr(mod, "extract_layer_index", None) is original:
+                mod.extract_layer_index = _extract_layer_index_safe
+                swapped.append(mod.__name__)
+        except (AttributeError, TypeError):
+            continue
+    patch_logger.info(
+        "[fix_dual_attention] extract_layer_index swapped in: %s",
+        ", ".join(swapped) if swapped else "(none yet imported)",
+    )
+
+
 @register_patch(target="vllm_ascend.patch.worker.patch_deepseek_v2")
 def fix_deepseek_v2_init(module: Any) -> None:
     """Replace ``_deepseek_v2_mla_attention_init`` with a prefix-tolerant version."""
@@ -49,6 +90,7 @@ def fix_deepseek_v2_init(module: Any) -> None:
         return
 
     _ORIG_INIT = module._deepseek_v2_mla_attention_init
+    _patch_extract_layer_index_globally()
 
     # Build wrapper source: we replace every
     #   layer_id = extract_layer_index(prefix)
