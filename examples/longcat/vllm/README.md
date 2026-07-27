@@ -1,26 +1,27 @@
-# LongCat-Flash-Chat-1024E-512Zero-Topk24-v2 BF16 部署指南
+# LongCat-Flash-Chat BF16 部署指南
 
 > **vLLM-Ascend v0.23.0rc1** | 端口: **8010**
-> 架构: LongcatFlashForCausalLM | 1024 Routed + 512 Zero Experts | MoE + MLA
-> 已验证配置: **TP=64 PP=1** (8 节点 × 8 NPU) | 上下文: 4096 | BF16 无量化
+> 架构: LongcatFlashForCausalLM | 512 Routed + 256 Zero Experts | MoE + MLA
+> 已验证配置: **TP=64 EP=64 PP=1** (8 节点 × 8 NPU) | 上下文: 4096 | BF16 无量化
 > 注意: 需要 EasyInfer 插件注册 EP 修复；MC2 MoE comm 与 Zero Expert 权重置零不兼容
-> 验证状态: ⚠️ 待验证
+> 插件清单及各插件作用见 [docs/longcat_plugins.md](../../../docs/longcat_plugins.md)
+> 验证状态: ✅ 已验证 (2026-07-27, EP + ALLGATHER)
 
-超大规模 MoE 模型（1024 专家，TopK=24），最小需要 64 张 NPU 部署。
+超大规模 MoE 模型（约 560B 参数，512 路由专家，TopK=12），最小需要 64 张 NPU 部署。
 
 ## 模型简介
 
 | 属性 | 值 |
 |------|-----|
 | **架构** | LongcatFlashForCausalLM (MLA + MoE) |
-| **路由专家** | 1024 (每 Token 激活 24) |
-| **Zero 专家** | 512 (Identity) |
+| **路由专家** | 512 (每 Token 激活 12, routed_scaling_factor=6.0) |
+| **Zero 专家** | 256 (Identity) |
 | **隐藏维度** | 6144 |
 | **网络层数** | 28 |
 | **KV LoRA Rank** | 512 |
-| **rope_theta** | — |
+| **rope_theta** | 10000000.0 |
 | **原生上下文** | **131072** |
-| **量化方式** | BF16 (无量化)，权重 ≈296G (148 个 safetensors 分片) |
+| **量化方式** | BF16 (无量化)，权重 ≈1.1T (75 个 safetensors 分片) |
 | **MTP** | ❌ 不支持 |
 | **PP 支持** | ✅ 支持 Pipeline Parallelism |
 | **多模态** | ❌ 纯文本 |
@@ -33,7 +34,7 @@
 - **MLA 注意力**仅支持 block_size=128，可通过 `BLOCK_SIZE` 覆盖
 - **MC2 MoE comm** 与 Zero Expert 权重置零不兼容（MoeDistributeCombineV2 shape check 失败 → collective hang），EasyInfer 插件通过 `EASYINFER_MOE_COMM=allgather` 覆盖 comm 为 ALLGATHER
 - **Chunked Prefill** 与 EP token dispatch 冲突，默认禁用
-- 模型包含 512 个 Zero (Identity) 专家，vLLM ≥ 0.23 下启用原生零号专家路径（`fix_ep_zero_expert.py`）
+- 模型包含 256 个 Zero (Identity) 专家，vLLM ≥ 0.23 下启用原生零号专家路径（`fix_ep_zero_expert.py`）
 
 ### 官方文档参考
 
@@ -53,20 +54,23 @@
 
 ```bash
 # 1. 启动 NPU Docker 容器
-bash scripts/docker/manage_npuslim_containers.sh start --file node_list.txt
+bash scripts/docker/manage_npuslim_containers.sh start --file node_list1.txt
 
 # 2. 启动 Ray 集群
-bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start --file node_list.txt
+bash scripts/ray_cluster/manage_npuslim_ray_cluster.sh start --file node_list1.txt
+
+# 验证: 确认 8 节点、64 NPU 全部就绪
+ssh 10.42.11.130 "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
 ```
 
 ### 部署
 
 ```bash
-# 标准模式 (TP=64, 8 节点)
-bash examples/longcat/vllm/run_vllm.sh
+# EP 模式 (专家并行, 已验证; 必须 ALLGATHER comm, 脚本默认已带)
+EP=1 EASYINFER_MOE_COMM=allgather bash examples/longcat/vllm/run_vllm.sh
 
-# EP 模式 (专家并行)
-EP=1 bash examples/longcat/vllm/run_vllm.sh
+# 纯 TP 模式 (EP=0)
+EP=0 bash examples/longcat/vllm/run_vllm.sh
 
 # 自定义上下文
 TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 bash examples/longcat/vllm/run_vllm.sh
@@ -88,12 +92,12 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 ## 并行策略
 
-| 场景 | TP | PP | DP | NPU | 上下文 | 量化 | 状态 |
+| 场景 | TP | EP | PP | NPU | 上下文 | 量化 | 状态 |
 |------|-----|-----|-----|-----|--------|------|------|
-| 标准 | 64 | 1 | 1 | 64 | 4K | BF16 | ⚠️ |
-| EP | 64 | 1 | 1 | 64 | 4K | BF16 | ⚠️ |
+| EP | 64 | 64 | 1 | 64 | 4K | BF16 | ✅ |
+| 纯 TP | 64 | — | 1 | 64 | 4K | BF16 | ✅ |
 
-> EP=1 模式下使用 ALLGATHER comm 避免 MC2 冲突。模型加载约需 16-20 分钟。
+> EP=1 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11 分钟。
 
 ## 环境变量
 
@@ -109,9 +113,9 @@ A: Chunked Prefill 与 EP token dispatch 存在冲突，默认禁用 (`CHUNKED_P
 
 A: MC2 MoE comm 在处理 Zero Expert 权重置零时触发 MoeDistributeCombineV2 shape check 失败，导致 collective hang。EasyInfer 插件将 comm 覆盖为 ALLGATHER 规避此问题。
 
-### Q: 为什么模型加载需要 16-20 分钟?
+### Q: 为什么模型加载需要约 11 分钟?
 
-A: 模型包含 148 个 safetensors 分片 + 64 卡 HCCL 初始化，加载时间较长。
+A: 模型权重约 1.1T（75 个 safetensors 分片）+ 64 卡 HCCL 初始化，加载时间较长。
 
 ### Q: 部署时为什么提示 "failed to map segment from shared object"?
 
@@ -124,4 +128,4 @@ docker exec vllm-ascend-env bash -c 'rm -rf /root/.cache/vllm/*'
 
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
-| — | — | — | — | ⚠️ | — | 待验证 |
+| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | TP=64 EP=64, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_031627.log` | curl_test 全部 PASS，54 个 patch 全部生效，无刷屏告警/无 EZ1001 |

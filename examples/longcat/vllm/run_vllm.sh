@@ -2,15 +2,15 @@
 # =============================================================================
 # LongCat-Flash-Chat — Direct vllm serve deployment
 # =============================================================================
-# Architecture: LongcatFlashForCausalLM | 1024 Routed Experts + 512 Zero | MLA
-# Default: TP=64 PP=1 (multi-node via Ray, 8 nodes × 8 NPU)
-# Note: Massive MoE model (1024 experts, topk=24), requires 64 NPUs minimum.
-#       Uses --trust-remote-code for custom modeling code.
+# Architecture: LongcatFlashForCausalLM | 512 Routed Experts + 256 Zero | MLA
+# Default: TP=64 EP=64 PP=1 (multi-node via Ray, 8 nodes × 8 NPU)
+# Note: Massive MoE model (~560B params, 512 experts, topk=12), requires 64
+#       NPUs minimum. Uses --trust-remote-code for custom modeling code.
 #       No quantization (bfloat16 native weights).
 #
 # Usage:
-#   bash run_vllm.sh                          # stable mode (default)
-#   EP=1 bash run_vllm.sh                     # expert parallel mode
+#   bash run_vllm.sh                          # EP mode (default, EP=1)
+#   EP=0 bash run_vllm.sh                     # pure TP mode
 #   TP=64 MAX_MODEL_LEN=8192 bash run_vllm.sh
 #
 # Notes:
@@ -115,12 +115,12 @@ fi
 # ------------------------------------------------------------------------------
 if [[ "$ENABLE_EP" == "1" ]]; then
     export ENABLE_EXPERT_PARALLEL=1
-    # MC2 MoE comm breaks with zero-expert weight zeroing; the EasyInfer
-    # plugin overrides the comm method to ALLGATHER (see fix_ep_zero_expert.py).
-    # NOTE: ALLGATHER may cause float32/bfloat16 dtype mismatch in
-    # aclnnAddRmsNormBias (EZ1001).  Set EASYINFER_MOE_COMM=allgather to
-    # force ALLGATHER; leave empty (=default) to try MC2 first.
-    export EASYINFER_MOE_COMM="${EASYINFER_MOE_COMM:-}"
+    # MC2 MoE comm breaks with zero-expert weight zeroing (MoeDistributeCombineV2
+    # shape check fails -> collective hang).  The EasyInfer plugin overrides the
+    # comm method to ALLGATHER (see fix_ep_zero_expert.py); default to allgather
+    # here since MC2 is a known hang for this model.  Set EASYINFER_MOE_COMM=""
+    # explicitly only if you want to experiment with the native MC2 path.
+    export EASYINFER_MOE_COMM="${EASYINFER_MOE_COMM:-allgather}"
 fi
 
 # 前置检查
