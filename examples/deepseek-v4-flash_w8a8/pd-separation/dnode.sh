@@ -88,6 +88,6 @@ nohup vllm serve "$model_path" \
       "engine_id": "'"$engine_id"'",
       "kv_connector_extra_config": {
           "prefill":  {"dp_size": 8,  "tp_size": 4},
-          "decode":   {"dp_size": 4,  "tp_size": 8}
+          "decode":   {"dp_size": 4,  "tp_size": 4}
       }}' \
     2>&1 | tee "$log_dir/dnode_${local_ip}_rank${dp_rank}.log" &
