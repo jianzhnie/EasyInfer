@@ -57,6 +57,9 @@ readonly DTYPE="${DTYPE:-bfloat16}"
 readonly BLOCK_SIZE="${BLOCK_SIZE:-128}"
 # Chunked prefill conflicts with EP token dispatch; disable by default.
 readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
+# enforce-eager 会禁用 cudagraph (FULL_DECODE_ONLY 随之失效)。默认开启
+# (历史稳定路径); 设 ENFORCE_EAGER=0 启用 decode graph 以提升吞吐, 待验证。
+readonly ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 
 # ------------------------------------------------------------------------------
 # Ensure EasyInfer plugins are registered (required for the EP fixes)
@@ -104,6 +107,8 @@ export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1="${VLLM_ASCEND_ENABLE_FLASHCOMM1:-1}"
 export VLLM_ASCEND_ENABLE_MLAPO="${VLLM_ASCEND_ENABLE_MLAPO:-1}"
+# 主机侧任务队列, 大 batch / 长 prefill 下降低下发开销 (GLM-5.2 教程同款)
+export TASK_QUEUE_ENABLE="${TASK_QUEUE_ENABLE:-1}"
 if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
     export VLLM_ASCEND_ENABLE_FUSED_MC2=1
 else
@@ -127,17 +132,48 @@ fi
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
 [[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
+# 层数必须能被 PP 均分 (LongCat-Flash 共 28 层)
+if (( 28 % PP != 0 )); then
+    echo "[ERROR] PP=$PP 无法整除模型 28 层, 可选 PP=1/2/4/7/14/28" >&2
+    exit 2
+fi
+
+# Ray 集群 NPU 数必须 >= TP×PP×DP; 集群退化时 vllm 会无限期等 placement
+# group (无报错挂起), 提前退出更省时间
+REQUIRED_NPUS=$((TP * PP * DP))
+if [[ "$EXECUTOR" == "ray" ]] && command -v ray >/dev/null 2>&1; then
+    AVAIL_NPUS=$(ray status 2>/dev/null | grep -oE '[0-9]+\.[0-9]+/[0-9]+\.[0-9]+ NPU' \
+        | head -1 | cut -d/ -f2 | cut -d. -f1)
+    if [[ -n "$AVAIL_NPUS" ]]; then
+        if (( AVAIL_NPUS < REQUIRED_NPUS )); then
+            echo "[ERROR] Ray 集群只有 ${AVAIL_NPUS} NPU, 当前配置需要 ${REQUIRED_NPUS}" \
+                "(TP=$TP × PP=$PP × DP=$DP)。请检查节点掉线或调小并行度。" >&2
+            exit 3
+        fi
+        echo "[INFO] Ray 集群 NPU: ${AVAIL_NPUS} 可用 / 需要 ${REQUIRED_NPUS}"
+    else
+        echo "[WARN] 无法从 ray status 解析 NPU 数, 跳过集群容量检查"
+    fi
+fi
+
+# EP + 空 EASYINFER_MOE_COMM = 走 MC2, 对本模型是已知挂起点
+if [[ "$ENABLE_EP" == "1" && -z "${EASYINFER_MOE_COMM}" ]]; then
+    echo "[WARN] EP=1 且 EASYINFER_MOE_COMM 为空: MC2 与零号专家不兼容," \
+        "大概率 collective hang (建议 allgather)"
+fi
+
 #=============================================================================
 # 启动命令
 #=============================================================================
 
 echo "============================================"
-echo "[INFO] LongCat-Flash-Chat— Deployment"
+echo "[INFO] LongCat-Flash-Chat — Deployment"
 echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS CHUNKED_PREFILL=$CHUNKED_PREFILL BLOCK_SIZE=$BLOCK_SIZE"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL EASYINFER_MOE_COMM=${EASYINFER_MOE_COMM:-<unset>}"
 echo "============================================"
 
 EP_FLAGS=()
@@ -148,6 +184,11 @@ fi
 PREFILL_FLAGS=(--enable-chunked-prefill)
 if [[ "$CHUNKED_PREFILL" == "0" ]]; then
     PREFILL_FLAGS=(--no-enable-chunked-prefill)
+fi
+
+EAGER_FLAGS=(--enforce-eager)
+if [[ "$ENFORCE_EAGER" == "0" ]]; then
+    EAGER_FLAGS=()
 fi
 
 vllm serve "$MODEL_PATH" \
@@ -169,6 +210,6 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
     --no-enable-prefix-caching \
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-    --enforce-eager \
+    "${EAGER_FLAGS[@]}" \
     --seed 1024 \
     "$@"

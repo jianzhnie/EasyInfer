@@ -41,7 +41,10 @@ export MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 #     命中, 见 logs/vllm_longcat_20260727_043057.log)。
 export CHUNKED_PREFILL="${CHUNKED_PREFILL:-1}"
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
-export MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+# 实测 KV 池 2.7M tokens = 20.7 个 128K 请求, MAX_NUM_SEQS=16 占池 77%,
+# 留有安全余量; 短上下文混合流量下更宽裕。显存不是瓶颈 (KV 仅 ~1.05G/
+# rank/128K seq), 无需保守到 8。
+export MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 export GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 
 # 长上下文环境优化 (参照 GLM-5.2 1M 教程)

@@ -101,6 +101,23 @@ curl -s http://localhost:8010/v1/chat/completions \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])"
 ```
 
+## 推荐配置 (吞吐/显存平衡)
+
+> 依据 2026-07-27 实测: 权重 PP=4 下仅 8.6G/rank, MLA latent KV ~1.05G/rank/128K seq,
+> KV 池 2.7M tokens (20.7×128K 并发)。**显存不是瓶颈, MAX_NUM_SEQS 和 PP 结构才是。**
+
+| 场景 | 配置 | 说明 |
+|------|------|------|
+| **全能型 (推荐)** | 16 节点, PP=4 TP=32 EP=32, `run_vllm_long-context.sh` | MAX_NUM_SEQS=16, 上下文 4K~128K 通吃; TP=32 all-reduce 只跨 4 节点 (比 TP=64 跨 8 节点省通信), EP=32 每 rank 16 专家计算密度好, PP=4 权重减半腾出 KV 空间 |
+| 省资源型 | 8 节点, PP=2 TP=32 EP=32, `run_vllm.sh` | 64 NPU 即可跑 128K (KV 2.1G/rank/seq); PP 层级少单请求延迟略优; 让出 8 节点给其他任务 |
+| 低延迟短上下文 | 8 节点, TP=64 EP=64 PP=1, `run_vllm.sh` | 无流水线气泡, 4K 上下文 decode ~23 tok/s |
+
+其他关键参数: `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` (长上下文必须, 整吞 OOM)、
+`GPU_MEM_UTIL=0.92`、`EASYINFER_MOE_COMM=allgather` (EP 必须)。
+
+已知待探索: 脚本同时带 `--enforce-eager` 和 `cudagraph_mode=FULL_DECODE_ONLY`, 前者使后者失效。
+去掉 eager 若稳定可显著提升 decode 吞吐: `ENFORCE_EAGER=0 bash run_vllm_long-context.sh` (待验证)。
+
 ## 并行策略
 
 | 场景 | TP | EP | PP | NPU | 上下文 | 量化 | 状态 |

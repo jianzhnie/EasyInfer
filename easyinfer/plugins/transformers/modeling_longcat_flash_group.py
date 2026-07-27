@@ -682,6 +682,14 @@ class LongcatFlashGroupModel(LongcatFlashGroupPreTrainedModel):
         use_cache: bool | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
+        r"""
+        Args:
+            cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+                Indices depicting the position of the input sequence tokens in the
+                sequence. Contrarily to `position_ids`, this tensor is not affected by
+                padding. It is used to update the cache in the correct position and to
+                infer the complete sequence length.
+        """
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(
                 "You must specify exactly one of input_ids or inputs_embeds"
@@ -774,6 +782,13 @@ class LongcatFlashGroupForCausalLM(LongcatFlashGroupPreTrainedModel, GenerationM
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
         r"""
+        Args:
+            cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+                Indices depicting the position of the input sequence tokens in the
+                sequence. Contrarily to `position_ids`, this tensor is not affected by
+                padding. It is used to update the cache in the correct position and to
+                infer the complete sequence length.
+
         Example:
 
         ```python
