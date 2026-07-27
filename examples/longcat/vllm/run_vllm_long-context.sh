@@ -17,14 +17,16 @@
 #   2. CHUNKED_PREFILL=1 + MAX_NUM_BATCHED_TOKENS=16384: 128K prompt 分块
 #      喂入, 避免整吞时 ALLGATHER comm 缓冲 + prefill 尖峰 OOM (实测
 #      132096 整吞在 64G 卡 OOM, 见 logs/vllm_longcat_20260727_041823.log)
-#   3. MAX_NUM_SEQS 压低到 8: MLA latent KV 约 32KB/token/seq (28 层合计,
-#      按 PP stage 分摊), 8 并发 128K 已占 ~8.5GB/rank (PP=4)
+#   3. MAX_NUM_SEQS=16: MLA latent KV 很小 (~1.05GB/rank/128K seq, PP=4),
+#      实测 KV 池 2.7M tokens 可支撑 20.7 个 128K 请求, 16 并发占池 77%,
+#      显存不是瓶颈
 #   4. GPU_MEM_UTIL 提高到 0.92 给 KV cache 让出空间
 #
 # Usage:
 #   bash run_vllm_long-context.sh                 # 128K, 沿用当前集群并行配置
 #   PP=4 TP=32 EP=1 bash run_vllm_long-context.sh # 16 节点
-#   MAX_NUM_SEQS=4 bash run_vllm_long-context.sh  # KV 不足时降并发
+#   MAX_NUM_SEQS=8 bash run_vllm_long-context.sh  # 更保守的并发
+#   ENFORCE_EAGER=0 bash run_vllm_long-context.sh # 图模式 (decode 提速, 验证中)
 # =============================================================================
 set -euo pipefail
 
