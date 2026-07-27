@@ -2,10 +2,10 @@
 
 > **vLLM-Ascend v0.23.0rc1** | 端口: **8010**
 > 架构: LongcatFlashForCausalLM | 512 Routed + 256 Zero Experts | MoE + MLA
-> 已验证配置: **TP=64 EP=64 PP=1** (8 节点 × 8 NPU) | 上下文: 4096 | BF16 无量化
+> 已验证配置: **TP=64 EP=64 PP=1** (8 节点) / **PP=4 TP=32 EP=32** (16 节点) | 上下文: 4096 ~ 131072 | BF16 无量化
 > 注意: 需要 EasyInfer 插件注册 EP 修复；MC2 MoE comm 与 Zero Expert 权重置零不兼容
 > 插件清单及各插件作用见 [docs/longcat_plugins.md](../../../docs/longcat_plugins.md)
-> 验证状态: ✅ 已验证 (2026-07-27, EP + ALLGATHER)
+> 验证状态: ✅ 已验证 (2026-07-27, EP + ALLGATHER, PP=2/PP=4)
 
 超大规模 MoE 模型（约 560B 参数，512 路由专家，TopK=12），最小需要 64 张 NPU 部署。
 
@@ -44,7 +44,8 @@
 
 | 硬件 | 配置 | 推荐上下文 | 备注 |
 |------|------|-----------|------|
-| Atlas 800 A2/A3 (64G × 64) | BF16, TP=64 | 4K | 8 节点 × 8 卡最小配置 |
+| Atlas 800 A2/A3 (64G × 64) | BF16, TP=64 或 PP=2 TP=32 | 4K | 8 节点 × 8 卡最小配置 |
+| Atlas 800 A2/A3 (64G × 128) | BF16, PP=4 TP=32 | 4K ~ 128K | 16 节点 × 8 卡，长上下文推荐 |
 
 ## 快速开始
 
@@ -69,11 +70,18 @@ ssh 10.42.11.130 "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
 # EP 模式 (专家并行, 已验证; 必须 ALLGATHER comm, 脚本默认已带)
 EP=1 EASYINFER_MOE_COMM=allgather bash examples/longcat/vllm/run_vllm.sh
 
+# PP 模式 (PP=2, 8 节点 / PP=4, 16 节点)
+PP=2 TP=32 EP=1 bash examples/longcat/vllm/run_vllm.sh
+PP=4 TP=32 EP=1 bash examples/longcat/vllm/run_vllm.sh   # 需 node_list.txt 全部 16 节点
+
 # 纯 TP 模式 (EP=0)
 EP=0 bash examples/longcat/vllm/run_vllm.sh
 
 # 自定义上下文
 TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 bash examples/longcat/vllm/run_vllm.sh
+
+# 最大上下文模式 (131072 / 128K, 参考 vllm-ascend GLM-5.2 1M 教程裁剪)
+PP=4 TP=32 EP=1 bash examples/longcat/vllm/run_vllm_long-context.sh
 ```
 
 > 注意: 不要从 EasyInfer 根目录运行，避免插件冲突。在容器内切换到一个非 EasyInfer 目录后执行。
@@ -82,6 +90,9 @@ TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 bash examples/longcat/vllm/run_vllm.sh
 
 ```bash
 bash examples/longcat/vllm/curl_test.sh
+
+# 长上下文实测 (大海捞针, ~130K token prompt; 需先用 run_vllm_long-context.sh 部署)
+ENABLE_LONG_CONTEXT=1 bash examples/longcat/vllm/curl_test.sh
 
 # 手动验证
 curl -s http://localhost:8010/v1/chat/completions \
@@ -95,9 +106,14 @@ curl -s http://localhost:8010/v1/chat/completions \
 | 场景 | TP | EP | PP | NPU | 上下文 | 量化 | 状态 |
 |------|-----|-----|-----|-----|--------|------|------|
 | EP | 64 | 64 | 1 | 64 | 4K | BF16 | ✅ |
+| PP+EP | 32 | 32 | 2 | 64 | 4K | BF16 | ✅ |
+| PP+EP (16 节点) | 32 | 32 | 4 | 128 | 4K | BF16 | ✅ |
+| 长上下文 (16 节点) | 32 | 32 | 4 | 128 | **128K** | BF16 | ✅ |
 | 纯 TP | 64 | — | 1 | 64 | 4K | BF16 | ✅ |
 
-> EP=1 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11 分钟。
+> EP=1 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11-13 分钟（128 卡更久）。
+> PP>1 时 28 层按 stage 均分（PP=2 每 stage 14 层，PP=4 每 stage 7 层），命令示例：`PP=2 TP=32 EP=1 bash run_vllm.sh`。
+> 长上下文用 `run_vllm_long-context.sh`：`MAX_MODEL_LEN=131072`、`CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384`（整吞 128K 会 OOM，须分块喂入）、`MAX_NUM_SEQS=8`、`GPU_MEM_UTIL=0.92`。
 
 ## 环境变量
 
@@ -107,7 +123,7 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 ### Q: 为什么不能使用 Chunked Prefill?
 
-A: Chunked Prefill 与 EP token dispatch 存在冲突，默认禁用 (`CHUNKED_PREFILL=0`)。
+A: Chunked Prefill 与 EP token dispatch 的冲突仅存在于 **MC2 comm** 下，因此 `run_vllm.sh` 默认禁用 (`CHUNKED_PREFILL=0`) 以保持保守。ALLGATHER comm 下已实测正常——`run_vllm_long-context.sh` 默认开启 (`CHUNKED_PREFILL=1`)，curl_test 回归与 130K 大海捞针均通过。
 
 ### Q: EP 模式为什么需要覆盖 MoE Comm?
 
@@ -116,6 +132,10 @@ A: MC2 MoE comm 在处理 Zero Expert 权重置零时触发 MoeDistributeCombine
 ### Q: 为什么模型加载需要约 11 分钟?
 
 A: 模型权重约 1.1T（75 个 safetensors 分片）+ 64 卡 HCCL 初始化，加载时间较长。
+
+### Q: 长上下文 (128K) 部署与默认配置有什么区别?
+
+A: 四点：① `MAX_MODEL_LEN=131072`（模型原生上限）；② `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` 分块喂入——整吞方案（batched_tokens=132096）会因 ALLGATHER comm 持久缓冲（~30G）+ 单步 prefill 尖峰（18.1G）在 64G 卡上 OOM；③ `MAX_NUM_SEQS` 压到 8（MLA latent KV 约 32KB/token/seq，PP=4 下 8 并发 ≈8.5GB/rank）；④ `GPU_MEM_UTIL=0.92` 给 KV cache 让空间（实测 KV cache 271 万 tokens，131072 单请求 20.73x 并发容量）。GLM-5.2 1M 方案中的 MTP/DSA/PCP/DCP 对 LongCat 不适用（无 MTP、无稀疏注意力、MLA latent KV 小，128K 无需上下文并行）。实测用 `ENABLE_LONG_CONTEXT=1 bash curl_test.sh`（大海捞针矩阵，含针位置/多针/中文/多轮用例，`LONG_CONTEXT_CASES` 可选择）。
 
 ### Q: 部署时为什么提示 "failed to map segment from shared object"?
 
@@ -129,3 +149,6 @@ docker exec vllm-ascend-env bash -c 'rm -rf /root/.cache/vllm/*'
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
 | 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | TP=64 EP=64, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_031627.log` | curl_test 全部 PASS，54 个 patch 全部生效，无刷屏告警/无 EZ1001 |
+| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | PP=2 TP=32 EP=32, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_034459.log` | curl_test 全部 PASS，PP stage 均分 14 层，无报错 |
+| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32 EP=32, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_040323.log` | 冒烟 PASS，PP stage 均分 7 层，128 卡加载 13 分钟，无报错 |
+| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32 EP=32, 128K, chunked prefill | ✅ | `logs/vllm_longcat_20260727_043057.log` | KV cache 271万 tokens (131072 单请求 20.73x)；curl_test 回归 PASS；130040 tokens 大海捞针命中，8s 完成。注: 整吞方案 (batched=132096) OOM，须 chunked prefill |
