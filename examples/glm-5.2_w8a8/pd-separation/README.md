@@ -43,11 +43,12 @@ gpu-mem-util 0.85                        gpu-mem-util 0.92
 |----|------------------------|------------------|------|
 | P/D 并行 | DP4 TP8 PCP1 DCP8 | 同左 | A2 每 rank=1 节点 |
 | FLASHCOMM1 | P: true / D: **false** | P/D 均 **true** | 本镜像 DCP 强制 SP（实测报错） |
+| FUSED_MC2 | 未开启 | P/D 均 **false** | W8A8 下 aclnnDispatchFFNCombine 崩溃（实测） |
 | Connector | MooncakeConnectorV1 | 同左 | use_ascend_direct |
 | MTP | P: 1 token / D: 3 tokens | 同左 | enforce_eager=true |
 | recompute_scheduler | P: true / D: true | P: **false** / D: true | vllm-ascend 在 P 节点仅告警忽略，直接关闭 |
 | max-num-seqs | P: 8 / D: 32 | P: 8 / D: **16** | W8A8 KV 池更小，保守起步 |
-| gpu-mem-util | P: 0.75 / D: 0.93 | P: **0.85** / D: 0.92 | W8A8 权重 ~19G/卡（EP=32） |
+| gpu-mem-util | P: 0.75 / D: 0.93 | P: 0.93 / D: 0.93 | W8A8 权重大；P 实测 util 0.85 时 KV 不足 1M（需 ≥8.91 GiB/卡） |
 | enable_balance_scheduling | — | ❌ 不用 | 仅 kv_both 模式可用（PD 分离下报错） |
 
 ## 文件

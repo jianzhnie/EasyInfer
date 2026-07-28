@@ -29,7 +29,8 @@ export DYNAMIC_EPLB=1
 # DCP>1 强制要求 FLASHCOMM1=1（DSA CP requires SP，本镜像实测）
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_ENABLE_NZ=1
-export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+# FUSED_MC2: 官方 1M PD 配置不开启；本镜像 W8A8 下 aclnnDispatchFFNCombine 崩溃（实测）
+export VLLM_ASCEND_ENABLE_FUSED_MC2=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
@@ -53,7 +54,7 @@ nohup vllm serve "$model_path" \
     --speculative-config '{"num_speculative_tokens": 3, "method":"deepseek_mtp","enforce_eager":true}' \
     --additional-config '{"enable_flashcomm1": true, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": true}' \
     --trust-remote-code --max-num-seqs 16 \
-    --gpu-memory-utilization 0.92 --async-scheduling --enable-prefix-caching \
+    --gpu-memory-utilization 0.93 --async-scheduling --enable-prefix-caching \
     --quantization ascend --enable-auto-tool-choice \
     --tool-call-parser glm47 --reasoning-parser glm45 \
     --kv-transfer-config \

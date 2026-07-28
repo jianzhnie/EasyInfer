@@ -58,22 +58,22 @@ load_conf() {
 # ------------------------------------------------------------------------------
 # SSH / HTTP 工具
 # ------------------------------------------------------------------------------
-_ssh_opts() {
+ssh_opts() {
     local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -p ${SSH_PORT}"
     [[ -n "${SSH_KEY:-}" ]] && opts="$opts -i ${SSH_KEY}"
     echo "$opts"
 }
 
-_ssh_cmd() {
+ssh_run() {
     local ip="$1"; shift
     # shellcheck disable=SC2046
-    ssh $(_ssh_opts) "${SSH_USER}@${ip}" "$@"
+    ssh $(ssh_opts) "${SSH_USER}@${ip}" "$@"
 }
 
 # 查询某节点容器内 vllm API 状态码（000 = 不可达）
 http_get() {
     local ip="$1" port="$2"
-    _ssh_cmd "$ip" \
+    ssh_run "$ip" \
         "docker exec ${CONTAINER_NAME} bash -c 'curl -s -o /dev/null -w \"%{http_code}\" --max-time 5 http://localhost:${port}/v1/models'" \
         2>/dev/null || echo "000"
 }
@@ -106,7 +106,7 @@ _launch_node() {
     fi
 
     echo -n "  ${role^^}Node [$index] $ip (dp_rank=$dp_rank_start) ... "
-    _ssh_cmd "$ip" bash -s -- \
+    ssh_run "$ip" bash -s -- \
         "$ip" "$NIC_NAME" "$MODEL_PATH" "$LOG_DIR" "$REMOTE_SCRIPT_DIR" "${role}node.sh" \
         "$_dp_size" "$_tp_size" "$_dp_local" "$dp_rank_start" "$dp_address" "$_rpc_port" "$_vllm_port" \
         << 'REMOTE_SCRIPT'
@@ -129,7 +129,7 @@ REMOTE_SCRIPT
 # ------------------------------------------------------------------------------
 # 健康检查: 全部就绪返回 0, 超时返回 1
 # ------------------------------------------------------------------------------
-_health_check() {
+health_check() {
     local role="$1"
     local -n _ips="${role^^}_IPS"
     local -n _port="${role^^}_VLLM_START_PORT"
@@ -195,7 +195,7 @@ cmd_stop() {
     local ip
     for ip in "${P_IPS[@]}" "${D_IPS[@]}"; do
         echo -n "  $ip ... "
-        _ssh_cmd "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"vllm serve\" || true'" 2>/dev/null \
+        ssh_cmd "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"vllm serve\" || true'" 2>/dev/null \
             && echo -e "${GREEN}stopped${NC}" \
             || echo -e "${YELLOW}not running${NC}"
     done
@@ -208,7 +208,7 @@ cmd_clean() {
     local ip
     for ip in "${P_IPS[@]}" "${D_IPS[@]}"; do
         echo -n "  $ip ... "
-        _ssh_cmd "$ip" "docker restart ${CONTAINER_NAME}" 2>/dev/null \
+        ssh_run "$ip" "docker restart ${CONTAINER_NAME}" 2>/dev/null \
             && echo -e "${GREEN}restarted${NC}" \
             || echo -e "${RED}failed${NC}"
     done
@@ -216,7 +216,7 @@ cmd_clean() {
     echo "完成"
 }
 
-_status_role() {
+status_role() {
     local role="$1" label="$2"
     local -n _ips="${role^^}_IPS"
     local -n _port="${role^^}_VLLM_START_PORT"
@@ -235,8 +235,8 @@ _status_role() {
 }
 
 cmd_status() {
-    _status_role "p" "PNode (Prefill / kv_producer)"
-    _status_role "d" "DNode (Decode / kv_consumer)"
+    status_role "p" "PNode (Prefill / kv_producer)"
+    status_role "d" "DNode (Decode / kv_consumer)"
 
     echo "=== Proxy (本机:${PROXY_PORT}) ==="
     if pgrep -f load_balance_proxy_server_example >/dev/null; then
