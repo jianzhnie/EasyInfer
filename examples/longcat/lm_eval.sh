@@ -39,9 +39,11 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 # 评测参数
 # ---------------------------------------------------------------------------
 # 模型路径 (本地 tokenizer 路径，用于 lm-eval 做 tokenization)
-# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
-MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Thinking-2601}"
-OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Thinking-2601}"
+MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
+OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash}"
+
+# MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Thinking-2601}"
+# OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash-Thinking-2601}"
 # API 中注册的模型名 (served-model-name)
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 # SGLang 服务地址
@@ -54,6 +56,12 @@ BACKEND="${BACKEND:-api}"
 # max_gen_toks 控制生成长度上限，未设置时由各后端决定（默认 256）
 # 注意: 必须 ≤ 模型部署时的 MAX_MODEL_LEN，否则请求会被拒绝
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+# 可选的生成参数（逗号分隔的 key=value）
+GEN_KWARGS="${GEN_KWARGS:-}"
+# API 请求超时（秒），仅 api 后端生效
+TIMEOUT="${TIMEOUT:-300}"
+# API 并发请求数
+NUM_CONCURRENT="${NUM_CONCURRENT:-8}"
 
 # 可选任务:
 #   mmlu, gsm8k, ceval-valid, hendrycks_math500, minerva_math500
@@ -61,6 +69,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 # 执行评测
 # ---------------------------------------------------------------------------
 log_info "Starting evaluation: model=$MODEL_NAME, tasks=$TASKS, backend=$BACKEND"
+[[ -n "$GEN_KWARGS" ]] && log_info "gen_kwargs=$GEN_KWARGS"
 
 # 构建 run_lmeval.sh 参数
 LMEVAL_ARGS=(
@@ -72,12 +81,15 @@ LMEVAL_ARGS=(
     --tasks "$TASKS"
     --fewshot "$FEWSHOT"
     --max-model-len "$MAX_MODEL_LEN"
-    --num-concurrent 8
+    --num-concurrent "$NUM_CONCURRENT"
 )
 
 # API 模式下必须显式指定远程 URL（服务不在本地 127.0.0.1）
 if [[ "$BACKEND" == "api" ]]; then
     LMEVAL_ARGS+=(--url "http://${API_HOST}:${PORT}/v1/completions")
 fi
+
+[[ -n "$GEN_KWARGS" ]] && LMEVAL_ARGS+=(--gen-kwargs "$GEN_KWARGS")
+LMEVAL_ARGS+=(--timeout "$TIMEOUT")
 
 bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" "${LMEVAL_ARGS[@]}"

@@ -1,31 +1,33 @@
 #!/bin/bash
 #
-# Math Benchmark Script (via lm-evaluation-harness, API backend)
+# AIME Benchmark Script (via lm-evaluation-harness, API backend)
 # =============================================================================
+# AIME 竞赛级数学推理评测，默认使用采样 + 投票 (pass@64)。
+#
 # Usage:
-#   bash examples/longcat/lm_eval_math.sh
+#   bash examples/longcat/lm_eval_aime.sh
 #
-#   # 环境变量覆盖
-#   TASKS=gsm8k MAX_GEN_TOKS=1024 TIMEOUT=600 bash examples/longcat/lm_eval_math.sh
+#   # 环境变量覆盖（注意：do_sample=True 必须显式设置以覆盖 YAML 默认值）
+#   GEN_KWARGS='do_sample=True,temperature=0.8,top_p=0.9,n=32' bash examples/longcat/lm_eval_aime.sh
 #
-#   # 快速验证
-#   LIMIT=10 bash examples/longcat/lm_eval_math.sh
+#   # 快速验证（每题只采样 4 次，限 5 题）
+#   GEN_KWARGS='do_sample=True,temperature=0.6,top_p=0.95,top_k=40,n=4' LIMIT=5 bash examples/longcat/lm_eval_aime.sh
 #
-#   # 全量（不限样本数）
-#   LIMIT=none bash examples/longcat/lm_eval_math.sh
+#   # greedy 单次生成
+#   GEN_KWARGS='do_sample=False,n=1' bash examples/longcat/lm_eval_aime.sh
 # =============================================================================
-# Math Tasks (generative, compatible with --chat):
-#   gsm8k                      Grade school math (5-shot, CoT)
-#   math500 / minerva_math500  MATH benchmark 500-sample subset (4-shot)
-#   hendrycks_math             Full MATH (12K problems, slow)
+# AIME Tasks (generative, requires --chat):
+#   aime24                     AIME 2024 (30 problems, 0-shot CoT)
+#   aime25                     AIME 2025 (30 problems, 0-shot CoT)
 #
-# Math Tasks (loglikelihood, do NOT use with --chat):
-#   gpqa_main                  Graduate-level physics QA
-#   mmlu_college_mathematics   MMLU college math subset
-#   mmlu_high_school_mathematics
-#   cmmlu_math / ceval-math    Chinese math subsets
+# Important: aime24/aime25 任务 YAML 内置了 do_sample=False 和 max_gen_toks=32768，
+# 必须通过 GEN_KWARGS 显式覆盖这两个值，否则采样不会生效且生成长度过大。
 #
-# To mix generative + loglikelihood tasks, remove --chat and run separately.
+# Sampling strategy:
+#   do_sample=True, n=64, temperature=0.6, top_p=0.95, top_k=40  → pass@64
+#   do_sample=False, n=1                                          → pass@1 (greedy)
+#
+# 注意: n=64 时每题 64 次生成，60 题共计 3840 次 API 请求，耗时较长。
 # =============================================================================
 
 set -euo pipefail
@@ -51,42 +53,39 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
 # 模型路径 (本地 tokenizer 路径，用于 lm-eval 做 tokenization)
 MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 OUTPUT_DIR="${OUTPUT_DIR:-/home/jianzhnie/llmtuner/llm/EasyInfer/output/LongCat-Flash}"
+# API 中注册的模型名 (served-model-name)
 MODEL_NAME="${MODEL_NAME:-longcat-flash}"
 # 服务地址
 API_HOST="${API_HOST:-localhost}"
 PORT="${PORT:-8200}"
 BACKEND="${BACKEND:-api}"
 
-# 默认：生成类数学任务（适用 --chat --apply-chat-template）
-TASKS="${TASKS:-gsm8k}"
-FEWSHOT="${FEWSHOT:-1}"
+# AIME 默认：aime24 + aime25，采样 64 条做 pass@64
+TASKS="${TASKS:-aime24,aime25}"
+FEWSHOT="${FEWSHOT:-0}"
 # max_model_len → API 模式下映射为 max_length（上下文总长度，含 prompt + 生成）
-# max_gen_toks 控制生成长度上限，未设置时由各后端决定（默认 256）
+# max_gen_toks 控制生成长度上限，AIME 推理链较长需要较大值
 # 注意: max_model_len 必须 ≤ 模型部署时的 MAX_MODEL_LEN，否则请求会被拒绝
-# 数学题 prompt 较短（<8K），生成 CoT 推理通常 <4K
-MAX_GEN_TOKS="${MAX_GEN_TOKS:-16384}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_GEN_TOKS="${MAX_GEN_TOKS:-32768}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-34816}"
 LIMIT="${LIMIT:-none}"
-# 可选的生成参数（逗号分隔的 key=value），例如:
-#   GEN_KWARGS='temperature=0.6,top_p=0.95,n=64'
-GEN_KWARGS="${GEN_KWARGS:-}"
-# API 请求超时（秒），仅 api 后端生效（默认: 300）
+# AIME 默认生成参数：采样模式，64 条候选做 majority voting
+# do_sample=True 和 max_gen_toks 必须显式设置，覆盖任务 YAML 中的默认值
+#   - aime24/aime25 YAML 内置 do_sample=False（greedy），需要 CLI 覆盖
+#   - aime24/aime25 YAML 内置 max_gen_toks=32768，需要 CLI 覆盖为合理值
+GEN_KWARGS="${GEN_KWARGS:-do_sample=True,temperature=0.6,top_p=0.95,top_k=40,n=64,max_gen_toks=16384}"
+# API 请求超时（秒），n=64 时单题耗时较长，建议 ≥600
 TIMEOUT="${TIMEOUT:-36000}"
-# API 并发请求数
-NUM_CONCURRENT="${NUM_CONCURRENT:-8}"
-
-# 可选 math 任务组合:
-#   快速: gsm8k,math500
-#   完整: gsm8k,hendrycks_math
-#   中文: ceval-valid (loglikelihood, 去掉 --chat --apply-chat-template)
-#   混合: 先用 --chat 跑生成类, 再单独跑 loglikelihood 类
+# 并发数，n=64 时适当降低避免服务端排队过深
+NUM_CONCURRENT="${NUM_CONCURRENT:-4}"
 
 # ---------------------------------------------------------------------------
 # 执行评测
 # ---------------------------------------------------------------------------
-log_info "Math Benchmarks: model=$MODEL_NAME, tasks=$TASKS"
+log_info "AIME Benchmarks: model=$MODEL_NAME, tasks=$TASKS"
 log_info "fewshot=$FEWSHOT, max_gen_toks=$MAX_GEN_TOKS, max_model_len=$MAX_MODEL_LEN"
-[[ -n "$GEN_KWARGS" ]] && log_info "gen_kwargs=$GEN_KWARGS"
+log_info "num_concurrent=$NUM_CONCURRENT, timeout=$TIMEOUT"
+log_info "gen_kwargs=$GEN_KWARGS"
 
 ARGS=(
     --model-path "$MODEL_PATH"
@@ -97,10 +96,12 @@ ARGS=(
     --fewshot "$FEWSHOT"
     --max-model-len "$MAX_MODEL_LEN"
     --max-gen-toks "$MAX_GEN_TOKS"
-    --output-dir "${OUTPUT_DIR}/math"
+    --output-dir "${OUTPUT_DIR}/aime"
     --num-concurrent "$NUM_CONCURRENT"
     --chat
     --apply-chat-template
+    --gen-kwargs "$GEN_KWARGS"
+    --timeout "$TIMEOUT"
 )
 
 # API 模式下显式指定远程 URL（支持非本地服务）
@@ -109,7 +110,5 @@ if [[ "$BACKEND" == "api" ]]; then
 fi
 
 [[ "$LIMIT" != "none" ]] && ARGS+=(--limit "$LIMIT")
-[[ -n "$GEN_KWARGS" ]] && ARGS+=(--gen-kwargs "$GEN_KWARGS")
-ARGS+=(--timeout "$TIMEOUT")
 
 bash "${PROJECT_ROOT}/tools/eval/run_lmeval.sh" "${ARGS[@]}"

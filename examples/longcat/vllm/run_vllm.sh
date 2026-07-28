@@ -195,8 +195,19 @@ fi
 # TP 的倍数; 默认档 [1,2,4,8,16] 在 TP>16 时直接报错。自动生成:
 # 从 TP 起按 TP 步进, 覆盖到 >= MAX_NUM_SEQS, 最多 4 档 (可用
 # CUDAGRAPH_CAPTURE_SIZES='[32,64]' 覆盖)。
+#
+# 同时必须关闭两个会绕过 fix_layernorm_dtype 补丁、在 FX 图里裸插
+# npu_add_rms_norm_bias 的融合 pass (否则 graph capture 报 EZ1001):
+#   - SP passes:          VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+#   - fuse_allreduce_rms: additional-config 里关闭
 COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
+ADDITIONAL_CONFIG_FLAGS=()
 if [[ "$ENFORCE_EAGER" == "0" ]]; then
+    if [[ "${VLLM_ASCEND_ENABLE_FLASHCOMM1}" == "1" ]]; then
+        echo "[INFO] 图模式: 强制 VLLM_ASCEND_ENABLE_FLASHCOMM1=0 (SP pass 会绕过 dtype 防护)"
+        export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+    fi
+    ADDITIONAL_CONFIG_FLAGS=(--additional-config '{"ascend_compilation_config":{"fuse_allreduce_rms":false}}')
     if [[ -n "${CUDAGRAPH_CAPTURE_SIZES:-}" ]]; then
         CAPTURE_SIZES="$CUDAGRAPH_CAPTURE_SIZES"
     else
@@ -210,6 +221,12 @@ if [[ "$ENFORCE_EAGER" == "0" ]]; then
         CAPTURE_SIZES="[$(IFS=,; echo "${_sizes[*]}")]"
     fi
     COMPILATION_CONFIG="{\"cudagraph_mode\": \"FULL_DECODE_ONLY\", \"cudagraph_capture_sizes\": ${CAPTURE_SIZES}}"
+    # 图模式排障: VLLM_DEBUG_DUMP=/tmp/dump 时导出编译 FX 图
+    if [[ -n "${VLLM_DEBUG_DUMP:-}" ]]; then
+        mkdir -p "$VLLM_DEBUG_DUMP"
+        COMPILATION_CONFIG="{\"cudagraph_mode\": \"FULL_DECODE_ONLY\", \"cudagraph_capture_sizes\": ${CAPTURE_SIZES}, \"debug_dump_path\": \"${VLLM_DEBUG_DUMP}\"}"
+        echo "[INFO] 图模式 debug_dump_path=$VLLM_DEBUG_DUMP"
+    fi
     echo "[INFO] 图模式 capture_sizes=$CAPTURE_SIZES"
 fi
 
@@ -225,6 +242,7 @@ vllm serve "$MODEL_PATH" \
     "${EP_FLAGS[@]}" \
     "${PREFILL_FLAGS[@]}" \
     --block-size "$BLOCK_SIZE" \
+    --safetensors-load-strategy prefetch \
     --distributed-executor-backend "$EXECUTOR" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
@@ -232,6 +250,7 @@ vllm serve "$MODEL_PATH" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
     --no-enable-prefix-caching \
     --compilation-config "$COMPILATION_CONFIG" \
+    "${ADDITIONAL_CONFIG_FLAGS[@]}" \
     "${EAGER_FLAGS[@]}" \
     --seed 1024 \
     "$@"
