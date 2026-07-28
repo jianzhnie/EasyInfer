@@ -38,7 +38,11 @@ readonly PORT="${PORT:-8007}"
 readonly TP="${TP:-16}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
-readonly ENABLE_MTP="${ENABLE_MTP:-1}"
+# DSA context parallelism: official configs use DCP == TP
+# (single node TP16/DCP16, dual node TP8/DCP8)
+readonly PCP="${PCP:-1}"
+readonly DCP="${DCP:-$TP}"
+ENABLE_MTP="${ENABLE_MTP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-1024000}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
@@ -54,11 +58,13 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
-# Fused MC2: enable for multi-node, disable for single-node
-if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
-    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+# Fused MC2: enable for multi-node (PP>1, TP>8, or DP spanning nodes),
+# disable for single-node. Override explicitly via env if needed
+# (e.g. single-node DP=2 on a 16-NPU A3: VLLM_ASCEND_ENABLE_FUSED_MC2=0).
+if [[ "$PP" -gt 1 || "$TP" -gt 8 || "$DP" -gt 1 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-1}"
 else
-    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-0}"
 fi
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_V1=1
@@ -97,15 +103,16 @@ fi
 
 # Compilation config (official 1M context docs)
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 128]}'
-readonly ADDITIONAL_CONFIG='{"enable_flashcomm1": false, "enable_dsa_cp": true, \
-    "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, \
-    "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, \
-    "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, \
-    "recompute_scheduler_enable": false}'
+readonly ADDITIONAL_CONFIG='{"enable_flashcomm1": false, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}'
 
 # MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
 # ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
-# to on for single-node; set ENABLE_MTP=0 with PP>1.
+# to on for single-node; it is auto-disabled when PP>1.
+if [[ "$ENABLE_MTP" == "1" && "$PP" -gt 1 ]]; then
+    echo "[WARN] PP>1 与 MTP 互斥（vLLM 0.23.0 拒绝 PP+MTP），已自动禁用 MTP"
+    ENABLE_MTP=0
+fi
+readonly ENABLE_MTP
 SPEC_ARGS=()
 if [[ "$ENABLE_MTP" == "1" ]]; then
     SPEC_ARGS+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}')
@@ -120,7 +127,7 @@ echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] RAY_ADDRESS=${RAY_ADDRESS:-auto-detect}"
 echo "[INFO] MTP: $([[ "$ENABLE_MTP" == "1" ]] && echo 'ON (3 tokens, deepseek_mtp)' || echo 'OFF')"
-echo "[INFO] DSA CP: prefill_cp=1 decode_cp=16 interleave=128"
+echo "[INFO] DSA CP: prefill_cp=$PCP decode_cp=$DCP interleave=128"
 echo "[INFO] FLASHCOMM1=0 (DSA CP incompatible)"
 echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
@@ -137,8 +144,8 @@ vllm serve "$MODEL_PATH" \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
-    --prefill-context-parallel-size 1 \
-    --decode-context-parallel-size 16 \
+    --prefill-context-parallel-size "$PCP" \
+    --decode-context-parallel-size "$DCP" \
     --cp-kv-cache-interleave-size 128 \
     --distributed-executor-backend ray \
     --quantization ascend \

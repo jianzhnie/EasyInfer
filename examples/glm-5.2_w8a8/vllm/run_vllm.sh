@@ -6,7 +6,8 @@
 # Max Position: 1048576 | Deploy: 32K context (override with MAX_MODEL_LEN)
 #
 # Hardware:
-#   - Atlas 800 A3 (128G x 8):  TP=8 DP=2 PP=1 (single node)
+#   - Atlas 800 A3 (128G x 8):  TP=8 DP=1 PP=1 (single node)
+#   - Atlas 800 A3 (64G x 16):  TP=8 DP=2 PP=1 (single node, official)
 #   - Atlas 800 A2 (64G x 8):   TP=8 PP=2 (2 nodes, verified)
 #
 # Note: TP=16 is NOT supported (MLA head_dim=192 × num_kv_heads=3 = 576
@@ -50,17 +51,20 @@ readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 export HCCL_OP_EXPANSION_MODE=AIV
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
-export HCCL_BUFFSIZE=200
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
 # DSA path is incompatible with FLASHCOMM1 (GLM-5.2 index_topk:2048 triggers DSA CP)
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
-# Fused MC2: enable for multi-node (PP>1 or TP>8), disable for single-node
-if [[ "$PP" -gt 1 || "$TP" -gt 8 ]]; then
-    export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+# Fused MC2 + HCCL_BUFFSIZE: multi-node (PP>1, TP>8, or DP spanning nodes)
+# vs single-node (official docs). Override FUSED_MC2 explicitly via env if
+# needed (e.g. single-node DP=2 on a 16-NPU A3).
+if [[ "$PP" -gt 1 || "$TP" -gt 8 || "$DP" -gt 1 ]]; then
+    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-1}"
+    export HCCL_BUFFSIZE=400
 else
-    export VLLM_ASCEND_ENABLE_FUSED_MC2=0
+    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-0}"
+    export HCCL_BUFFSIZE=200
 fi
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_V1=1
@@ -100,13 +104,17 @@ fi
 
 # Compilation config (official docs)
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
-readonly ADDITIONAL_CONFIG='{"enable_dsa_cp": true,"enable_sparse_sfa_c8": false, \
-    "enable_sparse_li_c8": true,"enable_balance_scheduling": true,"multistream_overlap_shared_expert":true}'
+readonly ADDITIONAL_CONFIG='{"enable_dsa_cp": true,"enable_sparse_sfa_c8": false, "enable_sparse_li_c8": true,"enable_balance_scheduling": true,"multistream_overlap_shared_expert":true}'
 
 # MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
 # ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
 # to off; enable only with PP=1.
-readonly ENABLE_MTP="${ENABLE_MTP:-0}"
+ENABLE_MTP="${ENABLE_MTP:-0}"
+if [[ "$ENABLE_MTP" == "1" && "$PP" -gt 1 ]]; then
+    echo "[WARN] PP>1 与 MTP 互斥（vLLM 0.23.0 拒绝 PP+MTP），已自动禁用 MTP"
+    ENABLE_MTP=0
+fi
+readonly ENABLE_MTP
 SPEC_ARGS=()
 if [[ "$ENABLE_MTP" == "1" ]]; then
     SPEC_ARGS+=(--speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}')
