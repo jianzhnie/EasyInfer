@@ -7,12 +7,13 @@
 # Reference: https://docs.vllm.ai/projects/ascend/zh-cn/latest/tutorials/models/GLM5.2.html#1m
 #
 # Hardware:
-#   - Atlas 800 A3 (128G x 16): TP=16 DP=1 (single node, 1M context)
+#   - Atlas 800 A3 (64G x 16):  TP=16 DP=1 (single node, 1M context, official)
 #   - Atlas 800 A3 (128G x 8):  TP=8 PP=2 (2 nodes, 1M context co-located)
 #
-# Note: TP=16 may fail on some configurations due to MLA dimension
-#   incompatibility (head_dim=192 × num_kv_heads=3 = 576 not divisible by 16).
-#   If TP=16 fails, use TP=8 PP=2 multi-node instead. PP>1 blocks MTP.
+# Note: TP=16 is officially supported (1M single-node config: TP16 DCP16;
+#   heads 64/16, indexer 32/16 are divisible). The TP=16 failure observed on
+#   v0.22.1 was a shard-length bug (length 704 vs 576), not a dimension limit.
+#   PP>1 + MTP is not supported on v0.23.0rc1 mixed deployments (#11076, main only).
 #
 # Usage:
 #   bash run_vllm_1m.sh                           # TP=16 DP=1 single node (A3)
@@ -82,9 +83,8 @@ export TASK_QUEUE_ENABLE=1
 #   (e.g., RAY_ADDRESS=10.42.11.130:6379) so Engine Core subprocesses
 #   connect to the existing Ray cluster instead of starting a local one.
 #
-# Note: TP=16 may fail due to MLA dimension incompatibility
-#   (head_dim=192 × num_kv_heads=3 = 576, not divisible by 16).
-#   If affected, use TP=8 PP=2 multi-node instead.
+# Note: TP=16 is officially supported (1M single-node: TP16 DCP16). The
+#   v0.22.1 TP=16 failure was a shard-length bug, not a dimension limit.
 # =============================================================================
 readonly RAY_ADDRESS="${RAY_ADDRESS:-}"
 readonly NIC_NAME="${NIC_NAME:-}"
@@ -105,11 +105,13 @@ fi
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 128]}'
 readonly ADDITIONAL_CONFIG='{"enable_flashcomm1": false, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}'
 
-# MTP speculative decoding. NOTE: PP>1 + MTP is rejected by vLLM 0.23.0
-# ("PP+MTP is only supported on PD-disaggregated P nodes"), so MTP defaults
-# to on for single-node; it is auto-disabled when PP>1.
+# MTP speculative decoding. NOTE: on vllm-ascend v0.23.0rc1, PP>1 + MTP is
+# rejected in co-located (mixed) deployment — mixed PP+MTP support (#11076)
+# is only on main, not in any release tag; PD-disaggregated P nodes support
+# PP+MTP since v0.22.1rc1 (#10199). MTP defaults to on for single-node;
+# it is auto-disabled when PP>1.
 if [[ "$ENABLE_MTP" == "1" && "$PP" -gt 1 ]]; then
-    echo "[WARN] PP>1 与 MTP 互斥（vLLM 0.23.0 拒绝 PP+MTP），已自动禁用 MTP"
+    echo "[WARN] v0.23.0rc1 共部署不支持 PP>1+MTP（#11076 仅在 main），已自动禁用 MTP"
     ENABLE_MTP=0
 fi
 readonly ENABLE_MTP
