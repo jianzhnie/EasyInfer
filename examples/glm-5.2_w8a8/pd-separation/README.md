@@ -43,13 +43,47 @@ gpu-mem-util 0.85                        gpu-mem-util 0.92
 |----|------------------------|------------------|------|
 | P/D 并行 | DP4 TP8 PCP1 DCP8 | 同左 | A2 每 rank=1 节点 |
 | FLASHCOMM1 | P: true / D: **false** | P/D 均 **true** | 本镜像 DCP 强制 SP（实测报错） |
-| FUSED_MC2 | 未开启 | P/D 均 **false** | W8A8 下 aclnnDispatchFFNCombine 崩溃（实测） |
-| Connector | MooncakeConnectorV1 | 同左 | use_ascend_direct |
+| FUSED_MC2 | 未开启 | P/D 均 **false** | W8A8 跨节点 EP 下 aclnnDispatchFFNCombine 崩溃（实测） |
+| Connector | MooncakeConnectorV1 | 同左 | use_ascend_direct；DSA 模型有上游 bug，见「已知问题」 |
 | MTP | P: 1 token / D: 3 tokens | 同左 | enforce_eager=true |
-| recompute_scheduler | P: true / D: true | P: **false** / D: true | vllm-ascend 在 P 节点仅告警忽略，直接关闭 |
+| recompute_scheduler | P: true / D: true | P/D 均 **false** | P 节点仅告警忽略；D 侧排查期间关闭（非根因，未恢复） |
+| D 图模式 | FULL_DECODE_ONLY | **enforce-eager** | kv_consumer + FULL_DECODE capture 触发量化 op bug（见「已知问题」） |
+| D batched tokens | 128 | 2048 | 官方值偏小；非根因，未回改 |
+| sparse c8 | sfa/li: true | 均 **false** | W4A8C8 的 KV C8 量化，W8A8 无对应 scale（非根因，保守关闭） |
 | max-num-seqs | P: 8 / D: 32 | P: 8 / D: **16** | W8A8 KV 池更小，保守起步 |
 | gpu-mem-util | P: 0.75 / D: 0.93 | P: 0.93 / D: 0.93 | W8A8 权重大；P 实测 util 0.85 时 KV 不足 1M（需 ≥8.91 GiB/卡） |
 | enable_balance_scheduling | — | ❌ 不用 | 仅 kv_both 模式可用（PD 分离下报错） |
+| DYNAMIC_EPLB / MLAPO | D 端优化 | EPLB=0 / MLAPO=1 | EPLB 曾为嫌疑关闭（非根因），MLAPO 保留 |
+
+## 验证记录
+
+| 时间 | 配置 | 结果 | 说明 |
+|------|------|------|------|
+| 2026-07-28 | P: DP4 TP8 DCP8, FUSED_MC2=0, util 0.93 | ✅ 4/4 就绪 | curl /v1/models 全通 |
+| 2026-07-28 | D: DP4 TP8 DCP8, **enforce-eager** | ✅ 4/4 就绪 | 可独立服务；PD 端到端被 Mooncake bug 阻断（见下） |
+
+### 关键调试记录（D 侧，10 轮）
+
+1. ~~FUSED_MC2=1~~ → `aclnnDispatchFFNCombine`（跨节点 EP 崩溃）→ 关
+2. ~~DP 握手竞态~~ → rendezvous 2/4 → rank0 错峰先行 60s
+3. ~~`aclnnMoeDistributeDispatchV4` 561000~~ → plog 显示 HCCL transport init timeout → `HCCL_CONNECT/EXEC_TIMEOUT=600`
+4. ~~`aclnnAscendQuantV3` 161002（scale 2048 vs x 16384）~~ → 排除 EPLB/batched/c8/recompute，定位于 **kv_consumer + FULL_DECODE_ONLY capture** → 改 enforce-eager 通过
+5. PD 端到端 → Mooncake `_transfer_kv_cache_all_groups` IndexError（见「已知问题」#1）
+
+## 已知问题（均为上游 vllm-ascend 问题，v0.23.0rc1）
+
+### 1. MooncakeConnectorV1 不支持 DSA 模型分离的 indexer KV cache（阻断 PD 端到端）
+
+- **现象**：D 接收 KV 时 `IndexError`（`_transfer_kv_cache_all_groups` → `remote_kv_caches_base_addrs[layer_idx][cache_idx]`），请求 500
+- **根因**：GLM-5.2（DSA）的 indexer KV cache 与 MLA cache 分组，connector 的 `use_hybrid` 判定未适配
+- **上游修复**：[#12863](https://github.com/vllm-project/vllm-ascend/pull/12863)（`a0cc4ce1d`，2026-07-28，main）——**不在 v0.23.0rc1**；且依赖 v0.23.0rc1 中不存在的 `AscendSFAIndexerCacheSpec`，无法直接 cherry-pick
+- **对策**：等包含该修复的新镜像；或先在 kv_both（共部署，见 `../dp1m/`）下承载 1M
+
+### 2. kv_consumer + FULL_DECODE_ONLY capture 量化 op 形状错误
+
+- **现象**：`aclnnAscendQuantV3` 161002，`scale dim(0)=2048 vs x dim(1)=16384`（q_lora/q_proj 维度错绑）
+- **规避**：D 侧 `--enforce-eager`（当前配置）；代价是 decode 无 CUDA Graph、吞吐降低
+- P 侧（producer、enforce-eager）与 dp1m（kv_both、FULL_DECODE_ONLY）均不触发
 
 ## 文件
 

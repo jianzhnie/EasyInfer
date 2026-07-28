@@ -45,7 +45,7 @@ readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-31744}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 
 # NPU environment variables (official docs + W8A8 specifics)
@@ -55,18 +55,19 @@ export OMP_NUM_THREADS=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
-# DSA path is incompatible with FLASHCOMM1 (GLM-5.2 index_topk:2048 triggers DSA CP)
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
-# Fused MC2 + HCCL_BUFFSIZE: multi-node (PP>1, TP>8, or DP spanning nodes)
-# vs single-node (official docs). Override FUSED_MC2 explicitly via env if
-# needed (e.g. single-node DP=2 on a 16-NPU A3).
-if [[ "$PP" -gt 1 || "$TP" -gt 8 || "$DP" -gt 1 ]]; then
-    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-1}"
-    export HCCL_BUFFSIZE=400
-else
-    export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-0}"
-    export HCCL_BUFFSIZE=200
-fi
+# FLASHCOMM1 (SP): 32K 默认关（W8A8 历史 aclnn_input_scale 崩溃规避）。
+# 注意: enable_dsa_cp 会随 FLASHCOMM1 联动——当前镜像 enable_dsa_cp=true 时
+# 自动启用 DCP(≥2)，而 DCP 强制 SP（"DSA CP requires SP"），二者必须一致。
+FLASHCOMM1="${FLASHCOMM1:-0}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="$FLASHCOMM1"
+readonly FLASHCOMM1
+# Fused MC2: W8A8 下 EP 组跨节点时 aclnnDispatchFFNCombine 崩溃（实测：
+# D 侧 EP=32、131/132 EP=16 均复现；07-22 PP=2 EP=8 节点内曾用 1 通过）。
+# 默认关闭，需要时显式 VLLM_ASCEND_ENABLE_FUSED_MC2=1 覆盖。
+export VLLM_ASCEND_ENABLE_FUSED_MC2="${VLLM_ASCEND_ENABLE_FUSED_MC2:-0}"
+# HCCL_BUFFSIZE: MoE A2A dispatch 窗口需要——W8A8 大 MoE 跨节点实测 400 不够
+# （tiling "Get WinSize failed" 561002），对齐官方 1M 的 768。
+export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-768}"
 export VLLM_ASCEND_ENABLE_MLAPO=1
 export VLLM_USE_V1=1
 
@@ -104,9 +105,38 @@ if [[ -n "$NIC_NAME" ]]; then
     export HCCL_SOCKET_IFNAME="$NIC_NAME"
 fi
 
+# =============================================================================
+# Multi-node DP>1 (native per-node launch). NOTE: a single vllm launch places
+# ALL DP engine cores on the local node (devices enumerated as
+# local_dp_rank × TP×PP), so DP>1 across nodes REQUIRES one vllm per node:
+#   node0: DP_ADDRESS=<node0> DP_START_RANK=0                  bash run_vllm.sh
+#   node1: DP_ADDRESS=<node0> DP_START_RANK=1 HEADLESS=1       bash run_vllm.sh
+# (Ray only places workers INSIDE one engine — it cannot spread DP engines.)
+# =============================================================================
+readonly DP_ADDRESS="${DP_ADDRESS:-}"
+readonly DP_START_RANK="${DP_START_RANK:-0}"
+readonly DP_RPC_PORT="${DP_RPC_PORT:-29500}"
+readonly HEADLESS="${HEADLESS:-0}"
+DP_MODE_ARGS=()
+BACKEND_ARGS=(--distributed-executor-backend ray)
+API_ARGS=(--api-server-count 1)
+if [[ -n "$DP_ADDRESS" ]]; then
+    DP_MODE_ARGS+=(--data-parallel-start-rank "$DP_START_RANK"
+                   --data-parallel-size-local "${DP_SIZE_LOCAL:-1}"
+                   --data-parallel-address "$DP_ADDRESS"
+                   --data-parallel-rpc-port "$DP_RPC_PORT")
+    if [[ "$HEADLESS" == "1" ]]; then
+        DP_MODE_ARGS+=(--headless)
+        API_ARGS=()
+    fi
+    BACKEND_ARGS=()   # 原生 DP：executor 用默认 mp（每 rank 都在本节点内）
+fi
+
 # Compilation config (official docs)
+# enable_dsa_cp 联动 FLASHCOMM1：DCP 强制 SP（实测报错），32K 不需要 DCP
 readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
-readonly ADDITIONAL_CONFIG='{"enable_dsa_cp": true,"enable_sparse_sfa_c8": false, "enable_sparse_li_c8": true,"enable_balance_scheduling": true,"multistream_overlap_shared_expert":true}'
+DSA_CP_JSON=$([[ "$FLASHCOMM1" == "1" ]] && echo true || echo false)
+readonly ADDITIONAL_CONFIG="{\"enable_dsa_cp\": ${DSA_CP_JSON},\"enable_sparse_sfa_c8\": false, \"enable_sparse_li_c8\": true,\"enable_balance_scheduling\": true,\"multistream_overlap_shared_expert\":true}"
 
 # MTP speculative decoding. NOTE: on vllm-ascend v0.23.0rc1, PP>1 + MTP is
 # rejected in co-located (mixed) deployment — mixed PP+MTP support (#11076)
@@ -141,7 +171,7 @@ echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] RAY_ADDRESS=${RAY_ADDRESS:-auto-detect}"
 echo "[INFO] MTP: $([[ "$ENABLE_MTP" == "1" ]] && echo 'ON (3 tokens, deepseek_mtp)' || echo 'OFF')"
-echo "[INFO] FLASHCOMM1=0 (DSA CP incompatible)"
+echo "[INFO] FLASHCOMM1=$FLASHCOMM1 (32K 默认 0; enable_dsa_cp 联动)"
 echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2  EP=$ENABLE_EP"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
 echo "[INFO] Features: chunked-prefill, prefix-caching, async-scheduling"
@@ -151,13 +181,14 @@ echo "============================================"
 vllm serve "$MODEL_PATH" \
     --host "$HOST" \
     --port "$PORT" \
-    --api-server-count 1 \
+    "${API_ARGS[@]}" \
     --served-model-name "glm-5.2" \
     --trust-remote-code \
     --tensor-parallel-size "$TP" \
     --pipeline-parallel-size "$PP" \
     --data-parallel-size "$DP" \
-    --distributed-executor-backend ray \
+    "${BACKEND_ARGS[@]}" \
+    "${DP_MODE_ARGS[@]}" \
     --quantization ascend \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \

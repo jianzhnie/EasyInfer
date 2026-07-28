@@ -25,7 +25,8 @@ export ASCEND_A3_ENABLE=1
 export VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT=480
 export TASK_QUEUE_ENABLE=1
 export ASCEND_RT_VISIBLE_DEVICES=$visible_devices
-export DYNAMIC_EPLB=1
+# DYNAMIC_EPLB: v0.23.0rc1 下导致 aclnnMoeDistributeDispatchV4 报错 561000（实测），关闭
+export DYNAMIC_EPLB=0
 # DCP>1 强制要求 FLASHCOMM1=1（DSA CP requires SP，本镜像实测）
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 export VLLM_ASCEND_ENABLE_NZ=1
@@ -36,6 +37,9 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
 export VLLM_ENGINE_ITERATION_TIMEOUT_S=3600
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
+# 561000 transport init timeout 对策：放宽 HCCL 建连/执行超时（官方 A2 双机用 120/200）
+export HCCL_CONNECT_TIMEOUT=600
+export HCCL_EXEC_TIMEOUT=600
 
 mkdir -p "$log_dir"
 LOG_FILE="glm5_dnode_$(date +%Y%m%d_%H%M%S)_rank${dp_rank}.log"
@@ -49,10 +53,10 @@ nohup vllm serve "$model_path" \
     --decode-context-parallel-size 8 \
     --cp-kv-cache-interleave-size 128 \
     --enable-expert-parallel --seed 1024 --served-model-name glm-52 \
-    --max-model-len 1024000 --max-num-batched-tokens 128 \
-    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+    --max-model-len 1024000 --max-num-batched-tokens 2048 \
+    --enforce-eager \
     --speculative-config '{"num_speculative_tokens": 3, "method":"deepseek_mtp","enforce_eager":true}' \
-    --additional-config '{"enable_flashcomm1": true, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": true}' \
+    --additional-config '{"enable_flashcomm1": true, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": false, "enable_sparse_li_c8": false, "enable_cpu_binding": true, "recompute_scheduler_enable": false}' \
     --trust-remote-code --max-num-seqs 16 \
     --gpu-memory-utilization 0.93 --async-scheduling --enable-prefix-caching \
     --quantization ascend --enable-auto-tool-choice \
