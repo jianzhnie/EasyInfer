@@ -58,7 +58,13 @@ export HCCL_BUFFSIZE=768
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export VLLM_USE_MODELSCOPE=False
 export VLLM_ASCEND_BALANCE_SCHEDULING=1
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+# FLASHCOMM1 (SP): REQUIRED for DSA CP (DCP>1) — vllm-ascend raises
+# "DSA CP requires SP to be enabled" otherwise. Official 1M configs use
+# enable_flashcomm1: true. Set FLASHCOMM1=0 only for W8A8 fallback if the
+# aclnn_input_scale crash reappears (then DCP must be 1, i.e. no 1M CP).
+FLASHCOMM1="${FLASHCOMM1:-1}"
+export VLLM_ASCEND_ENABLE_FLASHCOMM1="$FLASHCOMM1"
+readonly FLASHCOMM1
 # Fused MC2: enable for multi-node (PP>1, TP>8, or DP spanning nodes),
 # disable for single-node. Override explicitly via env if needed
 # (e.g. single-node DP=2 on a 16-NPU A3: VLLM_ASCEND_ENABLE_FUSED_MC2=0).
@@ -102,8 +108,9 @@ if [[ -n "$NIC_NAME" ]]; then
 fi
 
 # Compilation config (official 1M context docs)
-readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 128]}'
-readonly ADDITIONAL_CONFIG='{"enable_flashcomm1": false, "enable_dsa_cp": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}'
+readonly COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 32, 64, 128]}'
+FLASHCOMM1_JSON=$([[ "$FLASHCOMM1" == "1" ]] && echo true || echo false)
+readonly ADDITIONAL_CONFIG="{\"enable_flashcomm1\": ${FLASHCOMM1_JSON}, \"enable_dsa_cp\": true, \"ascend_compilation_config\": {\"enable_npugraph_ex\": true, \"enable_static_kernel\": false}, \"fuse_muls_add\": true, \"multistream_overlap_shared_expert\": true, \"enable_mc2_hierarchy_comm\": false, \"enable_sparse_sfa_c8\": true, \"enable_sparse_li_c8\": true, \"enable_cpu_binding\": true, \"recompute_scheduler_enable\": false}"
 
 # MTP speculative decoding. NOTE: on vllm-ascend v0.23.0rc1, PP>1 + MTP is
 # rejected in co-located (mixed) deployment — mixed PP+MTP support (#11076)
@@ -130,7 +137,7 @@ echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
 echo "[INFO] RAY_ADDRESS=${RAY_ADDRESS:-auto-detect}"
 echo "[INFO] MTP: $([[ "$ENABLE_MTP" == "1" ]] && echo 'ON (3 tokens, deepseek_mtp)' || echo 'OFF')"
 echo "[INFO] DSA CP: prefill_cp=$PCP decode_cp=$DCP interleave=128"
-echo "[INFO] FLASHCOMM1=0 (DSA CP incompatible)"
+echo "[INFO] FLASHCOMM1=$FLASHCOMM1 (DCP>1 requires 1)"
 echo "[INFO] FUSED_MC2=$VLLM_ASCEND_ENABLE_FUSED_MC2"
 echo "[INFO] Tool Calling: glm47 parser + glm45 reasoning"
 echo "[INFO] Features: chunked-prefill, prefix-caching, async-scheduling"
