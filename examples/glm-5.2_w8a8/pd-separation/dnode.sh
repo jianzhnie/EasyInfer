@@ -1,5 +1,6 @@
 #!/bin/bash
-# GLM-5.2 W8A8 Decode 节点 (kv_consumer) — 简化版
+# GLM-5.2 W8A8 Decode 节点 (kv_consumer)
+# 对齐已验证的 batch_remote_deploy_pd_seg/glm52-deploy-scripts
 set -euo pipefail
 
 visible_devices="$1"; port="$2"; dp_size="$3"; dp_rank="$4"
@@ -7,51 +8,55 @@ dp_address="$5"; dp_rpc_port="$6"; tp_size="$7"
 
 nic_name="${NIC_NAME}"; local_ip="${LOCAL_IP}"
 model_path="${MODEL_PATH}"; log_dir="${LOG_DIR}"
-engine_id="${ENGINE_ID:-4}"
-
-unset ftp_proxy https_proxy http_proxy 2>/dev/null || true
-rm -rf ~/ascend/log 2>/dev/null || true
 
 export HCCL_OP_EXPANSION_MODE="AIV"
-export HCCL_IF_IP="$local_ip"
-export GLOO_SOCKET_IFNAME="$nic_name"
-export TP_SOCKET_IFNAME="$nic_name"
-export HCCL_SOCKET_IFNAME="$nic_name"
-export VLLM_HOST_IP="$local_ip"
+export HCCL_IF_IP=$local_ip
+export GLOO_SOCKET_IFNAME=$nic_name
+export TP_SOCKET_IFNAME=$nic_name
+export HCCL_SOCKET_IFNAME=$nic_name
 export OMP_PROC_BIND=false
-export OMP_NUM_THREADS=10
+export OMP_NUM_THREADS=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_ASCEND_ENABLE_MLAPO=1
-export HCCL_BUFFSIZE=1024
+export HCCL_BUFFSIZE=500
+export ASCEND_AGGREGATE_ENABLE=1
+export ASCEND_TRANSPORT_PRINT=1
+export ACL_OP_INIT_MODE=1
+export ASCEND_A3_ENABLE=1
 export TASK_QUEUE_ENABLE=1
-export VLLM_USE_V1=1
-export ASCEND_RT_VISIBLE_DEVICES="$visible_devices"
-export TMPDIR=/tmp/ray
+export ASCEND_RT_VISIBLE_DEVICES=$visible_devices
+export DYNAMIC_EPLB=1
+export VLLM_ASCEND_ENABLE_FUSED_MC2=1
+export VLLM_ASCEND_ENABLE_MLAPO=1
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+export VLLM_ENGINE_ITERATION_TIMEOUT_S=3600
+export VLLM_ENGINE_READY_TIMEOUT_S=3600
 
 mkdir -p "$log_dir"
-log_file="$log_dir/dnode_${local_ip}_rank${dp_rank}.log"
+LOG_FILE="glm5_dnode_$(date +%Y%m%d_%H%M%S)_rank${dp_rank}.log"
 
 nohup vllm serve "$model_path" \
     --host 0.0.0.0 --port "$port" \
     --data-parallel-size "$dp_size" --data-parallel-rank "$dp_rank" \
     --data-parallel-address "$dp_address" --data-parallel-rpc-port "$dp_rpc_port" \
     --tensor-parallel-size "$tp_size" \
-    --enable-expert-parallel --no-enable-prefix-caching \
-    --seed 1024 --served-model-name glm-5 --async-scheduling \
-    --max-model-len 4096 --max-num-batched-tokens 256 --max-num-seqs 64 \
-    --trust-remote-code --gpu-memory-utilization 0.90 \
-    --safetensors-load-strategy prefetch --quantization ascend \
-    --enable-auto-tool-choice --tool-call-parser glm47 --reasoning-parser glm45 \
-    --speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}' \
-    --additional-config '{"enable_cpu_binding": true, "recompute_scheduler_enable": true}' \
+    --enable-expert-parallel --seed 1024 --served-model-name glm-52 \
+    --max-model-len 135168 --max-num-batched-tokens 164 \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+    --speculative-config '{"num_speculative_tokens": 3, "method":"deepseek_mtp"}' \
+    --additional-config '{"enable_sparse_c8":false,"fuse_muls_add": true, "multistream_overlap_shared_expert": true, "recompute_scheduler_enable": true, "ascend_compilation_config": {"enable_npugraph_ex": true}}' \
+    --trust-remote-code --max-num-seqs 48 \
+    --gpu-memory-utilization 0.92 --async-scheduling --enable-prefix-caching \
+    --quantization ascend --enable-auto-tool-choice \
+    --tool-call-parser glm47 --reasoning-parser glm45 \
     --kv-transfer-config \
-    '{"kv_connector": "MultiConnector","kv_role": "kv_consumer","kv_load_failure_policy": "recompute",
-      "kv_connector_extra_config": {"connectors": [
-          {"kv_connector": "MooncakeConnectorV1","kv_role": "kv_consumer",
-           "kv_port": "'"$((30100 + engine_id - 4))"'",
-           "kv_connector_extra_config": {"prefill": {"dp_size": 4, "tp_size": 8},"decode": {"dp_size": 8, "tp_size": 4}}},
-          {"kv_connector": "AscendStoreConnector","kv_role": "kv_consumer",
-           "kv_connector_extra_config": {"lookup_rpc_port": "0","load_async": true,"backend": "mooncake"}}
-      ]}}' \
-    < /dev/null > "$log_file" 2>&1 &
+    '{"kv_connector": "MooncakeConnector",
+    "kv_role": "kv_consumer",
+    "kv_port": "30100",
+    "engine_id": "1",
+    "kv_connector_module_path": "vllm_ascend.distributed.kv_transfer.kv_p2p.mooncake_connector",
+    "kv_connector_extra_config": {
+        "use_ascend_direct": true,
+        "prefill": {"dp_size": 4, "tp_size": 8},
+        "decode":  {"dp_size": 8, "tp_size": 4}
+    }}' > "$log_dir/$LOG_FILE" 2>&1 &
 disown
