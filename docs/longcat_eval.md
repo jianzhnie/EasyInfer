@@ -39,6 +39,7 @@
 | Groups                              | n-shot | Value |
 | ----------------------------------- | ------ | ----- |
 | LongCat-Flash-Chat(origin)          | 5      | 85.22 |
+| LongCat-Flash-Chat(origin) TPxEP    | 5      | 87.15 |
 | LongCat-Flash-Thinking-2601(origin) | 5      | 84.99 |
 | LongCat-Flash-Chat-Expertx2         | 5      | 86.33 |
 | LongCat-Flash-Chat-Expertx2-Depth32 | 5      | 86.63 |
@@ -77,6 +78,13 @@
 |-----------|------:|------|-----:|--------|---|-----:|---|-----:|
 |ceval-valid|      2|none  |     5|acc     |↑  |0.8522|±  |0.0093|
 |           |       |none  |     5|acc_norm|↑  |0.8522|±  |0.0093|
+
+### LongCat-Flash-Chat（TP & EP）
+
+|  Groups   |Version|Filter|n-shot| Metric |   |Value |   |Stderr|
+|-----------|------:|------|-----:|--------|---|-----:|---|-----:|
+|ceval-valid|      2|none  |     5|acc     |↑  |0.8715|±  |0.0089|
+|           |       |none  |     5|acc_norm|↑  |0.8715|±  |0.0089|
 
 
 ### LongCat-Flash-Chat-Expertx2-Depth32
