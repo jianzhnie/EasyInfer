@@ -36,7 +36,7 @@
 
 ### C-eval
 
-| Groups                              | n-shot | Value |
+| Model                              | n-shot | Value |
 | ----------------------------------- | ------ | ----- |
 | LongCat-Flash-Chat(origin)          | 5      | 85.22 |
 | LongCat-Flash-Chat(origin) TPxEP    | 5      | 87.15 |
@@ -45,7 +45,25 @@
 | LongCat-Flash-Chat-Expertx2-Depth32 | 5      | 86.63 |
 
 
+### gsm8k
+
+| Model                              | n-shot | Value |
+| ----------------------------------- | ------ | ----- |
+| LongCat-Flash-Chat(origin)          | 1      | 91.21 |
+| LongCat-Flash-Thinking-2601(origin) | 1      |  |
+| LongCat-Flash-Chat-Expertx2         | 1     |  |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 1      |  |
+
+
 ## 附录
+
+### LongCat-Flash-Chat
+
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     1|exact_match|↑  |0.9121|±  |0.0078|
+|     |       |strict-match    |     1|exact_match|↑  |0.6187|±  |0.0134|
+
 
 ##  MMLU
 

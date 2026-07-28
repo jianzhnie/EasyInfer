@@ -73,11 +73,11 @@ LIMIT="${LIMIT:-none}"
 # do_sample=True 和 max_gen_toks 必须显式设置，覆盖任务 YAML 中的默认值
 #   - aime24/aime25 YAML 内置 do_sample=False（greedy），需要 CLI 覆盖
 #   - aime24/aime25 YAML 内置 max_gen_toks=32768，需要 CLI 覆盖为合理值
-GEN_KWARGS="${GEN_KWARGS:-do_sample=True,temperature=0.6,top_p=0.95,top_k=40,n=64,max_gen_toks=16384}"
+GEN_KWARGS="${GEN_KWARGS:-do_sample=True,temperature=0.6,top_p=0.95,top_k=40,n=32,max_gen_toks=32768}"
 # API 请求超时（秒），n=64 时单题耗时较长，建议 ≥600
-TIMEOUT="${TIMEOUT:-36000}"
+TIMEOUT="${TIMEOUT:-360000}"
 # 并发数，n=64 时适当降低避免服务端排队过深
-NUM_CONCURRENT="${NUM_CONCURRENT:-4}"
+NUM_CONCURRENT="${NUM_CONCURRENT:-8}"
 
 # ---------------------------------------------------------------------------
 # 执行评测
