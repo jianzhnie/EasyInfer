@@ -42,15 +42,8 @@ DSA 路径不兼容 FLASHCOMM1，**必须设置 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 模型路径: `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/GLM-5.2-w8a8`
 
 **硬件要求**:
-- **A3 (128GB/NPU)**: ✅ TP=8 单节点
-- **A2 (64GB/NPU)**: 推荐 **TP=8 DP=2 EP=16 两节点**（PP=1 故 MTP 可用，待实测）；保底 **TP=8 PP=2**（已验证）；
-  TP=8 单节点 OOM（权重 ~60.4GB/卡）；TP=16 两节点亦可（每卡 ~30GB，TP 跨节点，待 v0.23.0 复测）
-
-```bash
-# 确认 NPU 内存（容器内执行）
-npu-smi info | grep "HBM-Usage" | head -1
-# 65536 MB = 64GB (A2) | 131072 MB = 128GB (A3)
-```
+- **A3 (64GB/NPU  x 16)**: 推荐 ✅ TP=16 单节点
+- **A2 (64GB/NPU x 8)**: 推荐 ✅ **TP=8 DP=2 EP=16 两节点**；TP=16 两节点亦可（每卡 ~30GB）保底 **TP=8 PP=2**（已验证）；TP=8 单节点 OOM（权重 ~60.4GB/卡）；
 
 > 以下部署步骤适用于 **A2 (64GB) 与 A3 (128GB)**：A2 推荐 `TP=8 DP=2`（保底 `PP=2`，均两节点），A3 单节点直接起。
 
@@ -65,60 +58,19 @@ bash scripts/ray_cluster/manage_npuslim_ray_cluster.sh start --file nodes/node_l
 ### 部署
 
 ```bash
-# A3 单节点 (32K 上下文, TP=8)
-bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
-
-# A2 两节点 · DP=2 EP=16（已验证：MTP 不可用、上下文 ≤ ~20K，原生逐节点启动）
-#   node0:
-NIC_NAME=<nic> HCCL_IF_IP=<node0> DP=2 DP_ADDRESS=<node0> DP_START_RANK=0 \
-  FLASHCOMM1=1 MAX_MODEL_LEN=20480 MAX_NUM_BATCHED_TOKENS=8192 \
-  bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
-#   node1:
-NIC_NAME=<nic> HCCL_IF_IP=<node1> DP=2 DP_ADDRESS=<node0> DP_START_RANK=1 HEADLESS=1 \
-  FLASHCOMM1=1 MAX_MODEL_LEN=20480 MAX_NUM_BATCHED_TOKENS=8192 \
-  bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
-
 # A2 两节点 · 保底（已验证 32K 配置, TP=8 PP=2, 需先起跨节点 Ray 集群）
-RAY_ADDRESS=<head>:6379 PP=2 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
+TP=8 PP=2 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
 
-# 1M 超长上下文
-#   A3 单节点 (TP=16 DSA CP):
-bash examples/glm-5.2_w8a8/vllm/run_vllm_1m.sh
-#   8×A2 共部署（已验证，原生 DP=8, 见 vllm/dp1m/README.md）:
-bash examples/glm-5.2_w8a8/vllm/dp1m/remote_deploy.sh deploy
-
-# 后台运行
-nohup bash examples/glm-5.2_w8a8/vllm/run_vllm.sh > glm5_2_vllm.log 2>&1 &
-
-# 打开 MTP 投机解码（仅 PP=1 可用；v0.23.0rc1 共部署 PP>1+MTP 未支持）
-ENABLE_MTP=1 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
-```
-
-### 多节点 DP 部署方式（实测结论）
-
-- **单次 `vllm serve` 启动 DP>1 不可行**：所有 DP engine core 都会落在启动节点（设备按
-  `local_dp_rank × TP×PP` 本机枚举，超界即 IndexError），`--distributed-executor-backend ray`
-  也一样——Ray 只负责单个 engine 内部的 worker 放置
-- **跨节点 DP 必须原生逐节点启动**：每节点一个 `vllm serve`，rank0 带 API、其余 `--headless`
-  （脚本旋钮：`DP_ADDRESS` / `DP_START_RANK` / `HEADLESS` / `DP_SIZE_LOCAL` / `DP_RPC_PORT`）
-- **`--data-parallel-size-local` 必须显式给**：缺省时 headless 节点按全局 rank 切设备（IndexError）
-- Ray 仅用于 **DP=1 且 TP/PP 跨节点** 的场景（如 PP=2 两节点、TP=16 单实例、TP=32 PP=4 单实例 16 节点）：
-
-```bash
 # TP=32 PP=4 DP=1 单实例（16 节点 128 卡，MTP 关；未实测，先小规模 TP=16 PP=2 起步验证）
 RAY_ADDRESS=<head>:6379 NIC_NAME=<nic> HCCL_IF_IP=<head_ip> \
   TP=32 PP=4 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
-```
 
-```bash
-# 获取 Ray 集群地址
-docker exec vllm-ascend-env python3 -c "
-import ray; ray.init(address='auto', ignore_reinit_error=True)
-print(ray.get_runtime_context().gcs_address)
-"
+# 打开 MTP 投机解码（仅 PP=1 可用；v0.23.0rc1 共部署 PP>1+MTP 未支持）
+ENABLE_MTP=1 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
 
-# 部署时导出
-RAY_ADDRESS=10.42.11.130:6379 PP=2 bash run_vllm.sh
+# 1M 超长上下文
+# 8×A2 共部署（已验证，原生 DP=8, 见 vllm/dp1m/README.md）:
+bash examples/glm-5.2_w8a8/vllm/dp1m/remote_deploy.sh deploy
 ```
 
 ### vLLM-Ascend 版本要求
@@ -160,9 +112,6 @@ HOST=10.42.11.196 source examples/glm-5.2_w8a8/vllm/agent_api.sh && claude
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | `dummy` | vLLM 默认不鉴权，任意非空值 |
 | `ANTHROPIC_DEFAULT_{SONNET,HAIKU,OPUS}_MODEL` | `glm-5.2` | 必须与 `--served-model-name` 一致，且不含 `/` |
 
-也可写入 `~/.claude/settings.json` 的 `env` 字段持久化，详见
-[docs/claude-code-vllm-setup.md](../../../docs/claude-code-vllm-setup.md)。
-
 验证：
 
 ```bash
@@ -184,33 +133,17 @@ Agent 场景要点：
 
 ## 并行策略
 
-| 场景 | TP | PP | DP | NPU | 上下文 | 状态 |
-|------|-----|-----|-----|-----|--------|------|
-| 单节点 A3 (64G×16) | 8 | 1 | 2 | 16 | 32K | 官方推荐配置（dp2tp8） |
-| 单节点 A3 (64G×16) 低延迟 | 16 | 1 | 1 | 16 | 32K | 官方建议 dp1tp16 关 EP（`ENABLE_EP=0`，单节点 `VLLM_ASCEND_ENABLE_FUSED_MC2=0`） |
-| 单节点 A3 (128G×8) | 8 | 1 | 1 | 8 | 32K | ✅ 官方支持（w8a8 最低硬件） |
-| 单节点 A2 (64G) | 8 | 1 | 1 | 8 | 4K+ | ❌ OOM（权重 ~60.4GB/卡） |
-| **2 节点 A2 (64G)** | **8** | **2** | 1 | 16 | 32K | ✅ **已验证 PASS（07-22，32K 最实用）** |
-| 2 节点 A2 (64G) 原生 DP | 8 | 1 | 2 | 16 | **≤20K** | ✅ 已验证 PASS（07-28）：EP=16 权重实测 ~33G/卡，**MTP 开不起来**（差 ~5G）、KV 池仅 ~2G；需 `FLASHCOMM1=1 + HCCL_BUFFSIZE=768 + batched 8192` |
-| 2 节点 A2 (64G) | 16 | 1 | 1 | 16 | 1M | ❌ 两轮实证：EP=16 权重+MTP 后无 KV（util 0.95 仍失败） |
-| 8 节点 A2 (64G) 共部署 1M | 8 | 1 | 8 | 64 | **1M** | ✅ **已验证 PASS（07-28，`vllm/dp1m/`）**：EP=64（4 专家/卡）+ DCP=8 + MTP |
-| 4 节点 A2 (64G) | 16 | 2 | 1 | 32 | 32K | ⏳ 同 TP=16（维度可行，待复测；PP>1 时 MTP 不可用） |
-| 16 节点 A2 (64G) 单实例 Ray | 32 | 4 | 1 | 128 | 32K~1M | ⏳ 未实测（机制同 PP=2：DP=1+Ray 跨节点放 worker）。维度可整除（64/32=2、indexer 32/32=1）；PP=4 每卡 ~20 层 ≈15G；TP 组跨 4 节点 + 3 个跨节点 PP 边界，通信开销大；需 `FLASHCOMM1=1 + FUSED_MC2=0 + ENABLE_MTP=0` |
+| 场景 | TP | PP | DP | EP | NPU | 上下文 | 状态 |
+|------|-----|-----|-----|-----|--------|------|------|
+| 单节点 A3 (64G×16) | 8 | 1 | 2 | 16 | 16 | 32K | 官方推荐配置（dp2tp8） |
+| 单节点 A3 (64G×16) 低延迟 | 16 | 1 | 1 | 1 | 16 | 32K | 官方建议 dp1tp16 关 EP（`ENABLE_EP=0`，单节点 `VLLM_ASCEND_ENABLE_FUSED_MC2=0`） |
+| 单节点 A2 (64G) | 8 | 1 | 1 | 8 | 8 | 4K+ | ❌ OOM（权重 ~60.4GB/卡） |
+| **2 节点 A2 (64G)** | **8** | **2** | 1 | 16 | 16 | 32K | ✅ **已验证 PASS** |
+| 2 节点 A2 (64G) | 8 | 1 | 2 | 16 | 16 | **≤20K** | ✅ 已验证 PASS  权重实测 ~33G/卡，**MTP 开不起来**（差 ~5G）、KV 池仅 ~2G；需 `FLASHCOMM1=1 + HCCL_BUFFSIZE=768 + batched 8192` |
+| 8 节点 A2 (64G) 共部署 1M | 8 | 1 | 8 | 64 | 64 | **1M** | ✅ **已验证 PASS（07-28，`vllm/dp1m/`）**：EP=64（4 专家/卡）+ DCP=8 + MTP |
 
-> **关键结论**：
-> - GLM-5.2 W8A8 在 64GB A2 NPU 上 TP=8 单节点 OOM（权重固定消耗 ~60.4GB/卡）
-> - **2 节点 A2 首选 TP=8 PP=2（32K 已验证）**；原生 DP=2 EP=16 也已验证但有硬约束：
->   权重实测 ~33G/卡（16 专家），**MTP 开不起来**（KV 差 ~5G），上下文 ≤ ~20K，KV 池仅 ~2G
-> - **1M on A2 只走多节点共部署 `vllm/dp1m/`（8 节点 DP=8 EP=64 DCP=8，已验证）**：
->   TP=16 共部署两轮实证内存不可行；PD 分离被两个上游 bug 阻断（见 `pd-separation/README.md` 已知问题）
-> - **PP=2 已在 v0.23.0 上验证可用**；**v0.23.0rc1 共部署 PP>1+MTP 未支持**
->   （修复 #11076 仅在 main，未进 release；PD 分离 P 节点自 v0.22.1rc1 起支持，#10199），
->   脚本 `ENABLE_MTP` 默认关并在 PP>1 时自动禁用
-> - TP=16 维度上可行：注意力头 64/16=4、indexer 头 32/16=2 均可整除，官方 1M 单节点配置即 TP=16。
->   早前"576 不可整除"的论断有误（576=kv_lora_rank 512+qk_rope 64，576/16=36）；
->   v0.22.1 的失败是分片长度计算 bug（length 704 vs 576，v0.23.0 已自动修正，启动日志可见）
->
 > **W8A8 on A2 避坑清单（07-28 十轮实测）**：
+>
 > - `HCCL_BUFFSIZE`：跨节点 MoE A2A 窗口必须 **768**（400 报 `Get WinSize failed` 561002）
 > - `FUSED_MC2`：W8A8 **跨节点 EP 必崩**（`aclnnDispatchFFNCombine`），默认 0；节点内 EP 可开
 > - `FLASHCOMM1`：DCP>1 强制 =1（`DSA CP requires SP`）；SP 关闭时 A2A 走 flashinfer_all2allv 后端也会失败
@@ -235,8 +168,6 @@ Agent 场景要点：
 | 方案 | 全局并行 | 状态 | 说明 |
 |------|----------|------|------|
 | **8 节点共部署（`vllm/dp1m/`）** | DP=8 TP=8 EP=64 PCP1 DCP=8, MTP 3 | ✅ **已验证 PASS** | 唯一已验证的 A2 1M 方案；EP=64 → 4 专家/卡，KV ~40G/卡，单 rank ~3 条全 1M 并发，原生 DP 逐节点启动 |
-| TP=16 共部署（2 节点） | TP=16 DP=1 DCP=16 | ❌ 两轮实证不可行 | EP=16 权重 ~33G/卡 + MTP，util 0.95 仍无 KV |
-| TP=16 DP=4（原"方案 C"） | TP=16 DP=4 DCP=16 | ❌ 机制不可行 | vLLM DP>1 要求 rank 的 TP×PP ≤ 单节点卡数（engine core 本机枚举设备） |
 | PD 分离（4P+4D，`pd-separation/`） | P/D 均 DP4 TP8 DCP8 | ⚠️ P 就绪 / D 被上游 bug 阻断 | MooncakeConnectorV1 DSA cache bug（#12863，不在 v0.23.0rc1）+ kv_consumer graph capture 量化 bug，详见 `pd-separation/README.md` |
 
 ```bash
@@ -251,11 +182,6 @@ bash examples/glm-5.2_w8a8/vllm/dp1m/remote_deploy.sh deploy
 - **16 节点 (128 卡) 扩展**：同构放到 DP=16 EP=128（每 rank 1 节点），或起 2 个 DP=8 实例 + 负载均衡。
 - EP all-to-all 横跨多节点，依赖 RoCE 与 `HCCL_BUFFSIZE=768`（A2A 窗口，见避坑清单）。
 
-## 环境变量
-
-> 完整环境变量说明见 [docs/prompts/vllm_env_vars.md](../../../docs/prompts/vllm_env_vars.md)。
-> 部署工作流见 [docs/prompts/vllm-prompt.md](../../../docs/prompts/vllm-prompt.md)。
-
 ## 功能验证清单
 
 ### 基础功能
@@ -267,7 +193,7 @@ bash examples/glm-5.2_w8a8/vllm/dp1m/remote_deploy.sh deploy
 | 原生多节点 DP（2 节点 TP=8 DP=2 EP=16, 20K） | ✅（2026-07-28 验证） | `run_vllm.sh` (DP_ADDRESS 模式) |
 | Tool Calling (glm47) | ✅ | `curl_test.sh` |
 | Anthropic Messages API | ✅ | `curl_test.sh` |
-| Claude Code / Agent 接入 | ⏳ 待实测（Anthropic API 已验证） | `agent_api.sh` |
+| Claude Code / Agent 接入 | ✅ Anthropic API 已验证 | `agent_api.sh` |
 | MTP 投机解码 | ✅（dp1m 内置 3 tokens） | `vllm/dp1m/conode.sh` |
 | 多节点 PP=2 | ✅（2026-07-22 验证） | `run_vllm.sh` (PP=2) |
 | PD 分离 1M | ⚠️ P 就绪 / D 被上游 bug 阻断（#12863） | `pd-separation/` |
@@ -366,8 +292,6 @@ A: **可以**。注意力头 64/16=4、indexer 头 32/16=2 均可整除，官方
 | 2026-07-22 | `vllm-ascend:v0.23.0rc1-a3` (CANN 8.5.1) | pair1: 196/197 | TP=8 PP=2, 32K | ✅ PASS | curl 全项通过 |
 | 2026-07-28 | 同上 | 194-201 (8节点) | **DP=8 TP=8 EP=64 DCP=8, MTP, 1M**（`vllm/dp1m/`） | ✅ **PASS** | `/v1/models` max_model_len=1024000；chat/工具调用/流式/Anthropic API 全项 PASS |
 | 2026-07-28 | 同上 | 131/132 | TP=8 DP=2 EP=16 原生 DP, MTP off, 20K | ✅ PASS（有约束） | 原生逐节点启动；BUFFSIZE=768/batched 8192/FLASHCOMM1=1 |
-| 2026-07-28 | 同上 | 131/132 | 同上单次启动 + Ray | ❌ | 实证：单次启动 DP>1 全部引擎落头节点（IndexError [8,16)），Ray 无法跨节点放 engine |
-| 2026-07-28 | 同上 | 194/195 | TP=16 DP=1 共部署 1M（两轮） | ❌ | EP=16 权重 ~33G/卡 + MTP，util 0.95 仍无 KV 空间 |
 | 2026-07-28 | 同上 | 202-205 (P) | PD 分离 P 侧 DP4 TP8 DCP8 | ✅ 就绪 | FUSED_MC2=0 + util 0.93 |
 | 2026-07-28 | 同上 | 206-209 (D) | PD 分离 D 侧 | ⚠️ 阻断 | MooncakeConnectorV1 DSA cache bug（上游 #12863，不在 v0.23.0rc1）；另 kv_consumer+FULL_DECODE capture 量化 bug（规避：enforce-eager） |
 
