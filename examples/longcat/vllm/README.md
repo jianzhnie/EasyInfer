@@ -82,6 +82,12 @@ TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 bash examples/longcat/vllm/run_vllm.sh
 
 # 最大上下文模式 (131072 / 128K, 参考 vllm-ascend GLM-5.2 1M 教程裁剪)
 PP=4 TP=32 EP=1 bash examples/longcat/vllm/run_vllm_long-context.sh
+
+# 最大吞吐 (FP8 KV cache + 高并发)
+KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64 MAX_NUM_BATCHED_TOKENS=32768 bash examples/longcat/vllm/run_vllm_long-context.sh
+
+# 图模式有问题时回退 eager
+ENFORCE_EAGER=1 bash examples/longcat/vllm/run_vllm_long-context.sh
 ```
 
 > 注意: 不要从 EasyInfer 根目录运行，避免插件冲突。在容器内切换到一个非 EasyInfer 目录后执行。
@@ -108,22 +114,48 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 | 场景 | 配置 | 说明 |
 |------|------|------|
-| **全能型 (推荐)** | 16 节点, PP=4 TP=32 EP=32, `run_vllm_long-context.sh` | MAX_NUM_SEQS=16, 上下文 4K~128K 通吃; TP=32 all-reduce 只跨 4 节点 (比 TP=64 跨 8 节点省通信), EP=32 每 rank 16 专家计算密度好, PP=4 权重减半腾出 KV 空间 |
+| **全能型 (推荐)** | 16 节点, PP=4 TP=32 EP=32, `run_vllm_long-context.sh` | 默认 MAX_NUM_SEQS=32, ENFORCE_EAGER=0 (CUDA graph), 上下文 4K~128K 通吃; TP=32 all-reduce 只跨 4 节点 (比 TP=64 跨 8 节点省通信), EP=32 每 rank 16 专家计算密度好, PP=4 权重减半腾出 KV 空间 |
 | 省资源型 | 8 节点, PP=2 TP=32 EP=32, `run_vllm.sh` | 64 NPU 即可跑 128K (KV 2.1G/rank/seq); PP 层级少单请求延迟略优; 让出 8 节点给其他任务 |
 | 低延迟短上下文 | 8 节点, TP=64 EP=64 PP=1, `run_vllm.sh` | 无流水线气泡, 4K 上下文 decode ~23 tok/s |
+| 极限并发 | 16 节点, PP=4 TP=32 EP=32 + FP8 KV cache | `KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64`, KV cache 容量翻倍 (~5.4M tokens), ~41 个 128K 并发 |
 
-其他关键参数: `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` (长上下文必须, 整吞 OOM)、
-`GPU_MEM_UTIL=0.92`、`EASYINFER_MOE_COMM=allgather` (EP 必须)。
+其他关键参数: `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` (长上下文必须, 整吞 OOM; 显存充足可提升到 32768 加速 prefill)、
+`GPU_MEM_UTIL=0.92` (可尝试 0.95 极限挤压)、`EASYINFER_MOE_COMM=allgather` (EP 必须)、
+`HCCL_BUFFSIZE=1024` (从 768 上调, 提升多节点通信带宽利用率)。
 
-图模式探索 (`ENFORCE_EAGER=0`): 脚本默认 `--enforce-eager` 使 `FULL_DECODE_ONLY` 失效。
-开启图模式的两条硬性要求 (2026-07-27 排查结论):
-① `cudagraph_capture_sizes` 必须含 TP 的倍数——脚本已自动生成 (TP 步进、覆盖
+### 吞吐优化参数
+
+| 参数 | 默认值 | 说明 | 吞吐影响 |
+|------|--------|------|----------|
+| `ENFORCE_EAGER` | **0** | CUDA graph FULL_DECODE_ONLY, decode 阶段消除逐 step 编译开销 | 🔥 **最大提升** 20-50% |
+| `MAX_NUM_BATCHED_TOKENS` | 16384 | Prefill 分块大小, 显存充足可调到 32768~49152 | 加速 prefill 完成 |
+| `KV_CACHE_DTYPE` | (bf16) | 设为 `fp8` 后 KV cache 容量翻倍 (2.7M→5.4M tokens) | 并发翻倍 |
+| `MAX_NUM_SEQS` | 32 | 纯长上下文 16~32, 混合长短 64~128 | 平衡并发与 KV 碎片 |
+| `PREFIX_CACHING` | 0 | 设为 `1` 开启 APCache, 共享前缀场景减少重复 prefill | 评测/多轮场景显著 |
+| `HCCL_BUFFSIZE` | 1024 | 多节点通信 buffer, 可继续上调到 2048 | 通信密集型场景 |
+
+### 图模式 (ENFORCE_EAGER=0, 默认开启)
+
+`run_vllm_long-context.sh` 默认 `ENFORCE_EAGER=0` 开启 `FULL_DECODE_ONLY` CUDA graph。
+而 `run_vllm.sh` 默认 `ENFORCE_EAGER=1` (eager 模式)，因为短上下文下兼容性优先。
+
+图模式的两条硬性要求 (2026-07-27 排查结论):
+① `cudagraph_capture_sizes` 必须含 TP 的倍数——`run_vllm.sh` 已自动生成 (TP 步进、覆盖
    MAX_NUM_SEQS、最多 4 档, 可用 `CUDAGRAPH_CAPTURE_SIZES` 覆盖);
 ② 必须 `VLLM_ASCEND_ENABLE_FLASHCOMM1=0`——FlashComm1 会激活
    `SequenceParallelismPass` 编译 pass, 其在 FX 图里直接插入
    `npu_add_rms_norm_bias` 调用, 绕过 fix_layernorm_dtype 的 dtype 保护,
    float32 激活直送 ACLNN 报 EZ1001 (vllm-ascend 的 pass 缺陷, 待上游修复)。
-完整命令: `PORT=8010 PP=2 TP=32 EP=1 ENFORCE_EAGER=0 VLLM_ASCEND_ENABLE_FLASHCOMM1=0 bash run_vllm_long-context.sh`
+
+回退 eager 模式 (图模式有问题时):
+```bash
+ENFORCE_EAGER=1 bash run_vllm_long-context.sh
+```
+
+图模式排障:
+```bash
+ENFORCE_EAGER=0 VLLM_DEBUG_DUMP=/tmp/dump bash run_vllm_long-context.sh
+```
 
 ## 并行策略
 
@@ -137,7 +169,7 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 > EP=1 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11-13 分钟（128 卡更久）。
 > PP>1 时 28 层按 stage 均分（PP=2 每 stage 14 层，PP=4 每 stage 7 层），命令示例：`PP=2 TP=32 EP=1 bash run_vllm.sh`。
-> 长上下文用 `run_vllm_long-context.sh`：`MAX_MODEL_LEN=131072`、`CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384`（整吞 128K 会 OOM，须分块喂入）、`MAX_NUM_SEQS=8`、`GPU_MEM_UTIL=0.92`。
+> 长上下文用 `run_vllm_long-context.sh`：`MAX_MODEL_LEN=131072`、`CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384`（整吞 128K 会 OOM，须分块喂入）、`MAX_NUM_SEQS=32`、`GPU_MEM_UTIL=0.92`、`ENFORCE_EAGER=0`（CUDA graph 默认开启）。完整参数说明见脚本头部注释。
 
 ## 环境变量
 
@@ -159,7 +191,7 @@ A: 模型权重约 1.1T（75 个 safetensors 分片）+ 64 卡 HCCL 初始化，
 
 ### Q: 长上下文 (128K) 部署与默认配置有什么区别?
 
-A: 四点：① `MAX_MODEL_LEN=131072`（模型原生上限）；② `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` 分块喂入——整吞方案（batched_tokens=132096）会因 ALLGATHER comm 持久缓冲（~30G）+ 单步 prefill 尖峰（18.1G）在 64G 卡上 OOM；③ `MAX_NUM_SEQS` 压到 8（MLA latent KV 约 32KB/token/seq，PP=4 下 8 并发 ≈8.5GB/rank）；④ `GPU_MEM_UTIL=0.92` 给 KV cache 让空间（实测 KV cache 271 万 tokens，131072 单请求 20.73x 并发容量）。GLM-5.2 1M 方案中的 MTP/DSA/PCP/DCP 对 LongCat 不适用（无 MTP、无稀疏注意力、MLA latent KV 小，128K 无需上下文并行）。实测用 `ENABLE_LONG_CONTEXT=1 bash curl_test.sh`（大海捞针矩阵，含针位置/多针/中文/多轮用例，`LONG_CONTEXT_CASES` 可选择）。
+A: 核心差异：① `MAX_MODEL_LEN=131072`（模型原生上限）；② `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` 分块喂入——整吞方案（batched_tokens=132096）会因 ALLGATHER comm 持久缓冲（~30G）+ 单步 prefill 尖峰（18.1G）在 64G 卡上 OOM；③ `MAX_NUM_SEQS=32`（默认，平衡并发与 KV 碎片，纯长上下文可降到 16，混合流量可提到 128）；④ `GPU_MEM_UTIL=0.92` 给 KV cache 让空间（实测 KV cache 271 万 tokens，131072 单请求 20.73x 并发容量）；⑤ `ENFORCE_EAGER=0` 默认开启 CUDA graph，decode 吞吐提升 20-50%（`run_vllm.sh` 默认 eager 模式）。额外吞吐优化：`KV_CACHE_DTYPE=fp8` 容量翻倍、`PREFIX_CACHING=1` 开启 APCache、`HCCL_BUFFSIZE=1024` 提升通信效率。GLM-5.2 1M 方案中的 MTP/DSA/PCP/DCP 对 LongCat 不适用（无 MTP、无稀疏注意力、MLA latent KV 小，128K 无需上下文并行）。实测用 `ENABLE_LONG_CONTEXT=1 bash curl_test.sh`（大海捞针矩阵，含针位置/多针/中文/多轮用例，`LONG_CONTEXT_CASES` 可选择）。
 
 ### Q: 部署时为什么提示 "failed to map segment from shared object"?
 

@@ -60,6 +60,8 @@ readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
 # enforce-eager 会禁用 cudagraph (FULL_DECODE_ONLY 随之失效)。默认开启
 # (历史稳定路径); 设 ENFORCE_EAGER=0 启用 decode graph 以提升吞吐, 待验证。
 readonly ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
+# APCache: 默认关闭。多轮对话 / 共享 system prompt 场景设 PREFIX_CACHING=1 开启。
+readonly PREFIX_CACHING="${PREFIX_CACHING:-0}"
 
 # ------------------------------------------------------------------------------
 # Ensure EasyInfer plugins are registered (required for the EP fixes)
@@ -186,6 +188,11 @@ if [[ "$CHUNKED_PREFILL" == "0" ]]; then
     PREFILL_FLAGS=(--no-enable-chunked-prefill)
 fi
 
+PREFIX_FLAGS=(--no-enable-prefix-caching)
+if [[ "$PREFIX_CACHING" == "1" ]]; then
+    PREFIX_FLAGS=(--enable-prefix-caching)
+fi
+
 EAGER_FLAGS=(--enforce-eager)
 if [[ "$ENFORCE_EAGER" == "0" ]]; then
     EAGER_FLAGS=()
@@ -248,7 +255,7 @@ vllm serve "$MODEL_PATH" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-    --no-enable-prefix-caching \
+    "${PREFIX_FLAGS[@]}" \
     --compilation-config "$COMPILATION_CONFIG" \
     "${ADDITIONAL_CONFIG_FLAGS[@]}" \
     "${EAGER_FLAGS[@]}" \
