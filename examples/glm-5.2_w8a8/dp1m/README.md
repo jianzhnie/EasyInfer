@@ -2,6 +2,9 @@
 
 > ✅ **2026-07-28 已验证 PASS** | 8×A2 (64G×8) | DP=8 TP=8 PCP1 DCP=8 EP=64 | MTP 3 tokens
 > 入口: `http://10.42.11.194:8007` | 节点: `nodes/node_list3.txt`
+>
+> ⏸️ **当前状态（2026-07-29）**：未在运行。07-29 11:58 为正常停止（日志为干净 shutdown，
+> 非崩溃），尚未重新拉起；恢复服务执行 `bash remote_deploy.sh deploy`（~22 分钟）。
 
 ## 拓扑
 

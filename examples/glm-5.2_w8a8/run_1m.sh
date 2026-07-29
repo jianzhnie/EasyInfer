@@ -24,7 +24,7 @@ set -euo pipefail
 
 REPO=/home/jianzhnie/llmtuner/llm/EasyInfer
 CONTAINER=vllm-ascend-env
-NODES_FILE="${NODES_FILE:-$REPO/nodes/node_list3.txt}"
+NODES_FILE="${NODES_FILE:-$REPO/nodes/node_list2.txt}"
 NIC_NAME="${NIC_NAME:-enp66s0f0}"
 RAY_PORT=6379
 

@@ -77,7 +77,7 @@ nohup vllm serve "$model_path" \
     --seed 1024 \
     --served-model-name glm-52 \
     --max-model-len 135168 \
-    --speculative-config '{"num_speculative_tokens": 3, "method":"deepseek_mtp"}' \
+    --speculative-config '{"num_speculative_tokens": 1, "method":"deepseek_mtp", "enforce_eager":true}' \
     --additional-config '{"enable_sparse_c8":false,"fuse_muls_add": true, "multistream_overlap_shared_expert": true, "recompute_scheduler_enable": true, "ascend_compilation_config": {"enable_npugraph_ex": true},"enable_dsa_cp": true}' \
     --max-num-batched-tokens 4096 \
     --trust-remote-code \

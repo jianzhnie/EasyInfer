@@ -49,7 +49,7 @@ gpu-mem-util 0.85                        gpu-mem-util 0.92
 | recompute_scheduler | P: true / D: true | P/D 均 **false** | P 节点仅告警忽略；D 侧排查期间关闭（非根因，未恢复） |
 | D 图模式 | FULL_DECODE_ONLY | **enforce-eager** | kv_consumer + FULL_DECODE capture 触发量化 op bug（见「已知问题」） |
 | D batched tokens | 128 | 2048 | 官方值偏小；非根因，未回改 |
-| sparse c8 | sfa/li: true | 均 **false** | W4A8C8 的 KV C8 量化，W8A8 无对应 scale（非根因，保守关闭） |
+| sparse c8 | sfa/li: true | P: **true** / D: false | W4A8C8 的 KV C8 量化；P 侧开启已验证可运行，D 侧保守关闭 |
 | max-num-seqs | P: 8 / D: 32 | P: 8 / D: **16** | W8A8 KV 池更小，保守起步 |
 | gpu-mem-util | P: 0.75 / D: 0.93 | P: 0.93 / D: 0.93 | W8A8 权重大；P 实测 util 0.85 时 KV 不足 1M（需 ≥8.91 GiB/卡） |
 | enable_balance_scheduling | — | ❌ 不用 | 仅 kv_both 模式可用（PD 分离下报错） |
@@ -111,12 +111,16 @@ bash remote_deploy.sh proxy
 bash remote_deploy.sh proxy-stop
 ```
 
-## 当前运行状态（2026-07-28）
+## 运行状态
 
-- **P 侧 4/4 就绪**（9081），**D 侧 4/4 存活**（9900，enforce-eager 形态）
-- 代理已部署于 `10.42.11.202:8123`（`/v1/models` 正常，`max_model_len=1024000`）
-- **端到端请求仍被 Mooncake bug 阻断**（见「已知问题」#1）：代理链路 P→D 转发正常，
-  D 接收 KV 时 IndexError → 500。1M 生产流量请走共部署 `../dp1m/`（194:8007）
+- **2026-07-29 更新**：本方案（1M PD 分离）当前**未在运行**。节点 202-209 已改跑
+  135K PD 分离（`../pd-separation-135k/`，端到端已验证 PASS）；如需 1M 上下文请走
+  共部署 `../dp1m/`（194:8007）
+- 2026-07-28 时状态：P 侧 4/4 就绪（9081），D 侧 4/4 存活（9900，enforce-eager 形态），
+  代理 `10.42.11.202:8123` 正常，但**端到端请求仍被 Mooncake bug 阻断**（见「已知问题」#1）：
+  代理链路 P→D 转发正常，D 接收 KV 时 IndexError → 500
+- 2026-07-29 顺手修复了 `remote_deploy.sh` 的 `_health_check`/`ssh_cmd` 函数名错误与
+  proxy pgrep/pkill 自匹配问题，本方案脚本现在可直接使用（待上游 #12863 修复后启用）
 
 ## 验证
 

@@ -15,7 +15,7 @@
 #   bash remote_deploy.sh stop         停止所有节点 vLLM 进程
 #   bash remote_deploy.sh restart      stop + deploy
 #   bash remote_deploy.sh clean        彻底清理（重启容器，清除僵尸进程）
-#   bash remote_deploy.sh proxy        本机后台启动请求转发代理 (:8000)
+#   bash remote_deploy.sh proxy        在 P0 容器内启动请求转发代理 (:8123)
 #   bash remote_deploy.sh proxy-stop   停止代理
 # ==============================================================================
 set -euo pipefail
@@ -176,9 +176,9 @@ cmd_deploy() {
 
     local rc=0
     echo "[3/4] PNode 健康检查..."
-    _health_check "p" || rc=1
+    health_check "p" || rc=1
     echo "[4/4] DNode 健康检查..."
-    _health_check "d" || rc=1
+    health_check "d" || rc=1
 
     echo ""
     if [[ $rc -ne 0 ]]; then
@@ -195,7 +195,7 @@ cmd_stop() {
     local ip
     for ip in "${P_IPS[@]}" "${D_IPS[@]}"; do
         echo -n "  $ip ... "
-        ssh_cmd "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"vllm serve\" || true'" 2>/dev/null \
+        ssh_run "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"vllm serve\" || true'" 2>/dev/null \
             && echo -e "${GREEN}stopped${NC}" \
             || echo -e "${YELLOW}not running${NC}"
     done
@@ -257,7 +257,7 @@ cmd_restart() {
 # 在 P_IPS[0] 容器内启动请求转发代理（注册全部 P/D 端点，代理层负载均衡）。
 # 注：不跑在本机——本机 python 缺 fastapi，且容器内可直接访问 P/D 节点。
 cmd_proxy() {
-    if ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pgrep -f load_balance_proxy_server_example >/dev/null'" 2>/dev/null; then
+    if ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pgrep -f load_balance_[p]roxy_server_example >/dev/null'" 2>/dev/null; then
         echo -e "${YELLOW}代理已在运行 (${P_IPS[0]}:${PROXY_PORT})${NC}"
         return 0
     fi
@@ -286,7 +286,7 @@ REMOTE_SCRIPT
 }
 
 cmd_proxy-stop() {
-    ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f load_balance_proxy_server_example'" \
+    ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f load_balance_[p]roxy_server_example'" \
         && echo -e "${GREEN}代理已停止${NC}" \
         || echo -e "${YELLOW}代理未运行${NC}"
 }

@@ -51,7 +51,12 @@ export ASCEND_A3_ENABLE=1
 # patch（patch_dp_device_ids），在 vllm 0.23.0rc1 上 AttributeError 崩溃
 export TASK_QUEUE_ENABLE=1
 export ASCEND_RT_VISIBLE_DEVICES=$visible_devices
-export DYNAMIC_EPLB=1
+# DYNAMIC_EPLB: v0.23.0rc1 下导致 aclnnMoeDistributeDispatchV4 报错 561000（2026-07-29 实测
+# 8/8 D rank 在 graph capture 阶段全部崩溃），必须关闭
+export DYNAMIC_EPLB=0
+# 561000 transport init timeout 对策：放宽 HCCL 建连/执行超时
+export HCCL_CONNECT_TIMEOUT=600
+export HCCL_EXEC_TIMEOUT=600
 # A2 + W8A8 跨节点 EP 实测: FUSED_MC2=1 触发 aclnnDispatchFFNCombine 崩溃，必须关
 export VLLM_ASCEND_ENABLE_FUSED_MC2=0
 export VLLM_ASCEND_ENABLE_MLAPO=1
@@ -65,6 +70,8 @@ mkdir -p "$log_dir"
 LOG_FILE="glm5_dnode_$(date +%Y%m%d_%H%M%S)_rank${dp_rank}.log"
 
 # ---- 启动 vLLM serve（Decode / KV Consumer） --------------------------------
+# 不用 FULL_DECODE_ONLY：本镜像 kv_consumer + graph capture 触发量化 op 形状错误
+# (aclnnAscendQuantV3 161002)，与 1M 方案一致退到 enforce-eager（牺牲 decode 吞吐）
 nohup vllm serve "$model_path" \
     --host 0.0.0.0 \
     --port "$port" \
@@ -78,7 +85,7 @@ nohup vllm serve "$model_path" \
     --served-model-name glm-52 \
     --max-model-len 135168 \
     --max-num-batched-tokens 164 \
-    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+    --enforce-eager \
     --speculative-config '{"num_speculative_tokens": 3, "method":"deepseek_mtp"}' \
     --additional-config '{"enable_sparse_c8":false,"fuse_muls_add": true, "multistream_overlap_shared_expert": true, "recompute_scheduler_enable": true, "ascend_compilation_config": {"enable_npugraph_ex": true}}' \
     --trust-remote-code \
