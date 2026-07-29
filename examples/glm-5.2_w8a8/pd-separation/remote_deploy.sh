@@ -238,11 +238,11 @@ cmd_status() {
     status_role "p" "PNode (Prefill / kv_producer)"
     status_role "d" "DNode (Decode / kv_consumer)"
 
-    echo "=== Proxy (本机:${PROXY_PORT}) ==="
-    if pgrep -f load_balance_proxy_server_example >/dev/null; then
-        local code
-        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:${PROXY_PORT}/v1/models" 2>/dev/null || echo "000")
-        echo -e "  ${GREEN}running${NC} (http=$code, 日志: $PROXY_LOG)"
+    echo "=== Proxy (${P_IPS[0]}:${PROXY_PORT}) ==="
+    local code
+    code=$(http_get "${P_IPS[0]}" "$PROXY_PORT")
+    if [[ "$code" == "200" ]]; then
+        echo -e "  ${GREEN}running${NC} (http=$code)"
     else
         echo -e "  ${YELLOW}not running${NC} (bash remote_deploy.sh proxy 启动)"
     fi
@@ -254,31 +254,40 @@ cmd_restart() {
     cmd_deploy
 }
 
-# 本机后台启动请求转发代理: 注册全部 P/D 端点, 代理层做负载均衡
+# 在 P_IPS[0] 容器内启动请求转发代理（注册全部 P/D 端点，代理层负载均衡）。
+# 注：不跑在本机——本机 python 缺 fastapi，且容器内可直接访问 P/D 节点。
 cmd_proxy() {
-    if pgrep -f load_balance_proxy_server_example >/dev/null; then
-        echo -e "${YELLOW}代理已在运行 (localhost:${PROXY_PORT})${NC}"
+    if ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pgrep -f load_balance_proxy_server_example >/dev/null'" 2>/dev/null; then
+        echo -e "${YELLOW}代理已在运行 (${P_IPS[0]}:${PROXY_PORT})${NC}"
         return 0
     fi
-    [[ -f "$PROXY_SCRIPT" ]] || { echo -e "${RED}代理脚本不存在: $PROXY_SCRIPT${NC}"; return 1; }
 
     local p_ports=() d_ports=() _
     for _ in "${P_IPS[@]}"; do p_ports+=("$P_VLLM_START_PORT"); done
     for _ in "${D_IPS[@]}"; do d_ports+=("$D_VLLM_START_PORT"); done
 
-    unset http_proxy https_proxy || true
-    nohup python3 "$PROXY_SCRIPT" \
-        --host 0.0.0.0 --port "$PROXY_PORT" \
-        --prefiller-hosts "${P_IPS[@]}" --prefiller-ports "${p_ports[@]}" \
-        --decoder-hosts "${D_IPS[@]}" --decoder-ports "${d_ports[@]}" \
-        > "$PROXY_LOG" 2>&1 &
-    disown
-    echo -e "${GREEN}代理已启动: localhost:${PROXY_PORT}${NC} (P×${#P_IPS[@]} :$P_VLLM_START_PORT, D×${#D_IPS[@]} :$D_VLLM_START_PORT)"
-    echo "  日志: $PROXY_LOG"
+    ssh_run "${P_IPS[0]}" bash -s -- \
+        "$PROXY_PORT" "${P_VLLM_START_PORT}" "$D_VLLM_START_PORT" \
+        "${P_IPS[*]}" "${D_IPS[*]}" "${p_ports[*]}" "${d_ports[*]}" "$LOG_DIR" << 'REMOTE_SCRIPT'
+        port="$1"; pport="$2"; dport="$3"
+        read -ra p_ips <<< "$4"; read -ra d_ips <<< "$5"
+        read -ra p_ports <<< "$6"; read -ra d_ports <<< "$7"; logdir="$8"
+        docker exec -d vllm-ascend-env bash -c "
+unset http_proxy https_proxy
+nohup python3 /home/jianzhnie/llmtuner/llm/EasyInfer/examples/prefill_decode_separation_deploy/load_balance_proxy_server_example.py \
+    --host 0.0.0.0 --port $port \
+    --prefiller-hosts ${p_ips[*]} --prefiller-ports ${p_ports[*]} \
+    --decoder-hosts ${d_ips[*]} --decoder-ports ${d_ports[*]} \
+    > '$logdir/pd_proxy.log' 2>&1 &
+"
+REMOTE_SCRIPT
+    echo -e "${GREEN}代理已启动: ${P_IPS[0]}:${PROXY_PORT}${NC} (P×${#P_IPS[@]} :$P_VLLM_START_PORT, D×${#D_IPS[@]} :$D_VLLM_START_PORT)"
+    echo "  日志: $LOG_DIR/pd_proxy.log"
 }
 
 cmd_proxy-stop() {
-    pkill -f load_balance_proxy_server_example && echo -e "${GREEN}代理已停止${NC}" \
+    ssh_run "${P_IPS[0]}" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f load_balance_proxy_server_example'" \
+        && echo -e "${GREEN}代理已停止${NC}" \
         || echo -e "${YELLOW}代理未运行${NC}"
 }
 

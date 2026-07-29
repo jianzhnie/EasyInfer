@@ -105,7 +105,18 @@ bash remote_deploy.sh deploy
 bash remote_deploy.sh status
 bash remote_deploy.sh stop
 bash remote_deploy.sh clean
+
+# 请求转发代理（运行于 P0 容器内 :8123，注册全部 4P+4D 端点）
+bash remote_deploy.sh proxy
+bash remote_deploy.sh proxy-stop
 ```
+
+## 当前运行状态（2026-07-28）
+
+- **P 侧 4/4 就绪**（9081），**D 侧 4/4 存活**（9900，enforce-eager 形态）
+- 代理已部署于 `10.42.11.202:8123`（`/v1/models` 正常，`max_model_len=1024000`）
+- **端到端请求仍被 Mooncake bug 阻断**（见「已知问题」#1）：代理链路 P→D 转发正常，
+  D 接收 KV 时 IndexError → 500。1M 生产流量请走共部署 `../dp1m/`（194:8007）
 
 ## 验证
 
@@ -113,14 +124,8 @@ bash remote_deploy.sh clean
 # 各节点 /v1/models
 bash remote_deploy.sh status
 
-# 请求转发代理（仓库示例）
-python3 examples/prefill_decode_separation_deploy/load_balance_proxy_server_example.py \
-  --host 0.0.0.0 --port 8000 \
-  --prefiller-hosts 10.42.11.202 --prefiller-ports 9081 \
-  --decoder-hosts 10.42.11.206 --decoder-ports 9900
-
-# 功能测试
-curl http://localhost:8000/v1/chat/completions \
+# 代理出口（P0 容器内执行，或任何可达 202 的机器）
+curl http://10.42.11.202:8123/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"glm-52","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
