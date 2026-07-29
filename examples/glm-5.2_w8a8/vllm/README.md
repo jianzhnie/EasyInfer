@@ -102,7 +102,13 @@ ENABLE_MTP=1 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
 - **跨节点 DP 必须原生逐节点启动**：每节点一个 `vllm serve`，rank0 带 API、其余 `--headless`
   （脚本旋钮：`DP_ADDRESS` / `DP_START_RANK` / `HEADLESS` / `DP_SIZE_LOCAL` / `DP_RPC_PORT`）
 - **`--data-parallel-size-local` 必须显式给**：缺省时 headless 节点按全局 rank 切设备（IndexError）
-- Ray 仅用于 **DP=1 且 TP/PP 跨节点** 的场景（如 PP=2 两节点、TP=16 单实例）：
+- Ray 仅用于 **DP=1 且 TP/PP 跨节点** 的场景（如 PP=2 两节点、TP=16 单实例、TP=32 PP=4 单实例 16 节点）：
+
+```bash
+# TP=32 PP=4 DP=1 单实例（16 节点 128 卡，MTP 关；未实测，先小规模 TP=16 PP=2 起步验证）
+RAY_ADDRESS=<head>:6379 NIC_NAME=<nic> HCCL_IF_IP=<head_ip> \
+  TP=32 PP=4 bash examples/glm-5.2_w8a8/vllm/run_vllm.sh
+```
 
 ```bash
 # 获取 Ray 集群地址
@@ -189,6 +195,7 @@ Agent 场景要点：
 | 2 节点 A2 (64G) | 16 | 1 | 1 | 16 | 1M | ❌ 两轮实证：EP=16 权重+MTP 后无 KV（util 0.95 仍失败） |
 | 8 节点 A2 (64G) 共部署 1M | 8 | 1 | 8 | 64 | **1M** | ✅ **已验证 PASS（07-28，`vllm/dp1m/`）**：EP=64（4 专家/卡）+ DCP=8 + MTP |
 | 4 节点 A2 (64G) | 16 | 2 | 1 | 32 | 32K | ⏳ 同 TP=16（维度可行，待复测；PP>1 时 MTP 不可用） |
+| 16 节点 A2 (64G) 单实例 Ray | 32 | 4 | 1 | 128 | 32K~1M | ⏳ 未实测（机制同 PP=2：DP=1+Ray 跨节点放 worker）。维度可整除（64/32=2、indexer 32/32=1）；PP=4 每卡 ~20 层 ≈15G；TP 组跨 4 节点 + 3 个跨节点 PP 边界，通信开销大；需 `FLASHCOMM1=1 + FUSED_MC2=0 + ENABLE_MTP=0` |
 
 > **关键结论**：
 > - GLM-5.2 W8A8 在 64GB A2 NPU 上 TP=8 单节点 OOM（权重固定消耗 ~60.4GB/卡）
