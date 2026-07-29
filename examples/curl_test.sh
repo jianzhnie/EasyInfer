@@ -76,10 +76,12 @@ log_sec()  { echo ""; log_info "--- $1 ---"; }
 skip_if() { [[ "${!1:-0}" == "1" ]]; }
 
 # ---- curl wrappers -----------------------------------------------------------
-ct_curl()      { curl -sf --max-time "${CURL_TIMEOUT:-120}" "$@"; }
+# --noproxy "${HOST}": 本机常配 http_proxy, 而 no_proxy 里的 "10." 后缀/CIDR
+# 写法 curl 不识别, 内网直连目标必须显式绕过代理
+ct_curl()      { curl -sf --noproxy "${HOST:-*}" --max-time "${CURL_TIMEOUT:-120}" "$@"; }
 ct_curl_post() { ct_curl -H "Content-Type: application/json" -d "$1" "$2"; }
 ct_curl_raw() {
-    curl -s -w '\n%{http_code}' --max-time "${CURL_TIMEOUT:-120}" \
+    curl -s --noproxy "${HOST:-*}" -w '\n%{http_code}' --max-time "${CURL_TIMEOUT:-120}" \
         -H "Content-Type: application/json" -d "$1" "$2" 2>/dev/null
 }
 
@@ -138,7 +140,7 @@ curl_test::health() {
     log_sec "健康检查"
     local code ep
     for ep in "/health" "/v1/models"; do
-        code=$(curl -sf --max-time 5 -o /dev/null -w '%{http_code}' "${BASE_URL}${ep}" 2>/dev/null || echo "000")
+        code=$(curl -sf --noproxy "${HOST:-*}" --max-time 5 -o /dev/null -w '%{http_code}' "${BASE_URL}${ep}" 2>/dev/null || echo "000")
         [[ "$code" == "200" ]] && { log_ok "${ep} → 200"; return 0; }
     done
     log_err "服务不可达"; return 1
@@ -267,7 +269,7 @@ curl_test::anthropic() {
     local resp content body
     body='{"model":"'"${MODEL_NAME}"'","max_tokens":100,'
     body+='"messages":[{"role":"user","content":"'"${PROMPTS[4]}"'"}]}'
-    resp=$(curl -sf --max-time "$CURL_TIMEOUT" "${BASE_URL}/v1/messages" \
+    resp=$(curl -sf --noproxy "${HOST:-*}" --max-time "$CURL_TIMEOUT" "${BASE_URL}/v1/messages" \
         -H "Content-Type: application/json" -H "x-api-key: dummy" \
         -d "$body" 2>/dev/null) || { log_warn "不可用（部分服务不支持）"; CT_RESULT="WARN"; return 0; }
     content=$(ct_json anthropic "$resp")
@@ -291,7 +293,7 @@ CT_LC_M1=7391842 CT_LC_M2=5820371 CT_LC_M3=2468109
 ct_lc_tokenize() {  # $1=prompt file -> stdout: token count (失败输出空)
     python3 "${CT_DIR}/curl_helper.py" build tokenize "${MODEL_NAME}" - 0 \
         < "$1" > "${CT_LC_DIR}/tok_req.json"
-    curl -s -m 120 "${BASE_URL}/tokenize" -H "Content-Type: application/json" \
+    curl -s --noproxy "${HOST:-*}" -m 120 "${BASE_URL}/tokenize" -H "Content-Type: application/json" \
         -d @"${CT_LC_DIR}/tok_req.json" \
         | python3 "${CT_DIR}/curl_helper.py" count 2>/dev/null
 }
@@ -341,7 +343,7 @@ ct_lc_ask() {  # $1=question $2=magics_csv $3=min_tokens $4=kind(chat|multiturn)
     fi
     python3 "${CT_DIR}/curl_helper.py" build "$4" "${MODEL_NAME}" - "$max_out" \
         < "${CT_LC_DIR}/prompt.txt" > "${CT_LC_DIR}/chat_req.json"
-    curl -s -m "${LONG_CONTEXT_TIMEOUT:-1800}" "${BASE_URL}/v1/chat/completions" \
+    curl -s --noproxy "${HOST:-*}" -m "${LONG_CONTEXT_TIMEOUT:-1800}" "${BASE_URL}/v1/chat/completions" \
         -H "Content-Type: application/json" -d @"${CT_LC_DIR}/chat_req.json" \
         > "${CT_LC_DIR}/resp.json"
     python3 "${CT_DIR}/curl_helper.py" needle "$2" "$3" \

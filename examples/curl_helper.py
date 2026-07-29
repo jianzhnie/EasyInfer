@@ -105,6 +105,11 @@ def cmd_stream():
 def cmd_anthropic():
     d = load_content()
     if isinstance(d.get("content"), list) and d["content"]:
+        # reasoning 模型 content 里 thinking 块在前, 取第一个 text 块
+        for block in d["content"]:
+            if block.get("type") == "text" and block.get("text"):
+                print(block["text"][:100])
+                return
         print(d["content"][0].get("text", "")[:100])
     elif d.get("choices"):
         print(d["choices"][0]["message"]["content"][:100])
@@ -118,9 +123,7 @@ def cmd_build():
     """
     kind, model, prompt = sys.argv[2], sys.argv[3], sys.argv[4]
     max_tokens = int(sys.argv[5])
-    vision_url = (
-        sys.argv[6] if len(sys.argv) > 6 else "https://example.com/test.png"
-    )
+    vision_url = sys.argv[6] if len(sys.argv) > 6 else "https://example.com/test.png"
     if prompt == "-":
         # 大 prompt (如长上下文测试的 ~700KB 文本) 从 stdin 读, 避免 argv 过长
         prompt = sys.stdin.read()
@@ -139,39 +142,47 @@ def cmd_build():
     if kind == "stream":
         req["stream"] = True
     elif kind == "tools":
-        req["tools"] = [{
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get current weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "city": {"type": "string", "description": "City name"}
+        req["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"}
+                        },
+                        "required": ["city"],
                     },
-                    "required": ["city"],
                 },
-            },
-        }]
+            }
+        ]
         req["tool_choice"] = "auto"
     elif kind == "vision":
-        req["messages"] = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Describe this image briefly."},
-                {"type": "image_url", "image_url": {"url": vision_url}},
-            ],
-        }]
+        req["messages"] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image briefly."},
+                    {"type": "image_url", "image_url": {"url": vision_url}},
+                ],
+            }
+        ]
     elif kind == "multiturn":
         # 多轮一致性: 长文档 + 确认 -> 追问, 验证 KV 复用
         req["messages"] = [
-            {"role": "user", "content": prompt +
-                "\nPlease acknowledge you have read this document. "
-                "Reply with just: OK"},
+            {
+                "role": "user",
+                "content": prompt + "\nPlease acknowledge you have read this document. "
+                "Reply with just: OK",
+            },
             {"role": "assistant", "content": "OK"},
-            {"role": "user", "content":
-                "According to the document above, what is the first magic "
-                "number? Number only."},
+            {
+                "role": "user",
+                "content": "According to the document above, what is the first magic "
+                "number? Number only.",
+            },
         ]
     elif kind != "chat":
         sys.stderr.write(f"unknown build kind: {kind}\n")
@@ -210,7 +221,11 @@ def cmd_needle():
     elif miss:
         print(f"1|魔法数字未命中: {miss} {detail}")
     else:
-        tag = f"{len(magics)}针全部命中" if len(magics) > 1 else f"魔法数字 {magics[0]} 命中"
+        tag = (
+            f"{len(magics)}针全部命中"
+            if len(magics) > 1
+            else f"魔法数字 {magics[0]} 命中"
+        )
         print(f"0|{tag} {detail}")
 
 

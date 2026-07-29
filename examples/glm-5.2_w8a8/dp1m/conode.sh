@@ -59,7 +59,7 @@ nohup vllm serve "$model_path" \
     --speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}' \
     --additional-config '{"enable_flashcomm1": true, "enable_dsa_cp": true, "enable_balance_scheduling": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}' \
     --trust-remote-code --quantization ascend \
-    --gpu-memory-utilization 0.90 \
+    --gpu-memory-utilization 0.85 \
     --enable-chunked-prefill --enable-prefix-caching --async-scheduling \
     --enable-auto-tool-choice --tool-call-parser glm47 --reasoning-parser glm45 \
     --safetensors-load-strategy prefetch \
