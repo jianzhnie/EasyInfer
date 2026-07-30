@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# GLM-5.2 W8A8 共部署（1M 上下文）— 远程一键部署
+# GLM-5.2 W8A8 共部署（1M 上下文，8/16 节点通用）— 远程一键部署
 # ==============================================================================
-# 拓扑: 8 节点 × 8 卡 | DP=8 TP=8 PCP1 DCP=8 EP=64 | rank0 API, 其余 headless
-# 节点与端口配置见 deploy.conf（当前: nodes/node_list3.txt, 10.42.11.194-201）
+# 拓扑: N 节点 × 8 卡 | DP=N TP=8 PCP1 DCP=8 EP=N×8 | rank0 API, 其余 headless
+# 节点与端口配置见 deploy.conf（当前: nodes/node_list0.txt, 10.42.11.194-209）
 #
 # Usage:
 #   bash remote_deploy.sh deploy    一键部署（全部节点启动 + master 健康检查）
@@ -104,7 +104,7 @@ _health_check() {
         elapsed=$((elapsed + HEALTH_CHECK_INTERVAL))
         [[ $((elapsed % 120)) -eq 0 ]] && echo "  not ready, ${elapsed}s ..."
     done
-    echo -e "  ${RED}master 就绪超时, 日志: ${LOG_DIR}/glm5_conode_*.log${NC}"
+    echo -e "  ${RED}master 就绪超时, 日志: ${LOG_DIR}/glm5_conode16_*.log${NC}"
     return 1
 }
 
@@ -113,7 +113,7 @@ _health_check() {
 # ------------------------------------------------------------------------------
 cmd_deploy() {
     echo "============================================"
-    echo " GLM-5.2 W8A8 共部署 (1M, A2: 8节点 DP=8)"
+    echo " GLM-5.2 W8A8 共部署 (1M, A2: ${#NODES[@]}节点 DP=$DP_SIZE)"
     echo " Nodes: ${NODES[*]}"
     echo " DP=$DP_SIZE TP=$TP_SIZE DCP=8 EP=$((DP_SIZE * TP_SIZE)) | API: $DP_ADDRESS:$VLLM_PORT"
     echo "============================================"
@@ -143,7 +143,8 @@ cmd_stop() {
     local ip
     for ip in "${NODES[@]}"; do
         echo -n "  $ip ... "
-        _ssh_cmd "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"vllm serve\" || true'" 2>/dev/null \
+        # [v] 技巧避免 pkill 匹配到外层 bash -c 自身；EngineCore 进程名不含 "vllm serve"，需单独杀
+        _ssh_cmd "$ip" "docker exec ${CONTAINER_NAME} bash -c 'pkill -f \"[v]llm serve\"; sleep 2; pkill -9 -f \"[v]llm serve\"; pkill -9 -f \"VLLM::[E]ngineCore\"; true'" 2>/dev/null \
             && echo -e "${GREEN}stopped${NC}" \
             || echo -e "${YELLOW}not running${NC}"
     done

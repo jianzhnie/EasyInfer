@@ -1,7 +1,14 @@
 #!/bin/bash
-# GLM-5.2 W8A8 共部署节点模板 — 1M 上下文
-# DP=8 TP=8 PCP1 DCP=8 EP=64 | rank0 带 API (--api-server-count 1)，其余 --headless
+# GLM-5.2 W8A8 共部署节点模板 — 1M 上下文（8/16 节点通用，拓扑由 deploy.conf 决定）
+# DP=N TP=8 PCP1 DCP=8 EP=N×8 | rank0 带 API (--api-server-count 1)，其余 --headless
 # 由 launch_online_dp.py 调用（参数契约见其 docstring）
+#
+# 实测调参结论（16 节点 EP=128 三轮验证，2026-07-29）：
+#   - util 0.85 上限：0.90 时 chunk prefill 的 MoE dispatch 瞬时 buffer(~2.8G) OOM
+#   - batched 8192 上限：EP=128 all2all 元数据随组宽翻倍，16384 chunk dispatch
+#     buffer(~5.6G) OOM；8192 与官方 A2 全部配置一致（16384 是官方 A3 128G 卡的值）
+#   - max-num-seqs 16：EP=128 权重减半/卡（~6G），KV 池增大，decode 并发提高
+#   - HCCL CONNECT/EXEC=600：跨节点 EP all2all；单 rank 故障时 watchdog 600s 收尾
 set -euo pipefail
 
 visible_devices="$1"; port="$2"; dp_size="$3"; dp_rank="$4"
@@ -31,6 +38,9 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export TASK_QUEUE_ENABLE=1
 export VLLM_ENGINE_ITERATION_TIMEOUT_S=3600
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
+# 跨节点 EP all2all 建连/执行超时放宽（561000 transport init timeout 对策）
+export HCCL_CONNECT_TIMEOUT=600
+export HCCL_EXEC_TIMEOUT=600
 
 # rank0 提供 API，其余 headless（官方多节点共部署模式）
 ROLE_ARGS=()
@@ -54,7 +64,7 @@ nohup vllm serve "$model_path" \
     --cp-kv-cache-interleave-size 128 \
     --enable-expert-parallel --seed 1024 --served-model-name glm-5.2 \
     --max-model-len 1024000 \
-    --max-num-batched-tokens 16384 --max-num-seqs 8 \
+    --max-num-batched-tokens 8192 --max-num-seqs 16 \
     --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [4, 16, 128]}' \
     --speculative-config '{"num_speculative_tokens": 3, "method": "deepseek_mtp", "enforce_eager": true}' \
     --additional-config '{"enable_flashcomm1": true, "enable_dsa_cp": true, "enable_balance_scheduling": true, "ascend_compilation_config": {"enable_npugraph_ex": true, "enable_static_kernel": false}, "fuse_muls_add": true, "multistream_overlap_shared_expert": true, "enable_mc2_hierarchy_comm": false, "enable_sparse_sfa_c8": true, "enable_sparse_li_c8": true, "enable_cpu_binding": true, "recompute_scheduler_enable": false}' \
