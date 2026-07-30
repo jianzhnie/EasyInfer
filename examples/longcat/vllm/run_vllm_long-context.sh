@@ -136,7 +136,7 @@ export KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"
 # 默认开启。多轮对话 / 共享 system prompt / 批量相同前缀评测时，
 # APCache 可大幅减少重复 prefill。代价: 少量显存开销（hash table）。
 # 关闭: PREFIX_CACHING=0 bash run_vllm_long-context.sh
-PREFIX_CACHING="${PREFIX_CACHING:-1}"
+export PREFIX_CACHING="${PREFIX_CACHING:-1}"
 
 # =============================================================================
 # 环境优化 (参照 GLM-5.2 1M 教程 + 吞吐调优)

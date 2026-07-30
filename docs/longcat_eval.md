@@ -26,97 +26,105 @@
 
 ## 三、评估结果
 
-### MMLU
+> 最新评测 (2026-07-30): vLLM-Ascend v0.23.0rc1
 
-| Model                               | n-shot | Score |
-| ----------------------------------- | ------ | ----- |
-| LongCat-Flash-Chat(origin)          | 5      | 86.44 |
-| LongCat-Flash-Chat-Expertx2         | 5      | 85.88 |
-| LongCat-Flash-Chat-Expertx2-Depth32 | 5      | 85.79 |
+> 推理工具: LLMEval
 
-### C-eval
+### 数学 Benchmark
 
-| Model                              | n-shot | Value |
-| ----------------------------------- | ------ | ----- |
-| LongCat-Flash-Chat(origin)          | 5      | 85.22 |
-| LongCat-Flash-Chat(origin) TPxEP    | 5      | 87.15 |
-| LongCat-Flash-Thinking-2601(origin) | 5      | 84.99 |
-| LongCat-Flash-Chat-Expertx2         | 5      | 86.33 |
-| LongCat-Flash-Chat-Expertx2-Depth32 | 5      | 86.63 |
+| Benchmark     | Score     | Samples       | Temp | 备注                  |
+| ------------- | --------- | ------------- | ---- | ------------------- |
+| gsm8k         | **90.17** | 1 (greedy)    | 0    | 小学数学应用题             |
+| math500       | **77.00** | 1 (greedy)    | 0    | 竞赛数学 (MATH-500)     |
+| aime24        | **71.46** | 32 (pass\@32) | 0.6  | 美国数学邀请赛 2024        |
+| aime25        | **63.85** | 32 (pass\@32) | 0.6  | 美国数学邀请赛 2025        |
+| aime26        | **80.11** | 32 (pass\@32) | 0.6  | 美国数学邀请赛 2026        |
+| hmmt25        | **41.91** | 32 (pass\@32) | 0.6  | 哈佛-MIT 数学竞赛 2025    |
+| gpqa\_diamond | **57.35** | 32 (pass\@32) | 0.6  | 科学推理 (GPQA Diamond) |
 
 
-### gsm8k
+### MMLU (lm-eval, 5-shot)
 
-| Model                              | n-shot | Value |
-| ----------------------------------- | ------ | ----- |
-| LongCat-Flash-Chat(origin)          | 1      | 91.21 |
-| LongCat-Flash-Thinking-2601(origin) | 1      |  |
-| LongCat-Flash-Chat-Expertx2         | 1     |  |
-| LongCat-Flash-Chat-Expertx2-Depth32 | 1      |  |
+| Model                               | Score |
+| ----------------------------------- | ----- |
+| LongCat-Flash-Chat(origin)          | 86.44 |
+| LongCat-Flash-Chat-Expertx2         | 85.88 |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 85.79 |
 
+### C-Eval (lm-eval, 5-shot)
+
+| Model                               | Score |
+| ----------------------------------- | ----- |
+| LongCat-Flash-Chat(origin)          | 85.22 |
+| LongCat-Flash-Chat(origin) TPxEP    | 87.15 |
+| LongCat-Flash-Thinking-2601(origin) | 84.99 |
+| LongCat-Flash-Chat-Expertx2         | 86.33 |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 86.63 |
+
+### GSM8K (lm-eval, 5-shot)
+
+| Model                      | Score |
+| -------------------------- | ----- |
+| LongCat-Flash-Chat(origin) | 91.21 |
 
 ## 附录
 
 ### LongCat-Flash-Chat
 
-|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
-|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
-|gsm8k|      3|flexible-extract|     1|exact_match|↑  |0.9121|±  |0.0078|
-|     |       |strict-match    |     1|exact_match|↑  |0.6187|±  |0.0134|
+| Tasks  | Version | Filter           | n-shot | Metric       | <br /> |  Value | <br /> | Stderr |
+| ------ | ------: | ---------------- | -----: | ------------ | ------ | -----: | ------ | -----: |
+| gsm8k  |       3 | flexible-extract |      1 | exact\_match | ↑      | 0.9121 | ±      | 0.0078 |
+| <br /> |  <br /> | strict-match     |      1 | exact\_match | ↑      | 0.6187 | ±      | 0.0134 |
 
-
-##  MMLU
+## MMLU
 
 ### LongCat-Flash-Chat-Expertx2
 
-| Groups          | Version | Filter | n-shot | Metric | Value      | Stderr       |
-|-----------------|---------|--------|--------|--------|------------|--------------|
-| mmlu            | 2       | none   |        | acc    | 0.8588     | ± 0.0028     |
-| - humanities    | 2       | none   | 5      | acc ↑  | 0.8051     | ± 0.0056     |
-| - other         | 2       | none   | 5      | acc ↑  | 0.8812     | ± 0.0056     |
-| - social sciences | 2       | none   | 5      | acc ↑  | 0.9188     | ± 0.0049     |
-| - stem          | 2       | none   | 5      | acc ↑  | 0.8582     | ± 0.0061     |
-
+| Groups            | Version | Filter | n-shot | Metric | Value  | Stderr   |
+| ----------------- | ------- | ------ | ------ | ------ | ------ | -------- |
+| mmlu              | 2       | none   | <br /> | acc    | 0.8588 | ± 0.0028 |
+| - humanities      | 2       | none   | 5      | acc ↑  | 0.8051 | ± 0.0056 |
+| - other           | 2       | none   | 5      | acc ↑  | 0.8812 | ± 0.0056 |
+| - social sciences | 2       | none   | 5      | acc ↑  | 0.9188 | ± 0.0049 |
+| - stem            | 2       | none   | 5      | acc ↑  | 0.8582 | ± 0.0061 |
 
 ### LongCat-Flash-Chat-Expertx2-Depth32
 
-| Groups          | Version | Filter | n-shot | Metric | Value      | Stderr       |
-|-----------------|---------|--------|--------|--------|------------|--------------|
-| mmlu            | 2       | none   |        | acc    | 0.8579     | ± 0.0028     |
-| - humanities    | 2       | none   | 5      | acc ↑  | 0.8047     | ± 0.0056     |
-| - other         | 2       | none   | 5      | acc ↑  | 0.8812     | ± 0.0055     |
-| - social sciences | 2       | none   | 5      | acc ↑  | 0.9171     | ± 0.0049     |
-| - stem          | 2       | none   | 5      | acc ↑  | 0.8563     | ± 0.0061     |
+| Groups            | Version | Filter | n-shot | Metric | Value  | Stderr   |
+| ----------------- | ------- | ------ | ------ | ------ | ------ | -------- |
+| mmlu              | 2       | none   | <br /> | acc    | 0.8579 | ± 0.0028 |
+| - humanities      | 2       | none   | 5      | acc ↑  | 0.8047 | ± 0.0056 |
+| - other           | 2       | none   | 5      | acc ↑  | 0.8812 | ± 0.0055 |
+| - social sciences | 2       | none   | 5      | acc ↑  | 0.9171 | ± 0.0049 |
+| - stem            | 2       | none   | 5      | acc ↑  | 0.8563 | ± 0.0061 |
 
 ## C-eval
 
 ### LongCat-Flash-Chat
 
-|  Groups   |Version|Filter|n-shot| Metric |   |Value |   |Stderr|
-|-----------|------:|------|-----:|--------|---|-----:|---|-----:|
-|ceval-valid|      2|none  |     5|acc     |↑  |0.8522|±  |0.0093|
-|           |       |none  |     5|acc_norm|↑  |0.8522|±  |0.0093|
+| Groups      | Version | Filter | n-shot | Metric    | <br /> |  Value | <br /> | Stderr |
+| ----------- | ------: | ------ | -----: | --------- | ------ | -----: | ------ | -----: |
+| ceval-valid |       2 | none   |      5 | acc       | ↑      | 0.8522 | ±      | 0.0093 |
+| <br />      |  <br /> | none   |      5 | acc\_norm | ↑      | 0.8522 | ±      | 0.0093 |
 
 ### LongCat-Flash-Chat（TP & EP）
 
-|  Groups   |Version|Filter|n-shot| Metric |   |Value |   |Stderr|
-|-----------|------:|------|-----:|--------|---|-----:|---|-----:|
-|ceval-valid|      2|none  |     5|acc     |↑  |0.8715|±  |0.0089|
-|           |       |none  |     5|acc_norm|↑  |0.8715|±  |0.0089|
-
+| Groups      | Version | Filter | n-shot | Metric    | <br /> |  Value | <br /> | Stderr |
+| ----------- | ------: | ------ | -----: | --------- | ------ | -----: | ------ | -----: |
+| ceval-valid |       2 | none   |      5 | acc       | ↑      | 0.8715 | ±      | 0.0089 |
+| <br />      |  <br /> | none   |      5 | acc\_norm | ↑      | 0.8715 | ±      | 0.0089 |
 
 ### LongCat-Flash-Chat-Expertx2-Depth32
 
-| Groups       | Version | Filter | n-shot | Metric    | Value      | Stderr     |
-|--------------|---------|--------|--------|-----------|------------|------------|
-| ceval-valid  | 2       | none   | 5      | acc ↑     | 0.8663     | ± 0.009    |
-|              |         | none   | 5      | acc_norm ↑| 0.8663     | ± 0.009    |
-
+| Groups      | Version | Filter | n-shot | Metric      | Value  | Stderr  |
+| ----------- | ------- | ------ | ------ | ----------- | ------ | ------- |
+| ceval-valid | 2       | none   | 5      | acc ↑       | 0.8663 | ± 0.009 |
+| <br />      | <br />  | none   | 5      | acc\_norm ↑ | 0.8663 | ± 0.009 |
 
 ### LongCat-Flash-Thinking-2601
 
+| Groups      | Version | Filter | n-shot | Metric    | <br /> |  Value | <br /> | Stderr |
+| ----------- | ------: | ------ | -----: | --------- | ------ | -----: | ------ | -----: |
+| ceval-valid |       2 | none   |      5 | acc       | ↑      | 0.8499 | ±      | 0.0094 |
+| <br />      |  <br /> | none   |      5 | acc\_norm | ↑      | 0.8499 | ±      | 0.0094 |
 
-|  Groups   |Version|Filter|n-shot| Metric |   |Value |   |Stderr|
-|-----------|------:|------|-----:|--------|---|-----:|---|-----:|
-|ceval-valid|      2|none  |     5|acc     |↑  |0.8499|±  |0.0094|
-|           |       |none  |     5|acc_norm|↑  |0.8499|±  |0.0094|
