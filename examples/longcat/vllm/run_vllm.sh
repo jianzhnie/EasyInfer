@@ -64,9 +64,14 @@ readonly ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 readonly PREFIX_CACHING="${PREFIX_CACHING:-0}"
 
 # ------------------------------------------------------------------------------
-# Ensure EasyInfer plugins are registered (required for the EP fixes)
+# Ensure EasyInfer plugins are registered (model registration, EP fixes)
 # ------------------------------------------------------------------------------
 pip install --no-build-isolation --no-deps -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# Apply vllm-ascend LongCat patches (dual-attention, MLA rotary, layernorm)
+# ------------------------------------------------------------------------------
+python -c "from vllm_ascend.models.longcat.apply import apply; apply()" 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # Log file (default: <repo>/logs/vllm_longcat_<timestamp>.log, override with LOG_FILE)
@@ -171,6 +176,7 @@ fi
 echo "============================================"
 echo "[INFO] LongCat-Flash-Chat — Deployment"
 echo "[INFO] Model: $MODEL_PATH"
+ccho "[INFO] SERVED_MODEL_NAME: $SERVED_MODEL_NAME"
 echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
