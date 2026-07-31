@@ -219,4 +219,6 @@ batch_remote_deploy_pd_seg/
 batch_remote_deploy_pd_seg.zip
 kernel_meta/
 .claude/
+logs/
 claude_env_deepseek.sh
+.deploy/
