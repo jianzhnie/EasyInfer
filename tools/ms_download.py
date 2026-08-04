@@ -55,10 +55,14 @@ MODEL_REPOS = [
     "Eco-Tech/GLM-5.1-w8a8",
     "Eco-Tech/GLM-5.1-w4a8",
     "Eco-Tech/GLM-5.2-w8a8",
+    "Eco-Tech/GLM-5.2-w4a8",
     "Eco-Tech/GLM-5.2-w4a8c8",
     ## Kimi
     "Eco-Tech/Kimi-K2.6-w4a8",
     "Eco-Tech/Kimi-K2.7-Code-w4a8",
+    "Eco-Tech/Kimi-K3-w4a8",
+    ## Hy3
+    "Eco-Tech/Hy3-w8a8",
     ## DeepSeek
     "Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp",
     "Eco-Tech/DeepSeek-V4-Pro-w4a8-mtp",
