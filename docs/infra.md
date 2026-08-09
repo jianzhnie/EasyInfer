@@ -4,9 +4,9 @@
 
 ![img](https://pic4.zhimg.com/v2-ac46b39cfcc6820583fbb035d83a577d_1440w.jpg)
 
+## 大模型推理优化的五个方向
 
-
-
+![img](https://pic4.zhimg.com/80/v2-1692c20d51199e2861394a877976af53_1440w.webp)
 
 ## GPU工作原理
 
@@ -57,3 +57,23 @@
 - KV Cache 压缩
 - Prefill-Decode 分离架构
 - FlashInfer
+
+
+
+## Attention 优化
+
+- FlashAttention V1/V2/V3/V4
+- FlashInfer
+- RingAttention
+
+## 解码算法
+
+- EAGLE V1/V2/V3
+- DFlash
+- DSpark
+
+## PD 分离
+
+- DistServe
+- Mooncake
+- TaiChi
