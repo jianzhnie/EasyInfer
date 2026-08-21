@@ -207,6 +207,7 @@ vllm serve "$MODEL_PATH" \
 | Kimi-K2-Thinking | 8016 |
 | Kimi-K2.5 | 8017 |
 | Qwen3-235B | 8018 |
+| Qwen3-Dense / Qwen3-8B | 8021 |
 | LongCat-2Layer | 8300 |
 | <新模型> | 按顺序递增，避免冲突 |
 
