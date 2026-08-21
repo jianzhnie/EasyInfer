@@ -27,7 +27,7 @@
 ## 三、评估结果
 
 > 最新评测 (2026-07-30): vLLM-Ascend v0.23.0rc1
-
+> 部署方式：TP32-PP2-EP64 （8节点）
 > 推理工具: LLMEval
 
 ### 数学 Benchmark
@@ -40,7 +40,6 @@
 | aime25        | **64.27** | 32 (pass\@32) | 0.6  | 美国数学邀请赛 2025        |
 | aime26        | **74.69** | 32 (pass\@32) | 0.6  | 美国数学邀请赛 2026        |
 | hmmt25        | **35.31** | 32 (pass\@32) | 0.6  | 哈佛-MIT 数学竞赛 2025    |
-
 
 ### MMLU (lm-eval, 5-shot)
 
@@ -60,11 +59,34 @@
 | LongCat-Flash-Chat-Expertx2         | 86.33 |
 | LongCat-Flash-Chat-Expertx2-Depth32 | 86.63 |
 
-### GSM8K (lm-eval, 5-shot)
+
+### 模型扩展 + SFT 
+
+#### MMLU
+
+| Model                               | Score |
+| ----------------------------------- | ----- |
+| LongCat-Flash-Chat(origin)          | 86.44 |
+| LongCat-Flash-Chat-Expertx2         | 85.88 |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 76.44 |
+
+
+#### C-Eval
+
+| Model                               | Score |
+| ----------------------------------- | ----- |
+| LongCat-Flash-Chat(origin)          | 85.22 |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 86.63 |
+| LongCat-Flash-Chat-Expertx2-Depth32 + SFT | 75.70 |
+
+#### GSM8K
 
 | Model                      | Score |
 | -------------------------- | ----- |
-| LongCat-Flash-Chat(origin) | 91.21 |
+| LongCat-Flash-Chat(origin) | 90.17 |
+| LongCat-Flash-Chat-Expertx2-Depth32 | 91.21 |
+| LongCat-Flash-Chat-Expertx2-Depth32 + SFT | 92.19 |
+
 
 ## 附录
 

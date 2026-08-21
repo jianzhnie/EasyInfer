@@ -90,8 +90,6 @@ KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64 MAX_NUM_BATCHED_TOKENS=32768 bash examples/lo
 ENFORCE_EAGER=1 bash examples/longcat/vllm/run_vllm_long-context.sh
 ```
 
-> 注意: 不要从 EasyInfer 根目录运行，避免插件冲突。在容器内切换到一个非 EasyInfer 目录后执行。
-
 ### 验证
 
 ```bash
