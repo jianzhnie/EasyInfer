@@ -24,9 +24,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # 默认并行配置
-export PP="${PP:-2}"
-export TP="${TP:-32}"
+export PP="${PP:-1}"
+export TP="${TP:-64}"
 export EP="${EP:-1}"
+
+export MODEL_PATH="${MODEL_PATH:-/home/fdd/workspace/mindspeed-0616/MindSpeed-LLM/TrainingLogs/finetune_longcat_flash_1.2T_32k_A3_ptd_psm_0128nodes/PowerStep/hf_model_reshard169}"
+# export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
+export SERVED_MODEL_NAME="longcat_flash"
+export PORT=8000
 
 # ---------------------------------------------------------------------------
 # --remote: 从远程节点 SSH + docker exec
