@@ -63,9 +63,13 @@ MODEL_REPOS = [
     "Eco-Tech/Kimi-K3-w4a8",
     ## Hy3
     "Eco-Tech/Hy3-w8a8",
+    ## Qwen
+    "Eco-Tech/Qwen3.6-27B-w8a8",
+    "Eco-Tech/Qwen3.8-27B-w8a8",
     ## DeepSeek
     "Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp",
     "Eco-Tech/DeepSeek-V4-Pro-w4a8-mtp",
+    "Eco-Tech/DeepSeek-V4-Flash-0731-w8a8",
     ## MiniMax
     "Eco-Tech/MiniMax-M2.7-w8a8-QuaRot",
     "Eco-Tech/MiniMax-M3-w8a8",
