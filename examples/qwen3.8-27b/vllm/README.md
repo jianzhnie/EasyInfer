@@ -5,6 +5,7 @@
 > 吞吐配置: **TP=2 PP=1 DP=4**，`MAX_NUM_SEQS=64`，`MAX_NUM_BATCHED_TOKENS=32768`；峰值压测并发 256
 > 原生上下文: **262,144** | 默认服务上下文: **131,072** | YaRN 扩展档: **1,000,000**
 > 验证状态: ✅ 吞吐档暖机后峰值 **2579.94 tok/s**；1M 档已实测 900K 检索及 **4.22 tok/s 生成吞吐**
+> 当前实例: **TP=4 / DP=2**，单业务端口 **8022**，Qwen XML 工具调用已开启
 
 Qwen3.8-27B 是 270 亿参数的稠密视觉语言模型，采用 Qwen3.5 系列的混合注意力主干，适合文本、视觉和长上下文 Agent 服务。
 
@@ -43,7 +44,7 @@ Qwen3.8-27B 是 270 亿参数的稠密视觉语言模型，采用 Qwen3.5 系列
 - 超过 262K 必须启用静态 YaRN。静态缩放可能降低短文本质量和性能，因此 1M 服务不应替代默认吞吐服务。
 - 本地 W8A8 checkpoint 启动前会检查 `quant_model_description.json` 和
   `quant_model_weights.safetensors.index.json`；缺少任一文件会直接失败，避免把错误目录交给量化后端。
-- 脚本默认 `VLLM_USE_V1=1`，并使用 `FULL_DECODE_ONLY`；这与官方第 9 节的 Chunked Prefill、SplitFuse 和全 Decode ACL Graph 调优建议一致。`CUDAGRAPH_MODE=PIECEWISE` 仅用于排障或重新评测。
+- 脚本固定使用 `VLLM_USE_V1=1`、Chunked Prefill、SplitFuse 和 `FULL_DECODE_ONLY`；这与官方第 9 节的全 Decode ACL Graph 调优建议一致。
 - 启动前会校验端口、并行度、显存比例、YaRN 原始长度和 Ray/DP 后端；校验失败会在加载模型前退出，不会占用 NPU。
 - 官方第 9 节当前只给出通用调优方向，尚未发布此模型的完整性能验证数据；下文吞吐数字均为本环境实测，不外推到其他输入/输出长度。
 
@@ -85,7 +86,7 @@ Qwen3.8-27B 是 270 亿参数的稠密视觉语言模型，采用 Qwen3.5 系列
 | 最大聚合吞吐 | 2 | 1 | 4 | 4 | 8 | 32768 | ✅ 实测，客户端并发 128 |
 | 吞吐/时延折中 | 2 | 1 | 4 | 4 | 8 | 32768 | ✅ 实测，客户端并发 64 |
 | 低负载回退 | 2 | 1 | 1 | 1 | 2 | 16384 | ✅ 实测基线 |
-| 1M 长上下文 | 8 | 1 | 1 | 1 | 8 | 32768 | ✅ 实测，900K 检索通过 |
+| 1M 长上下文 | 4 | 1 | 2 | 2 | 8 | 32768 | ✅ 实测，900K 检索通过；每副本 KV 2,731,003 tokens |
 | 多节点 PP | 2 | 2+ | 1 | 1 | 每节点 8 | 16384 | ⚠️ 未在本轮验证，需 Ray |
 
 `DP=4` 表示启动 4 个独立 TP2 推理副本，正好使用单节点 8 张 NPU。Qwen3.8 是 Dense 模型，不使用 EP。PP 需要合理切分 64 层，并且跨节点部署时必须显式指定 Ray 地址。
@@ -133,10 +134,10 @@ cd /home/jianzhnie/llmtuner/llm/EasyInfer
 bash examples/qwen3.8-27b/vllm/run_vllm.sh
 ```
 
-默认值即实测最大吞吐服务端配置：TP2/DP4、4 个本地副本、131K 上下文、32K batched tokens、MTP 开启。脚本会自动启用 vLLM V1；显式环境变量会覆盖 profile 默认值。其他节点必须覆盖本机地址：
+默认值即实测最大吞吐服务端配置：TP2/DP4、4 个本地副本、131K 上下文、32K batched tokens、MTP 开启。脚本会自动启用 vLLM V1；可覆盖的变量仅限模型、端口、profile、并行度、上下文/批量、推理强度、Ray 地址和 `DRY_RUN`。其他节点必须覆盖本机地址：
 
 ```bash
-HCCL_IF_IP=<本节点IP> DP_ADDRESS=<本节点IP> \
+DP_ADDRESS=<本节点IP> \
     bash examples/qwen3.8-27b/vllm/run_vllm.sh
 ```
 
@@ -160,12 +161,12 @@ bash scripts/ray_cluster/start_npuslim_ray_cluster.sh start \
     --file /home/jianzhnie/llmtuner/llm/EasyInfer/node_list.txt
 docker exec vllm-ascend-env python3 -c \
   "import ray; ray.init(address='auto', ignore_reinit_error=True); print(ray.get_runtime_context().gcs_address)"
-RAY_ADDRESS=<head-ip>:6379 DISTRIBUTED_EXECUTOR_BACKEND=ray \
+RAY_ADDRESS=<head-ip>:6379 \
     TP=2 PP=2 DP=1 DP_LOCAL=1 \
     bash examples/qwen3.8-27b/vllm/run_vllm.sh
 ```
 
-多节点高速网卡可追加 `NIC_NAME=<网卡名> HCCL_IF_IP=<本节点IP>`；`RAY_ADDRESS` 必须指向已启动 Ray 集群的 head。当前实机只验证了单节点 DP4；多节点 PP 目前只做了脚本约束检查，未在本轮进行实机启动/吞吐验证，跨节点 DP 的 rank 编排需单独验证。服务 API 模型名默认为 `qwen3.8`，端口默认为 `8022`，均可用环境变量覆盖。
+多节点高速网卡需在容器/集群层配置网络；本精简脚本固定使用 `HCCL_IF_IP=$DP_ADDRESS` 和 `HCCL_BUFFSIZE=512`。`RAY_ADDRESS` 必须指向已启动 Ray 集群的 head。当前实机只验证了单节点 DP4 和 1M TP4/DP2；多节点 PP 目前只做了脚本约束检查，未在本轮进行实机启动/吞吐验证。服务 API 模型名默认为 `qwen3.8`，端口默认为 `8022`，均可用环境变量覆盖。
 
 ### 3. API 功能测试
 
@@ -173,7 +174,7 @@ RAY_ADDRESS=<head-ip>:6379 DISTRIBUTED_EXECUTOR_BACKEND=ray \
 bash examples/qwen3.8-27b/vllm/curl_test.sh
 ```
 
-测试脚本覆盖健康检查、模型列表、中英文对话、数学、代码、流式、工具调用和 Anthropic Messages API。若镜像未提供该自定义 XML 的 tool parser，工具调用项会按测试库约定标记为 WARN，不影响基础文本 API。多模态图片请求默认关闭，目标节点网络可用时执行：
+测试脚本覆盖健康检查、模型列表、中英文对话、数学、代码、流式、工具调用和 Anthropic Messages API。当前镜像已提供 `qwen3_xml` parser，工具调用可正常验证。多模态图片请求默认关闭，目标节点网络可用时执行：
 
 ```bash
 ENABLE_VISION=1 bash examples/qwen3.8-27b/vllm/curl_test.sh
@@ -254,12 +255,12 @@ curl http://localhost:8022/v1/chat/completions \
 | `factor` | `4.0` |
 | `original_max_position_embeddings` | `262144` |
 | `MAX_MODEL_LEN` | `1000000` |
-| `TP` / `DP` | `8` / `1` |
+| `TP` / `DP` | `4` / `2` |
 | `MAX_NUM_SEQS` | `1` |
 | `LANGUAGE_MODEL_ONLY` | `1` |
-| `ENABLE_MTP` | `0`，优先给 KV Cache 留出 HBM |
+| MTP | 关闭，优先给 KV Cache 留出 HBM |
 
-当前吞吐档的每个 TP2 副本实测只有 `808,493` tokens KV Cache，低于 1M，不能仅把 `MAX_MODEL_LEN` 改为 1000000。长上下文档使用全部 8 张卡构成一个 TP8 副本，并默认关闭视觉编码器和 MTP。实测 TP8/DP1 可分配 `2,977,845` tokens KV Cache，1M 单请求容量通过。
+当前吞吐档的每个 TP2 副本实测只有 `808,493` tokens KV Cache，低于 1M，不能仅把 `MAX_MODEL_LEN` 改为 1000000。长上下文档使用两个 TP4 数据并行副本（每副本占 4 张卡），并默认关闭视觉编码器和 MTP。实测 DP0/DP1 均可分配 `2,731,003` tokens KV Cache，1M 单请求容量通过。
 
 ### 启动和检查
 
@@ -277,7 +278,7 @@ DEPLOY_PROFILE=long-context-1m \
     bash examples/qwen3.8-27b/vllm/run_vllm.sh
 ```
 
-启动日志必须显示 KV Cache 容量不少于 1,000,000 tokens，且模型列表返回 1M。本节点实测日志为 `2,977,845 tokens`，模型列表为 `max_model_len=1000000`：
+启动日志必须显示两个 DP 副本的 KV Cache 容量均不少于 1,000,000 tokens，且模型列表返回 1M。本节点实测 DP0/DP1 均为 `2,731,003 tokens`，模型列表为 `max_model_len=1000000`：
 
 ```bash
 grep 'GPU KV cache size' /path/to/vllm.log
@@ -285,13 +286,11 @@ curl -s http://localhost:8022/v1/models | \
     jq '.data[0] | {id, max_model_len}'
 ```
 
-若 KV Cache 容量不足，不要继续发送 1M 请求。可增加节点/并行资源，或回退到 524K 与 YaRN 2x：
+若 KV Cache 容量不足，不要继续发送 1M 请求。可增加节点/并行资源；如需 524K/YaRN 2x 变体，应复制脚本并同步修改固定的 `--hf-overrides`：
 
 ```bash
-DEPLOY_PROFILE=long-context-1m \
-YARN_FACTOR=2.0 \
-MAX_MODEL_LEN=524288 \
-    bash examples/qwen3.8-27b/vllm/run_vllm.sh
+# 在复制出的脚本中同时将 MAX_MODEL_LEN 改为 524288、YaRN factor 改为 2.0
+MAX_MODEL_LEN=524288 bash examples/qwen3.8-27b/vllm/run_vllm.sh
 ```
 
 ### 长上下文检索验证
@@ -307,7 +306,7 @@ LONG_CONTEXT_TIMEOUT=7200 \
     bash examples/qwen3.8-27b/vllm/curl_test.sh
 ```
 
-静态 YaRN 的缩放因子不随输入长度变化。以短文本和高吞吐为主时继续使用 `DEPLOY_PROFILE=throughput`；典型上下文约 524K 时优先使用 `YARN_FACTOR=2.0`。
+静态 YaRN 的缩放因子不随输入长度变化。以短文本和高吞吐为主时继续使用 `DEPLOY_PROFILE=throughput`；当前长上下文 profile 固定为 YaRN 4x/1M。
 
 本次实测结果：`prompt=900025`，命中魔法数字 `7391842`，completion 63 tokens，长上下文矩阵 PASS。
 
@@ -363,7 +362,7 @@ DP1 基线运行时未固定 `temperature=0`，因此它只用于说明 6 张卡
 
 ### 1M 档吞吐实测
 
-1M 档使用 TP8/DP1、`MAX_NUM_SEQS=1`、`MAX_NUM_BATCHED_TOKENS=32768`、静态 YaRN 4x、关闭 MTP 和视觉编码器。以下结果在本节点 `10.16.201.229`、8 张 NPU、镜像 `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` 上直接对运行中的 `8022` 服务测得：
+1M 档使用 TP4/DP2、`MAX_NUM_SEQS=1`、`MAX_NUM_BATCHED_TOKENS=32768`、静态 YaRN 4x、关闭 MTP 和视觉编码器。两个 DP 副本共享唯一业务端口 `8022`。以下结果在本节点 `10.16.201.229`、8 张 NPU、镜像 `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` 上直接对运行中的服务测得：
 
 | 工作负载 | 请求数 / 并发 | 成功 | 请求耗时 | 输出吞吐 | 总 token 吞吐 | TTFT | TPOT |
 |----------|---------------|------|----------|----------|----------------|------|------|
@@ -406,38 +405,40 @@ JSON 结果位于容器内 `/tmp/qwen38-bench/`。长上下文 benchmark 可能�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Qwen3.8-27B-w8a8` | 本地权重目录或 ModelScope ID |
-| `VLLM_USE_MODELSCOPE` | `False` | 本地路径保持 `False`；使用 ModelScope ID 时设为 `True` |
+| `MODEL_PATH` | `/home/jianzhnie/llmtuner/hfhub/models/Eco-Tech/Qwen3.8-27B-w8a8` | 本地 W8A8 权重目录 |
 | `HOST` / `PORT` / `SERVED_MODEL_NAME` | `0.0.0.0` / `8022` / `qwen3.8` | 监听地址、API 端口和模型名 |
 | `DEPLOY_PROFILE` | `throughput` | `throughput` 或 `long-context-1m` |
-| `TP` / `PP` / `DP` | `2` / `1` / `4` | 4 个 TP2 副本占满 8 NPU；PP>1 或 TP>8 需要 Ray |
-| `DP_LOCAL` / `DP_RANK_START` | `4` / `0` | 本节点 DP 副本数和起始 rank |
-| `DP_ADDRESS` / `DP_RPC_PORT` | `10.16.201.229` / `13390` | DP 协调地址和端口；换节点必须覆盖地址 |
-| `DP_BACKEND` | `mp` | vLLM 数据并行后端 |
-| `RAY_ADDRESS` | 空 | 多节点 Ray GCS 地址，如 `10.16.201.229:6379` |
-| `DISTRIBUTED_EXECUTOR_BACKEND` | 自动 | 有 `RAY_ADDRESS` 时自动为 `ray`，本地并行自动为 `mp`；显式使用 `ray` 必须同时设置 `RAY_ADDRESS`；跨节点 PP/TP 必须为 `ray` |
-| `QUANTIZATION` / `DTYPE` | `ascend` / `bfloat16` | 仅支持 `ascend` / `none`；当前目录必须用 `ascend` 读取 W8A8_DYNAMIC；`bfloat16` 是非量化参数、激活输出和主干计算 dtype，不是把量化权重转成 BF16 |
+| `TP` / `PP` / `DP` | `2` / `1` / `4` | 吞吐档 4 个 TP2 副本占满 8 NPU；1M 档覆盖为 TP4/DP2；PP>1 或 TP>8 需要 Ray |
+| `DP_LOCAL` | 按 `DP` | 本节点 DP 副本数；`DP_RANK_START`、RPC 端口和 backend 固定为 0、13390、mp |
+| `DP_ADDRESS` | `10.16.201.229` | 本节点 DP/HCCL 地址；换节点必须覆盖 |
+| `RAY_ADDRESS` | 空 | 多节点 Ray GCS 地址，如 `10.16.201.229:6379`；设置后自动使用 Ray executor |
+| 量化 / dtype | `ascend` / `bfloat16` | 固定值；W8A8 由 `--quantization ascend` 选择，BF16 是非量化参数和主干计算 dtype |
 | `MAX_MODEL_LEN` | `131072` | 最大上下文；1M 档自动设为 `1000000` |
 | `MAX_NUM_SEQS` / `MAX_NUM_BATCHED_TOKENS` | `64` / `32768` | 每副本调度容量和每 step 最大 token 数；DP4 总并发容量为 256 |
-| `GPU_MEM_UTIL` | `0.85` | NPU HBM 利用率上限 |
-| `ENABLE_MTP` | `1` | `qwen3_5_mtp`、3 speculative tokens；1M 档默认关闭 |
 | `DEFAULT_REASONING_EFFORT` | `xhigh` | 服务默认推理强度；仅支持 `xhigh` / `medium` / `low` |
-| `ENABLE_PREFIX_CACHING` | `1` | 重复系统提示时建议开启 |
-| `ENABLE_CHUNKED_PREFILL` / `ENABLE_CPU_BINDING` | `1` / `1` | 长上下文分块预填充和 CPU worker 绑定；1M 档不可关闭前者 |
-| `LANGUAGE_MODEL_ONLY` | `0` | 设为 `1` 跳过 Vision Encoder；1M 档默认开启 |
-| `FLASHCOMM1` / `MLAPO` | `0` / `0` | 本模型默认关闭；非 MLA |
-| `ENABLE_BALANCE_SCHEDULING` | `0` | Dense 模型必须关闭；设为 1 会进入 MoE-only DP 路径 |
-| `ENABLE_YARN` / `YARN_FACTOR` | `0` / `4.0` | 1M 档自动设为 `1` / `4.0` |
-| `YARN_ORIGINAL_MAX_MODEL_LEN` | `262144` | YaRN 原始上下文长度 |
-| `HF_OVERRIDES` | 官方 YaRN JSON | 覆盖自动生成的 RoPE 配置；仅建议高级排障使用 |
-| `CUDAGRAPH_MODE` | `FULL_DECODE_ONLY` | 官方推荐的全 Decode ACL Graph；排障时可设 `PIECEWISE` |
-| `VLLM_USE_V1` | `1` | 默认使用 V1 调度器，启用 Chunked Prefill/SplitFuse 路径；改为 `0` 时必须同时关闭 Chunked Prefill |
-| `VLLM_ENGINE_READY_TIMEOUT_S` | `1800` | 长上下文和多卡启动的 engine 就绪超时（秒） |
-| `LOCAL_NPU_COUNT` / `DRY_RUN` | `8` / `0` | 本地 NPU 约束和只打印命令开关 |
-| `HCCL_BUFFSIZE` | `512` | HCCL 共享缓冲区 MB |
-| `NIC_NAME` / `HCCL_IF_IP` | 空 / `10.16.201.229` | 网卡名和本节点 HCCL IP；换节点必须覆盖 IP |
+| 工具调用 | `qwen3_xml` | 固定开启 `--enable-auto-tool-choice --tool-call-parser qwen3_xml`，匹配 Qwen XML 工具格式 |
+| `DRY_RUN` | `0` | 只打印最终命令，不占用 NPU |
+
+脚本固定的性能参数包括 `GPU_MEM_UTIL=0.85`、Prefix Caching、Chunked Prefill、CPU binding、V1、FULL Decode Graph、`HCCL_BUFFSIZE=512`、`FLASHCOMM1=0`、`MLAPO=0` 和 Dense 模型所需的 Balance Scheduling=0。1M 档额外固定 YaRN 4x、纯文本模式和 MTP off；吞吐档额外固定 Qwen MTP 3 speculative tokens 与视觉编码器。
 
 ## Claude Code 接入
+
+推荐直接加载仓库内的环境脚本；它会覆盖外部残留的模型、地址和 `max` effort，使用本地 Qwen3.8 服务：
+
+```bash
+cd /home/jianzhnie/llmtuner/llm/EasyInfer
+source ./claude_env_qwen.sh
+claude --model qwen3.8 --effort medium
+```
+
+脚本默认设置 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000`，并把 `QWEN_REASONING_EFFORT` 映射为 Qwen 支持的 `xhigh`、`medium` 或 `low`：
+
+```bash
+QWEN_REASONING_EFFORT=low source ./claude_env_qwen.sh
+claude --model qwen3.8 --effort low
+```
+
+当前服务已使用 `--enable-auto-tool-choice --tool-call-parser qwen3_xml`，Claude Code 的工具请求可被 Qwen XML parser 转换为 Anthropic `tool_use`。服务端与 Claude Code 共用唯一业务端口 `8022`；DP/HCCL 的内部通信端口不作为 Claude 接入地址。
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8022 \
@@ -449,14 +450,12 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3.8 \
 claude
 ```
 
-Claude Code 会把 effort 映射到 Anthropic `output_config.effort`。Qwen3.8 只接受 `low` 和 `medium` 这两个 Claude Code 可直接传递的值；要使用模型默认 `xhigh`，不要设置 Claude Code effort：
+Claude Code 会把 effort 映射到 Anthropic `output_config.effort`。当前 Qwen3.8 模板接受 `xhigh`、`medium` 和 `low`；`high`/`max` 不可用。通过环境脚本可直接选择三种值：
 
 ```bash
-# Qwen xhigh：由服务端默认值提供
-unset CLAUDE_CODE_EFFORT_LEVEL
-claude
-
-# 逐会话降低推理强度
+# 逐会话选择推理强度
+QWEN_REASONING_EFFORT=xhigh source ./claude_env_qwen.sh
+claude --effort xhigh
 CLAUDE_CODE_EFFORT_LEVEL=medium claude
 CLAUDE_CODE_EFFORT_LEVEL=low claude
 ```
@@ -485,13 +484,13 @@ A: 该开关在 `v0.23.0rc1-a3` 的 DP 路径中实例化 MoE 专用 `DPEngineCo
 
 A: 当前 256/128 workload 下，32K 在并发 64/128 均比 16K 高约 10%，所以设为默认。若更长 prompt 导致 HBM 压力或 OOM，先回退 `MAX_NUM_BATCHED_TOKENS=16384`，再降低 `MAX_MODEL_LEN` 或关闭 MTP。
 
-### Q: 为什么默认 MTP 开启？
+### Q: 为什么吞吐档默认 MTP 开启？
 
-A: 模型配置包含 1 层 MTP 草稿头，vLLM-Ascend 对 Qwen3.8 使用 `qwen3_5_mtp`。若显存或稳定性不足，设置 `ENABLE_MTP=0`。
+A: 模型配置包含 1 层 MTP 草稿头，吞吐档固定使用 `qwen3_5_mtp` 和 3 个 speculative tokens。精简脚本不再暴露该模型专用开关；1M 档为容量稳定性固定关闭 MTP。
 
 ### Q: 为什么 1M 档默认关闭 MTP 和视觉？
 
-A: 1M 的首要约束是单请求 KV Cache 容量。关闭 MTP 和视觉编码器可减少 HBM 压力，先建立可启动、可检索的长上下文基线；容量确认后可分别设置 `ENABLE_MTP=1` 或 `LANGUAGE_MODEL_ONLY=0` 复测，但不能沿用本文的未验证结论。
+A: 1M 的首要约束是单请求 KV Cache 容量。关闭 MTP 和视觉编码器可减少 HBM 压力，当前 profile 将其固定为长上下文基线；如需改变模型专用策略，应复制脚本后单独复测。
 
 ### Q: reasoning_effort 为什么不支持 high 或 max？
 
@@ -503,17 +502,17 @@ A: 不需要。它是 Dense Hybrid Attention，不是 MoE，也不使用 MLA；�
 
 ### Q: 多节点启动卡在 Ray placement group 怎么办？
 
-A: 确认每个节点容器已启动、Ray 状态有 Active NPU，并在部署命令中设置 `RAY_ADDRESS=<head>:6379 DISTRIBUTED_EXECUTOR_BACKEND=ray`。PP>1 或 TP>8 未设置 Ray 时脚本会直接报错；跨节点 DP 还需要正确规划 `DP_LOCAL` 和 `DP_RANK_START`，本示例未对该模式做吞吐承诺。
+A: 确认每个节点容器已启动、Ray 状态有 Active NPU，并在部署命令中设置 `RAY_ADDRESS=<head>:6379`。脚本检测到该变量后自动使用 Ray executor；PP>1 或 TP>8 未设置 Ray 时会直接报错。本示例未对多节点吞吐做承诺。
 
 ### Q: 为什么脚本默认 `VLLM_USE_V1=1` 和 `FULL_DECODE_ONLY`？
 
-A: Qwen3.8 的官方调优章节以 V1 Chunked Prefill/SplitFuse 和全 Decode ACL Graph 为基线。脚本保留 `CUDAGRAPH_MODE=PIECEWISE` 覆盖入口，但切换后必须重新验证吞吐和显存。
+A: Qwen3.8 的官方调优章节以 V1 Chunked Prefill/SplitFuse 和全 Decode ACL Graph 为基线，精简脚本固定采用这组参数。
 
 ### Q: 如何启用视觉测试？
 
 A: 部署保持默认多模态模型，运行 `ENABLE_VISION=1 bash examples/qwen3.8-27b/vllm/curl_test.sh`。测试库使用公开图片 URL；内网无外网时可设置 `VISION_URL` 为可访问地址。
 
-纯文本 Agent 可用 `LANGUAGE_MODEL_ONLY=1 bash examples/qwen3.8-27b/vllm/run_vllm.sh` 跳过视觉编码器并节省显存。
+1M profile 已固定 `--language-model-only`；吞吐 profile 固定保留视觉编码器。
 
 ## 验证记录
 
@@ -522,14 +521,15 @@ A: 部署保持默认多模态模型，运行 `ENABLE_VISION=1 bash examples/qwe
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP1, 16K, seq32 | ✅ | 64/64 benchmark 成功，输出 292.18 tok/s |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4, 16K, seq64 | ✅ | 并发 16/64/128 均成功，最高 1777.98 tok/s |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4, 32K, seq64 | ✅ | 并发 64/128 均成功，最高 1955.05 tok/s |
-| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | `curl_test.sh` API 回归 | ✅ | 健康、模型列表、文本、流式、代码、数学、Anthropic PASS；工具调用 WARN |
+| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | `curl_test.sh` API 回归 | ✅ | 健康、模型列表、文本、流式、代码、数学、Anthropic PASS；旧配置工具调用 WARN |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | reasoning effort API | ✅ | `low`/`medium` 返回 200；不支持的 `high` 按预期返回 400 |
-| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M YaRN TP8/DP1 | ✅ | KV Cache 2,977,845 tokens，模型列表 1M，900K 检索命中 |
+| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 旧版 1M YaRN TP8/DP1 | ✅ | KV Cache 2,977,845 tokens，模型列表 1M，900K 检索命中 |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | `reasoning_effort` 实际请求 | ✅ | `xhigh`/`medium`/`low` 均 HTTP 200，`high` HTTP 400 |
-| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M `curl_test.sh` 回归 | ✅ | 基础 API 与 900K 长上下文矩阵 PASS；工具调用 WARN，多模态 SKIP |
-| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M TP8/DP1 吞吐 benchmark | ✅ | 256/128 单并发输出 64.88 tok/s；900K/128 输出 4.22 tok/s、总吞吐 29,683.71 tok/s |
+| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 旧版 1M `curl_test.sh` 回归 | ✅ | 基础 API 与 900K 长上下文矩阵 PASS；工具调用 WARN，多模态 SKIP |
+| 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 旧版 1M TP8/DP1 吞吐 benchmark | ✅ | 256/128 单并发输出 64.88 tok/s；900K/128 输出 4.22 tok/s、总吞吐 29,683.71 tok/s |
 | 2026-08-26 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4, 32K, MTP on, warm cache | ✅ | 并发 128 输出 2196.09 tok/s；并发 256 输出 2579.94 tok/s，P99 TTFT 10.05 s |
 | 2026-08-26 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4 参数对比 | ✅ | 48K 输出 1941.76 tok/s；32K 且 MTP off 输出 1929.32 tok/s，均低于最佳配置 |
+| 2026-08-26 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M TP4/DP2 + `qwen3_xml` | ✅ | 两副本 KV Cache 各 2,731,003 tokens；Anthropic tool_use 与 Claude Code 请求通过 |
 
 ### 2026-08-26 调参结论
 
@@ -539,4 +539,4 @@ A: 部署保持默认多模态模型，运行 `ENABLE_VISION=1 bash examples/qwe
 
 单节点最大吞吐实践是 4 个 TP2 数据并行副本、32K batched tokens、MTP、Prefix Cache、Chunked Prefill、FULL decode graph 和 CPU binding。并发 128 追求峰值吞吐，并发 64 获得更好的长尾时延。Balance Scheduling 必须关闭。
 
-1M 长上下文实践是 TP8/DP1、静态 YaRN 4x、MTP 关闭、纯文本模式；实测 KV Cache 为 2,977,845 tokens，900K tokens 检索成功。1M 档和吞吐档都占满 8 张卡，不能同时运行。
+1M 长上下文实践是 TP4/DP2、静态 YaRN 4x、MTP 关闭、纯文本模式；两个副本各实测 KV Cache 为 2,731,003 tokens，900K tokens 检索成功。1M 档和吞吐档都占满 8 张卡，不能同时运行。
