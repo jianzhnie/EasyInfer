@@ -17,6 +17,7 @@
 #   LONG_CONTEXT_CASES     用例选择, 如 "1,3,8" (默认全部 8 个)
 #   TARGET_TOKENS MIN_ACCEPT_TOKENS LONG_CONTEXT_MAX_TOKENS
 #   LONG_CONTEXT_TIMEOUT   大海捞针旋钮
+#   LONG_CONTEXT_SAFE_LIMIT  长上下文安全上限（默认从 /v1/models 自动读取）
 # =============================================================================
 
 # ---- Config（source 后可修改）--------------------------------------------------
@@ -350,6 +351,22 @@ ct_lc_ask() {  # $1=question $2=magics_csv $3=min_tokens $4=kind(chat|multiturn)
         < "${CT_LC_DIR}/resp.json"
 }
 
+ct_lc_context_limit() {
+    local max_model_len
+    max_model_len=$(ct_curl "${BASE_URL}/v1/models" \
+        | python3 -c 'import json,sys
+try:
+    value=int(json.load(sys.stdin)["data"][0]["max_model_len"])
+    print(max(1, value - 1000))
+except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+    print(131000)' 2>/dev/null || true)
+    if [[ "$max_model_len" =~ ^[1-9][0-9]*$ ]]; then
+        echo "$max_model_len"
+    else
+        echo 131000
+    fi
+}
+
 ct_lc_case() {  # $1=name $2=target $3=pos $4=lang $5=multi $6=question $7=magics
     local count detail
     log_info "用例: $1 (target=$2)"
@@ -384,7 +401,17 @@ curl_test::long_context() {
     local cases="${LONG_CONTEXT_CASES:-1,2,3,4,5,6,7,8}"
     local target="${TARGET_TOKENS:-130000}"
     local min_accept="${MIN_ACCEPT_TOKENS:-100000}"
+    local safe_limit="${LONG_CONTEXT_SAFE_LIMIT:-}"
     local failed=0 count detail
+
+    if [[ -z "$safe_limit" ]]; then
+        safe_limit=$(ct_lc_context_limit)
+    fi
+    if [[ ! "$safe_limit" =~ ^[1-9][0-9]*$ ]]; then
+        log_warn "LONG_CONTEXT_SAFE_LIMIT 无效，回退到 131000"
+        safe_limit=131000
+    fi
+    log_info "长上下文安全上限: ${safe_limit} tokens"
 
     _lc_in() { [[ ",${cases}," == *",$1,"* ]]; }
 
@@ -407,8 +434,8 @@ curl_test::long_context() {
         count=$(ct_lc_calibrate "$target" en start 0) || {
             log_err "大海捞针: tokenize 校准失败"; failed=$((failed+1)); count=""; }
         if [[ -n "$count" ]]; then
-            if [[ "$count" -gt 131000 ]]; then
-                log_err "大海捞针: prompt tokens ($count) 超过安全上限 131000"
+            if [[ "$count" -gt "$safe_limit" ]]; then
+                log_err "大海捞针: prompt tokens ($count) 超过安全上限 $safe_limit"
                 failed=$((failed+1))
             else
                 detail=$(ct_lc_ask \
