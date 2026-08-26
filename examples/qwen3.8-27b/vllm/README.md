@@ -2,9 +2,9 @@
 
 > **vLLM-Ascend v0.23.0rc1-a3** | 端口: **8022**
 > 架构: Qwen3_5ForConditionalGeneration | Dense Hybrid Attention | Vision | MTP=1 | W8A8
-> 吞吐配置: **TP=2 PP=1 DP=4**，`MAX_NUM_SEQS=64`，`MAX_NUM_BATCHED_TOKENS=32768`
+> 吞吐配置: **TP=2 PP=1 DP=4**，`MAX_NUM_SEQS=64`，`MAX_NUM_BATCHED_TOKENS=32768`；峰值压测并发 256
 > 原生上下文: **262,144** | 默认服务上下文: **131,072** | YaRN 扩展档: **1,000,000**
-> 验证状态: ✅ 吞吐档已实测 **1955.05 tok/s**；1M 档已实测 900K 检索及 **4.22 tok/s 生成吞吐**
+> 验证状态: ✅ 吞吐档暖机后峰值 **2579.94 tok/s**；1M 档已实测 900K 检索及 **4.22 tok/s 生成吞吐**
 
 Qwen3.8-27B 是 270 亿参数的稠密视觉语言模型，采用 Qwen3.5 系列的混合注意力主干，适合文本、视觉和长上下文 Agent 服务。
 
@@ -328,12 +328,12 @@ vllm bench serve \
     --random-input-len 256 \
     --random-output-len 128 \
     --num-prompts 512 \
-    --max-concurrency 128 \
+    --max-concurrency 256 \
     --request-rate inf \
     --ignore-eos \
     --temperature 0 \
     --save-result --result-dir /tmp/qwen38-bench \
-    --result-filename throughput-256x128-c128.json \
+    --result-filename throughput-256x128-c256.json \
     --ready-check-timeout-sec 30
 ```
 
@@ -347,13 +347,17 @@ vllm bench serve \
 | TP2/DP4, 16K, seq64 | 128 / 512 | 512/512 | 1777.98 tok/s | 6061.97 tok/s | 4370.05 ms | 103.87 ms |
 | **TP2/DP4, 32K, seq64** | **64 / 256** | **256/256** | **1664.77 tok/s** | **5676.56 tok/s** | **1145.00 ms** | **54.19 ms** |
 | **TP2/DP4, 32K, seq64** | **128 / 512** | **512/512** | **1955.05 tok/s** | **6665.69 tok/s** | **4510.24 ms** | **95.59 ms** |
+| **TP2/DP4, 32K, seq64, warm cache** | **128 / 512** | **512/512** | **2196.09 tok/s** | **7487.49 tok/s** | **4373.25 ms** | **87.21 ms** |
+| **TP2/DP4, 32K, seq64, warm cache** | **256 / 512** | **512/512** | **2579.94 tok/s** | **8796.21 tok/s** | **10047.30 ms** | **83.09 ms** |
+| TP2/DP4, 48K, seq64 | 128 / 512 | 512/512 | 1941.76 tok/s | 6620.38 tok/s | 7741.48 ms | 94.10 ms |
+| TP2/DP4, 32K, MTP off | 128 / 512 | 512/512 | 1929.32 tok/s | 6577.96 tok/s | 5787.87 ms | 77.28 ms |
 
-DP1 基线运行时未固定 `temperature=0`，因此它只用于说明 6 张卡闲置时的容量损失；16K 与 32K 的 DP4 组使用相同参数，可以直接比较。32K 相比 16K 在并发 64 和 128 下的输出吞吐分别提高约 **10.3%** 和 **10.0%**。
+DP1 基线运行时未固定 `temperature=0`，因此它只用于说明 6 张卡闲置时的容量损失；16K 与 32K 的 DP4 组使用相同参数，可以直接比较。32K 相比 16K 在并发 64 和 128 下的历史输出吞吐分别提高约 **10.3%** 和 **10.0%**。本轮暖机后复测显示 32K/DP4 是最佳点：48K 降至 1941.76 tok/s，关闭 MTP 降至 1929.32 tok/s；并发从 128 提高到 256 后输出吞吐增至 2579.94 tok/s，但 P99 TTFT 增至 10.05 秒。
 
 ### 配置选择
 
-- **最大聚合吞吐**：保持服务端默认值，调用端允许并发 128；实测 1955.05 输出 tok/s，但 TTFT 长尾达到 4.51 秒。
-- **吞吐/时延折中**：保持同一服务端配置，在网关将并发限制为 64；实测 1664.77 输出 tok/s，P99 TTFT 1.15 秒。
+- **最大聚合吞吐**：保持服务端默认值，调用端允许并发 256（`MAX_NUM_SEQS=64 × DP=4`）；暖机后的实测输出吞吐为 **2579.94 tok/s**，但 P99 TTFT 达到 10.05 秒，适合离线批量或可排队 Agent 任务。
+- **吞吐/时延折中**：同一服务端配置将网关并发限制为 128；暖机后的实测输出吞吐为 **2196.09 tok/s**，P99 TTFT 4.37 秒。并发 64 时历史实测 1664.77 tok/s、P99 TTFT 1.15 秒。
 - **低负载或显存回退**：使用 DP1/16K。它只使用 2 张卡，不能最大化单节点吞吐。
 - benchmark JSON 保存在容器临时目录 `/tmp/qwen38-bench/`，容器重建后会丢失；上表已记录关键指标。
 
@@ -414,7 +418,7 @@ JSON 结果位于容器内 `/tmp/qwen38-bench/`。长上下文 benchmark 可能�
 | `DISTRIBUTED_EXECUTOR_BACKEND` | 自动 | 有 `RAY_ADDRESS` 时自动为 `ray`，本地并行自动为 `mp`；显式使用 `ray` 必须同时设置 `RAY_ADDRESS`；跨节点 PP/TP 必须为 `ray` |
 | `QUANTIZATION` / `DTYPE` | `ascend` / `bfloat16` | 仅支持 `ascend` / `none`；当前目录必须用 `ascend` 读取 W8A8_DYNAMIC；`bfloat16` 是非量化参数、激活输出和主干计算 dtype，不是把量化权重转成 BF16 |
 | `MAX_MODEL_LEN` | `131072` | 最大上下文；1M 档自动设为 `1000000` |
-| `MAX_NUM_SEQS` / `MAX_NUM_BATCHED_TOKENS` | `64` / `32768` | 每副本调度容量和每 step 最大 token 数 |
+| `MAX_NUM_SEQS` / `MAX_NUM_BATCHED_TOKENS` | `64` / `32768` | 每副本调度容量和每 step 最大 token 数；DP4 总并发容量为 256 |
 | `GPU_MEM_UTIL` | `0.85` | NPU HBM 利用率上限 |
 | `ENABLE_MTP` | `1` | `qwen3_5_mtp`、3 speculative tokens；1M 档默认关闭 |
 | `DEFAULT_REASONING_EFFORT` | `xhigh` | 服务默认推理强度；仅支持 `xhigh` / `medium` / `low` |
@@ -524,6 +528,12 @@ A: 部署保持默认多模态模型，运行 `ENABLE_VISION=1 bash examples/qwe
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | `reasoning_effort` 实际请求 | ✅ | `xhigh`/`medium`/`low` 均 HTTP 200，`high` HTTP 400 |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M `curl_test.sh` 回归 | ✅ | 基础 API 与 900K 长上下文矩阵 PASS；工具调用 WARN，多模态 SKIP |
 | 2026-08-25 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | 1M TP8/DP1 吞吐 benchmark | ✅ | 256/128 单并发输出 64.88 tok/s；900K/128 输出 4.22 tok/s、总吞吐 29,683.71 tok/s |
+| 2026-08-26 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4, 32K, MTP on, warm cache | ✅ | 并发 128 输出 2196.09 tok/s；并发 256 输出 2579.94 tok/s，P99 TTFT 10.05 s |
+| 2026-08-26 | `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` | `10.16.201.229`, 8 NPU | TP2/DP4 参数对比 | ✅ | 48K 输出 1941.76 tok/s；32K 且 MTP off 输出 1929.32 tok/s，均低于最佳配置 |
+
+### 2026-08-26 调参结论
+
+单节点峰值吞吐配置保持 `TP=2 PP=1 DP=4`、`MAX_NUM_BATCHED_TOKENS=32768`、`MAX_NUM_SEQS=64`、MTP、Prefix Cache、Chunked Prefill、FULL decode graph 和 CPU binding。客户端并发 256 时测得 **2579.94 output tok/s**；若需要较短排队延迟，使用并发 128，测得 **2196.09 output tok/s**。48K batched tokens 和关闭 MTP 均未带来收益。Balance Scheduling 必须关闭。
 
 ### 2026-08-25 结论
 

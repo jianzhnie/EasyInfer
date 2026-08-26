@@ -5,7 +5,7 @@
 # Architecture: Qwen3_5ForConditionalGeneration | Dense hybrid attention
 # 64 layers (48 linear attention + 16 full attention) | Vision + MTP=1
 # Default profile: throughput (TP=2, DP=4, all 8 NPUs)
-# Optional profile: long-context-1m (TP=8, DP=1, static YaRN 4x)
+# Optional profile: long-context-1m (TP=4, DP=2, static YaRN 4x)
 #
 # Usage:
 #   bash run_vllm.sh
@@ -102,6 +102,8 @@ readonly ENABLE_YARN="${ENABLE_YARN:-$DEFAULT_ENABLE_YARN}"
 readonly YARN_FACTOR="${YARN_FACTOR:-4.0}"
 readonly YARN_ORIGINAL_MAX_MODEL_LEN="${YARN_ORIGINAL_MAX_MODEL_LEN:-262144}"
 readonly DEFAULT_REASONING_EFFORT="${DEFAULT_REASONING_EFFORT:-xhigh}"
+readonly ENABLE_AUTO_TOOL_CHOICE="${ENABLE_AUTO_TOOL_CHOICE:-1}"
+readonly TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-qwen3xml}"
 readonly CUDAGRAPH_MODE="${CUDAGRAPH_MODE:-FULL_DECODE_ONLY}"
 readonly DRY_RUN="${DRY_RUN:-0}"
 readonly VLLM_USE_V1="${VLLM_USE_V1:-1}"
@@ -228,7 +230,7 @@ if [[ "$DP" -gt 1 && "$PORT" == "$DP_RPC_PORT" ]]; then
 fi
 for boolean_var in ENABLE_MTP ENABLE_PREFIX_CACHING ENABLE_CHUNKED_PREFILL \
     ENABLE_CPU_BINDING LANGUAGE_MODEL_ONLY ENABLE_BALANCE_SCHEDULING \
-    ENABLE_YARN DRY_RUN VLLM_USE_V1; do
+    ENABLE_YARN ENABLE_AUTO_TOOL_CHOICE DRY_RUN VLLM_USE_V1; do
     if [[ "${!boolean_var}" != "0" && "${!boolean_var}" != "1" ]]; then
         echo "ERROR: $boolean_var must be 0 or 1 (got ${!boolean_var})" >&2
         exit 1
@@ -251,6 +253,10 @@ if [[ "$DEFAULT_REASONING_EFFORT" != "xhigh" && \
       "$DEFAULT_REASONING_EFFORT" != "medium" && \
       "$DEFAULT_REASONING_EFFORT" != "low" ]]; then
     echo "ERROR: DEFAULT_REASONING_EFFORT must be xhigh, medium, or low" >&2
+    exit 1
+fi
+if [[ -z "$TOOL_CALL_PARSER" || "$TOOL_CALL_PARSER" =~ [[:space:]] ]]; then
+    echo "ERROR: TOOL_CALL_PARSER must be a non-empty parser name without whitespace" >&2
     exit 1
 fi
 if [[ "$VLLM_USE_V1" == "0" && "$ENABLE_CHUNKED_PREFILL" == "1" ]]; then
@@ -372,6 +378,9 @@ fi
 if [[ "$ENABLE_MTP" == "1" ]]; then
     VLLM_ARGS+=(--speculative-config '{"method":"qwen3_5_mtp","num_speculative_tokens":3,"enforce_eager":true}')
 fi
+if [[ "$ENABLE_AUTO_TOOL_CHOICE" == "1" ]]; then
+    VLLM_ARGS+=(--enable-auto-tool-choice --tool-call-parser "$TOOL_CALL_PARSER")
+fi
 if [[ "$ENABLE_YARN" == "1" ]]; then
     VLLM_ARGS+=(--hf-overrides "$HF_OVERRIDES")
 fi
@@ -405,6 +414,7 @@ if [[ "$ENABLE_YARN" == "1" ]]; then
     echo "[INFO] HF_OVERRIDES=$HF_OVERRIDES"
 fi
 echo "[INFO] DEFAULT_REASONING_EFFORT=$DEFAULT_REASONING_EFFORT"
+echo "[INFO] AUTO_TOOL_CHOICE=$ENABLE_AUTO_TOOL_CHOICE TOOL_CALL_PARSER=$TOOL_CALL_PARSER"
 echo "[INFO] BALANCE_SCHEDULING=$ENABLE_BALANCE_SCHEDULING"
 echo "[INFO] FLASHCOMM1=$FLASHCOMM1 MLAPO=$MLAPO HCCL_BUFFSIZE=$HCCL_BUFFSIZE"
 echo "[INFO] Executor backend=${EXECUTOR_BACKEND:-default}"
