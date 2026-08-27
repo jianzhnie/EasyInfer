@@ -6,6 +6,7 @@
 #   DEPLOY_PROFILE=long-context-1m bash run_vllm.sh
 #   DEPLOY_PROFILE=long-context-1m TP=4 DP=2 DP_LOCAL=2 bash run_vllm.sh
 #   DEFAULT_REASONING_EFFORT=low bash run_vllm.sh
+#   EXPERIMENTAL_TUNING=1 bash run_vllm.sh
 #   DRY_RUN=1 bash run_vllm.sh
 set -euo pipefail
 
@@ -22,6 +23,8 @@ PORT="${PORT:-8022}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8}"
 DEPLOY_PROFILE="${DEPLOY_PROFILE:-throughput}"
 DEFAULT_REASONING_EFFORT="${DEFAULT_REASONING_EFFORT:-xhigh}"
+ENABLE_MTP="${ENABLE_MTP:-1}"
+EXPERIMENTAL_TUNING="${EXPERIMENTAL_TUNING:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # Optional topology overrides. Profile defaults use all 8 local NPUs.
@@ -42,7 +45,7 @@ case "$DEPLOY_PROFILE" in
         DP="${DP:-2}"
         DP_LOCAL="${DP_LOCAL:-$DP}"
         MAX_MODEL_LEN="${MAX_MODEL_LEN:-1000000}"
-        MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
+        MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
         MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
         ;;
     *)
@@ -76,6 +79,14 @@ done
 }
 [[ "$DEFAULT_REASONING_EFFORT" =~ ^(xhigh|medium|low)$ ]] || {
     echo "ERROR: DEFAULT_REASONING_EFFORT must be xhigh, medium, or low" >&2
+    exit 1
+}
+[[ "$ENABLE_MTP" == 0 || "$ENABLE_MTP" == 1 ]] || {
+    echo "ERROR: ENABLE_MTP must be 0 or 1" >&2
+    exit 1
+}
+[[ "$EXPERIMENTAL_TUNING" == 0 || "$EXPERIMENTAL_TUNING" == 1 ]] || {
+    echo "ERROR: EXPERIMENTAL_TUNING must be 0 or 1" >&2
     exit 1
 }
 [[ "$DRY_RUN" == 0 || "$DRY_RUN" == 1 ]] || {
@@ -115,14 +126,21 @@ export VLLM_ENGINE_READY_TIMEOUT_S=1800
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_OP_EXPANSION_MODE=AIV
-export HCCL_BUFFSIZE=512
 export HCCL_IF_IP="$DP_ADDRESS"
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export TASK_QUEUE_ENABLE=1
 export VLLM_ASCEND_BALANCE_SCHEDULING=0
-export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
 export VLLM_ASCEND_ENABLE_MLAPO=0
+
+ADDITIONAL_CONFIG='{"enable_cpu_binding":true}'
+export HCCL_BUFFSIZE=512
+export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+if [[ "$EXPERIMENTAL_TUNING" == 1 ]]; then
+    ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"enable_flashcomm1":true,"enable_reduce_sample":true}'
+    export HCCL_BUFFSIZE=1024
+    export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
+fi
 
 VLLM_ARGS=(
     --host 0.0.0.0
@@ -144,10 +162,23 @@ VLLM_ARGS=(
     --tool-call-parser qwen3_xml
     --default-chat-template-kwargs "{\"reasoning_effort\":\"$DEFAULT_REASONING_EFFORT\"}"
     --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
-    --additional-config '{"enable_cpu_binding":true}'
+    --additional-config "$ADDITIONAL_CONFIG"
     --distributed-executor-backend "$EXECUTOR_BACKEND"
     --seed 1024
 )
+
+if [[ "$ENABLE_MTP" == 1 ]]; then
+    VLLM_ARGS+=(
+        --speculative-config '{"method":"qwen3_5_mtp","num_speculative_tokens":3,"enforce_eager":true}'
+    )
+fi
+
+if [[ "$EXPERIMENTAL_TUNING" == 1 ]]; then
+    VLLM_ARGS+=(
+        --stream-interval 4
+        --disable-uvicorn-access-log
+    )
+fi
 
 if (( DP > 1 )); then
     VLLM_ARGS+=(
@@ -163,7 +194,6 @@ if [[ "$DEPLOY_PROFILE" == throughput ]]; then
     VLLM_ARGS+=(
         --mm-encoder-tp-mode data
         --allowed-local-media-path /home/jianzhnie/llmtuner/
-        --speculative-config '{"method":"qwen3_5_mtp","num_speculative_tokens":3,"enforce_eager":true}'
     )
 else
     VLLM_ARGS+=(
@@ -177,7 +207,8 @@ echo "Qwen3.8-27B-W8A8 / $DEPLOY_PROFILE"
 echo "model=$MODEL_PATH name=$SERVED_MODEL_NAME port=$PORT"
 echo "TP=$TP PP=$PP DP=$DP DP_LOCAL=$DP_LOCAL backend=$EXECUTOR_BACKEND"
 echo "max_len=$MAX_MODEL_LEN seqs=$MAX_NUM_SEQS batched_tokens=$MAX_NUM_BATCHED_TOKENS"
-echo "reasoning=$DEFAULT_REASONING_EFFORT tools=qwen3_xml"
+echo "reasoning=$DEFAULT_REASONING_EFFORT tools=qwen3_xml MTP=$ENABLE_MTP experimental=$EXPERIMENTAL_TUNING"
+echo "HCCL_BUFFSIZE=$HCCL_BUFFSIZE FLASHCOMM1=$VLLM_ASCEND_ENABLE_FLASHCOMM1"
 echo "============================================"
 
 if [[ "$DRY_RUN" == 1 ]]; then
