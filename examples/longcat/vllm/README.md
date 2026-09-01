@@ -1,11 +1,11 @@
 # LongCat-Flash-Chat BF16 部署指南
 
-> **vLLM-Ascend v0.23.0rc1** | 端口: **8010**
+> **vLLM-Ascend v0.23.0rc1-a3** | 端口: **8010**
 > 架构: LongcatFlashForCausalLM | 512 Routed + 256 Zero Experts | MoE + MLA
-> 已验证配置: **TP=64 EP=64 PP=1** (8 节点) / **PP=4 TP=32 EP=32** (16 节点) | 上下文: 4096 ~ 131072 | BF16 无量化
+> 已验证配置: **TP=64 + EP PP=1** (8 节点) / **PP=4 TP=32 + EP** (16 节点) | 上下文: 4096 ~ 131072 | BF16 无量化
 > 注意: 需要 EasyInfer 插件注册 EP 修复；MC2 MoE comm 与 Zero Expert 权重置零不兼容
 > 插件清单及各插件作用见 [docs/longcat_plugins.md](../../../docs/longcat_plugins.md)
-> 验证状态: ✅ 已验证 (2026-07-27, EP + ALLGATHER, PP=2/PP=4)
+> 验证状态: ✅ 目标镜像插件/算子已验证 (2026-08-31)；完整服务需至少 64 张 NPU（历史 64/128 卡服务记录见文末）
 
 超大规模 MoE 模型（约 560B 参数，512 路由专家，TopK=12），最小需要 64 张 NPU 部署。
 
@@ -22,7 +22,7 @@
 | **rope_theta** | 10000000.0 |
 | **原生上下文** | **131072** |
 | **量化方式** | BF16 (无量化)，权重 ≈1.1T (75 个 safetensors 分片) |
-| **MTP** | ❌ 不支持 |
+| **MTP** | 服务路径不启用投机解码（checkpoint 含 17 个 MTP 权重，加载时过滤） |
 | **PP 支持** | ✅ 支持 Pipeline Parallelism |
 | **多模态** | ❌ 纯文本 |
 | **词表大小** | 131072 |
@@ -33,7 +33,7 @@
 
 - **MLA 注意力**仅支持 block_size=128，可通过 `BLOCK_SIZE` 覆盖
 - **MC2 MoE comm** 与 Zero Expert 权重置零不兼容（MoeDistributeCombineV2 shape check 失败 → collective hang），EasyInfer 插件通过 `EASYINFER_MOE_COMM=allgather` 覆盖 comm 为 ALLGATHER
-- **Chunked Prefill** 与 EP token dispatch 冲突，默认禁用
+- **Chunked Prefill** 在 MC2 通信下与 EP token dispatch 冲突，默认部署禁用；ALLGATHER 长上下文封装已验证可用
 - 模型包含 256 个 Zero (Identity) 专家，vLLM ≥ 0.23 下启用原生零号专家路径（`fix_ep_zero_expert.py`）
 
 ### 官方文档参考
@@ -55,39 +55,53 @@
 
 ```bash
 # 1. 启动 NPU Docker 容器
-bash scripts/docker/manage_npuslim_containers.sh start --file node_list1.txt
+# NODE_LIST 必须是包含至少 8 个节点（64 NPU）的实际节点文件。
+# 当前仓库的 node_list.txt 只有当前节点 10.16.201.229（8 NPU），不能直接部署完整模型。
+NODE_LIST="${NODE_LIST:-/path/to/longcat-8nodes.txt}"
+bash scripts/docker/manage_npuslim_containers.sh start --file "$NODE_LIST"
 
 # 2. 启动 Ray 集群
-bash scripts/ray_cluster/manage_npuslim_ray_cluster.sh start --file node_list1.txt
+bash scripts/ray_cluster/manage_npuslim_ray_cluster.sh start --file "$NODE_LIST"
 
-# 验证: 确认 8 节点、64 NPU 全部就绪
-ssh 10.42.11.130 "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
+# 验证: 确认至少 64 NPU 全部就绪；HEAD 为节点文件第一行
+HEAD="$(awk 'NF && !/^#/ {print $1; exit}' "$NODE_LIST")"
+ssh "$HEAD" "docker exec vllm-ascend-env ray status | grep -E 'NPU|Active'"
+
+# 多节点部署必填，确保 engine-core 连接已有 Ray 集群
+export RAY_ADDRESS="${HEAD}:6379"
 ```
 
 ### 部署
 
 ```bash
 # EP 模式 (专家并行, 已验证; 必须 ALLGATHER comm, 脚本默认已带)
-EP=1 EASYINFER_MOE_COMM=allgather bash examples/longcat/vllm/run_vllm.sh
+RAY_ADDRESS=<head-ip>:6379 EP=1 EASYINFER_MOE_COMM=allgather \
+  bash examples/longcat/vllm/run_vllm.sh
 
 # PP 模式 (PP=2, 8 节点 / PP=4, 16 节点)
-PP=2 TP=32 EP=1 bash examples/longcat/vllm/run_vllm.sh
-PP=4 TP=32 EP=1 bash examples/longcat/vllm/run_vllm.sh   # 需 node_list.txt 全部 16 节点
+RAY_ADDRESS=<head-ip>:6379 PP=2 TP=32 EP=1 \
+  bash examples/longcat/vllm/run_vllm.sh
+RAY_ADDRESS=<head-ip>:6379 PP=4 TP=32 EP=1 \
+  bash examples/longcat/vllm/run_vllm.sh   # 需 NODE_LIST 包含全部 16 节点
 
 # 纯 TP 模式 (EP=0)
-EP=0 bash examples/longcat/vllm/run_vllm.sh
+RAY_ADDRESS=<head-ip>:6379 EP=0 bash examples/longcat/vllm/run_vllm.sh
 
-# 自定义上下文
-TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 bash examples/longcat/vllm/run_vllm.sh
+# 自定义上下文（基础脚本默认 4K；长上下文请使用下方封装）
+RAY_ADDRESS=<head-ip>:6379 TP=64 MAX_MODEL_LEN=8192 MAX_NUM_SEQS=64 \
+  bash examples/longcat/vllm/run_vllm.sh
 
 # 最大上下文模式 (131072 / 128K, 参考 vllm-ascend GLM-5.2 1M 教程裁剪)
-PP=4 TP=32 EP=1 bash examples/longcat/vllm/run_vllm_long-context.sh
+RAY_ADDRESS=<head-ip>:6379 PP=4 TP=32 EP=1 \
+  bash examples/longcat/vllm/run_vllm_long-context.sh
 
 # 最大吞吐 (FP8 KV cache + 高并发)
-KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64 MAX_NUM_BATCHED_TOKENS=32768 bash examples/longcat/vllm/run_vllm_long-context.sh
+RAY_ADDRESS=<head-ip>:6379 KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64 \
+  MAX_NUM_BATCHED_TOKENS=32768 bash examples/longcat/vllm/run_vllm_long-context.sh
 
 # 图模式有问题时回退 eager
-ENFORCE_EAGER=1 bash examples/longcat/vllm/run_vllm_long-context.sh
+RAY_ADDRESS=<head-ip>:6379 ENFORCE_EAGER=1 \
+  bash examples/longcat/vllm/run_vllm_long-context.sh
 ```
 
 ### 验证
@@ -105,6 +119,15 @@ curl -s http://localhost:8010/v1/chat/completions \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])"
 ```
 
+### 当前代码验证结果
+
+在 `quay.io/ascend/vllm-ascend:v0.23.0rc1-a3` 中已完成以下验证：
+
+- `vllm==0.23.0+empty`、`vllm-ascend==0.23.0rc1`，脚本使用的 vLLM CLI 参数全部存在；
+- `PYTHONPATH=. python -m pytest -q tests/plugins`：8 项通过；`compileall`、`bash -n`、`git diff --check` 通过；
+- 使用真实 8 卡 NPU 容器执行 EasyInfer `register()`：13 个 LongCat patch 成功应用，模型配置解析为 `model_type=longcat_flash`、`num_hidden_layers=28`、`max_position_embeddings=131072`；
+- 当前节点文件只有 1 个节点（8 卡），不足以启动约 1.1 TB 的 LongCat-Flash-Chat；完整服务、EP collective、模型加载和 API 请求必须在至少 64 卡 Ray 集群上按上面的流程验证。
+
 ## 推荐配置 (吞吐/显存平衡)
 
 > 依据 2026-07-27 实测: 权重 PP=4 下仅 8.6G/rank, MLA latent KV ~1.05G/rank/128K seq,
@@ -112,10 +135,10 @@ curl -s http://localhost:8010/v1/chat/completions \
 
 | 场景 | 配置 | 说明 |
 |------|------|------|
-| **全能型 (推荐)** | 16 节点, PP=4 TP=32 EP=32, `run_vllm_long-context.sh` | 默认 MAX_NUM_SEQS=32, ENFORCE_EAGER=0 (CUDA graph), 上下文 4K~128K 通吃; TP=32 all-reduce 只跨 4 节点 (比 TP=64 跨 8 节点省通信), EP=32 每 rank 16 专家计算密度好, PP=4 权重减半腾出 KV 空间 |
-| 省资源型 | 8 节点, PP=2 TP=32 EP=32, `run_vllm.sh` | 64 NPU 即可跑 128K (KV 2.1G/rank/seq); PP 层级少单请求延迟略优; 让出 8 节点给其他任务 |
-| 低延迟短上下文 | 8 节点, TP=64 EP=64 PP=1, `run_vllm.sh` | 无流水线气泡, 4K 上下文 decode ~23 tok/s |
-| 极限并发 | 16 节点, PP=4 TP=32 EP=32 + FP8 KV cache | `KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64`, KV cache 容量翻倍 (~5.4M tokens), ~41 个 128K 并发 |
+| **全能型 (推荐)** | 16 节点, PP=4 TP=32, EP 开启, `run_vllm_long-context.sh` | 默认 MAX_NUM_SEQS=32, ENFORCE_EAGER=0 (CUDA graph), 上下文 4K~128K 通吃; TP=32 all-reduce 只跨 4 节点 (比 TP=64 跨 8 节点省通信), EP 由拓扑推导, PP=4 权重减半腾出 KV 空间 |
+| 省资源型 | 8 节点, PP=2 TP=32, EP 开启, `run_vllm.sh` | 64 NPU 即可跑 128K (KV 2.1G/rank/seq); PP 层级少单请求延迟略优; 让出 8 节点给其他任务 |
+| 低延迟短上下文 | 8 节点, TP=64, EP 开启, PP=1, `run_vllm.sh` | 无流水线气泡, 4K 上下文 decode ~23 tok/s |
+| 极限并发 | 16 节点, PP=4 TP=32, EP 开启 + FP8 KV cache | `KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64`, KV cache 容量翻倍 (~5.4M tokens), ~41 个 128K 并发 |
 
 其他关键参数: `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` (长上下文必须, 整吞 OOM; 显存充足可提升到 32768 加速 prefill)、
 `GPU_MEM_UTIL=0.92` (可尝试 0.95 极限挤压)、`EASYINFER_MOE_COMM=allgather` (EP 必须)、
@@ -159,14 +182,14 @@ ENFORCE_EAGER=0 VLLM_DEBUG_DUMP=/tmp/dump bash run_vllm_long-context.sh
 
 | 场景 | TP | EP | PP | NPU | 上下文 | 量化 | 状态 |
 |------|-----|-----|-----|-----|--------|------|------|
-| EP | 64 | 64 | 1 | 64 | 4K | BF16 | ✅ |
-| PP+EP | 32 | 32 | 2 | 64 | 4K | BF16 | ✅ |
-| PP+EP (16 节点) | 32 | 32 | 4 | 128 | 4K | BF16 | ✅ |
-| 长上下文 (16 节点) | 32 | 32 | 4 | 128 | **128K** | BF16 | ✅ |
+| EP | 64 | 开启 | 1 | 64 | 4K | BF16 | ✅ |
+| PP+EP | 32 | 开启 | 2 | 64 | 4K | BF16 | ✅ |
+| PP+EP (16 节点) | 32 | 开启 | 4 | 128 | 4K | BF16 | ✅ |
+| 长上下文 (16 节点) | 32 | 开启 | 4 | 128 | **128K** | BF16 | ✅ |
 | 纯 TP | 64 | — | 1 | 64 | 4K | BF16 | ✅ |
 
-> EP=1 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11-13 分钟（128 卡更久）。
-> PP>1 时 28 层按 stage 均分（PP=2 每 stage 14 层，PP=4 每 stage 7 层），命令示例：`PP=2 TP=32 EP=1 bash run_vllm.sh`。
+> `EP=1` 表示启用专家并行开关，EP world size 由 TP/PP/DP 拓扑推导；不要写 `EP=32` 或 `EP=64`。EP 模式下必须 ALLGATHER comm（`EASYINFER_MOE_COMM=allgather`，脚本默认）避免 MC2 冲突。模型加载约需 11-13 分钟（128 卡更久）。
+> PP>1 时 28 层按 stage 均分（PP=2 每 stage 14 层，PP=4 每 stage 7 层），命令示例：`RAY_ADDRESS=<head-ip>:6379 PP=2 TP=32 EP=1 bash run_vllm.sh`。
 > 长上下文用 `run_vllm_long-context.sh`：`MAX_MODEL_LEN=131072`、`CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384`（整吞 128K 会 OOM，须分块喂入）、`MAX_NUM_SEQS=32`、`GPU_MEM_UTIL=0.92`、`ENFORCE_EAGER=0`（CUDA graph 默认开启）。完整参数说明见脚本头部注释。
 
 ## 环境变量
@@ -189,7 +212,7 @@ A: 模型权重约 1.1T（75 个 safetensors 分片）+ 64 卡 HCCL 初始化，
 
 ### Q: 长上下文 (128K) 部署与默认配置有什么区别?
 
-A: 核心差异：① `MAX_MODEL_LEN=131072`（模型原生上限）；② `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` 分块喂入——整吞方案（batched_tokens=132096）会因 ALLGATHER comm 持久缓冲（~30G）+ 单步 prefill 尖峰（18.1G）在 64G 卡上 OOM；③ `MAX_NUM_SEQS=32`（默认，平衡并发与 KV 碎片，纯长上下文可降到 16，混合流量可提到 128）；④ `GPU_MEM_UTIL=0.92` 给 KV cache 让空间（实测 KV cache 271 万 tokens，131072 单请求 20.73x 并发容量）；⑤ `ENFORCE_EAGER=0` 默认开启 CUDA graph，decode 吞吐提升 20-50%（`run_vllm.sh` 默认 eager 模式）。额外吞吐优化：`KV_CACHE_DTYPE=fp8` 容量翻倍、`PREFIX_CACHING=1` 开启 APCache、`HCCL_BUFFSIZE=1024` 提升通信效率。GLM-5.2 1M 方案中的 MTP/DSA/PCP/DCP 对 LongCat 不适用（无 MTP、无稀疏注意力、MLA latent KV 小，128K 无需上下文并行）。实测用 `ENABLE_LONG_CONTEXT=1 bash curl_test.sh`（大海捞针矩阵，含针位置/多针/中文/多轮用例，`LONG_CONTEXT_CASES` 可选择）。
+A: 核心差异：① `MAX_MODEL_LEN=131072`（模型原生上限）；② `CHUNKED_PREFILL=1` + `MAX_NUM_BATCHED_TOKENS=16384` 分块喂入——整吞方案（batched_tokens=132096）会因 ALLGATHER comm 持久缓冲（~30G）+ 单步 prefill 尖峰（18.1G）在 64G 卡上 OOM；③ `MAX_NUM_SEQS=32`（默认，平衡并发与 KV 碎片，纯长上下文可降到 16，混合流量可提到 128）；④ `GPU_MEM_UTIL=0.92` 给 KV cache 让空间（实测 KV cache 271 万 tokens，131072 单请求 20.73x 并发容量）；⑤ `ENFORCE_EAGER=0` 默认开启 CUDA graph，decode 吞吐提升 20-50%（`run_vllm.sh` 默认 eager 模式）。额外吞吐优化：`KV_CACHE_DTYPE=fp8` 容量翻倍、`PREFIX_CACHING=1` 开启 APCache、`HCCL_BUFFSIZE=1024` 提升通信效率。GLM-5.2 1M 方案中的 MTP/DSA/PCP/DCP 对 LongCat 不适用（LongCat 服务不启用 MTP 投机解码、无稀疏注意力，MLA latent KV 小，128K 无需上下文并行）。实测用 `ENABLE_LONG_CONTEXT=1 bash curl_test.sh`（大海捞针矩阵，含针位置/多针/中文/多轮用例，`LONG_CONTEXT_CASES` 可选择）。
 
 ### Q: 部署时为什么提示 "failed to map segment from shared object"?
 
@@ -198,19 +221,21 @@ A: 编译缓存损坏。清理缓存后重启：
 docker exec vllm-ascend-env bash -c 'rm -rf /root/.cache/vllm/*'
 ```
 
-### Q: 服务为什么起在 8200 而不是 8010?
+### Q: 如何修改服务端口?
 
-A: 容器镜像预设了 `PORT=8200` 环境变量，`run_vllm.sh` 的 `PORT` 默认读取环境。部署命令显式带 `PORT=8010` 即可。
+A: 默认端口为 `8010`。通过 `PORT=9000 bash run_vllm.sh` 修改部署端口，测试时使用相同的 `PORT=9000 bash curl_test.sh`。
 
 ### Q: 启动秒退, 报 "Ray 集群只有 X NPU, 当前配置需要 Y"?
 
-A: 这是 `run_vllm.sh` 的前置校验：并行配置 (TP×PP×DP) 超过了 Ray 集群实际 NPU 数——通常是容器/集群重启后节点变少，或节点文件用错（8 节点用 `node_list1.txt`/`node_list2.txt`，16 节点用 `node_list.txt`）。以前这种情况 vllm 会无报错挂死在 placement group 等待上，现在 fail-fast。同时脚本还会校验 PP 必须整除 28 层。
+A: 这是 `run_vllm.sh` 的前置校验：并行配置 (TP×PP×DP) 超过了 Ray 集群实际 NPU 数——通常是容器/集群重启后节点变少，或节点文件填写不完整。请确认 `NODE_LIST` 包含所需节点（64 卡配置至少 8 个、128 卡配置至少 16 个），并检查 Ray 状态。以前这种情况 vllm 会无报错挂死在 placement group 等待上，现在 fail-fast。同时脚本还会校验 PP 必须整除 28 层。
 
 ## 验证记录
 
+> 下表中的 2026-07-27 日志来自历史 64/128 卡集群运行；日志文件未随当前工作区保留。
+
 | 时间 | 镜像 | 节点 | 配置 | 结果 | 日志 | 说明 |
 |------|------|------|------|------|------|------|
-| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | TP=64 EP=64, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_031627.log` | curl_test 全部 PASS，54 个 patch 全部生效，无刷屏告警/无 EZ1001 |
-| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | PP=2 TP=32 EP=32, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_034459.log` | curl_test 全部 PASS，PP stage 均分 14 层，无报错 |
-| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32 EP=32, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_040323.log` | 冒烟 PASS，PP stage 均分 7 层，128 卡加载 13 分钟，无报错 |
-| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32 EP=32, 128K, chunked prefill | ✅ | `logs/vllm_longcat_20260727_043057.log` | KV cache 271万 tokens (131072 单请求 20.73x)；curl_test 回归 PASS；130040 tokens 大海捞针命中，8s 完成。注: 整吞方案 (batched=132096) OOM，须 chunked prefill |
+| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | TP=64, EP 开启, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_031627.log` | curl_test 全部 PASS，54 个 patch 全部生效，无刷屏告警/无 EZ1001 |
+| 2026-07-27 | v0.23.0rc1-a3 | 8×8 NPU | PP=2 TP=32, EP 开启, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_034459.log` | curl_test 全部 PASS，PP stage 均分 14 层，无报错 |
+| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32, EP 开启, ALLGATHER | ✅ | `logs/vllm_longcat_20260727_040323.log` | 冒烟 PASS，PP stage 均分 7 层，128 卡加载 13 分钟，无报错 |
+| 2026-07-27 | v0.23.0rc1-a3 | 16×8 NPU | PP=4 TP=32, EP 开启, 128K, chunked prefill | ✅ | `logs/vllm_longcat_20260727_043057.log` | KV cache 271万 tokens (131072 单请求 20.73x)；curl_test 回归 PASS；130040 tokens 大海捞针命中，8s 完成。注: 整吞方案 (batched=132096) OOM，须 chunked prefill |

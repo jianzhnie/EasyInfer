@@ -3,15 +3,15 @@
 # LongCat-Flash-Chat — Direct vllm serve deployment
 # =============================================================================
 # Architecture: LongcatFlashForCausalLM | 512 Routed Experts + 256 Zero | MLA
-# Default: TP=64 EP=64 PP=1 (multi-node via Ray, 8 nodes × 8 NPU)
+# Default: TP=32, EP enabled, PP=2 (64 NPU via Ray, 8 nodes × 8 NPU)
 # Note: Massive MoE model (~560B params, 512 experts, topk=12), requires 64
 #       NPUs minimum. Uses --trust-remote-code for custom modeling code.
 #       No quantization (bfloat16 native weights).
 #
 # Usage:
-#   bash run_vllm.sh                          # EP mode (default, EP=1)
-#   EP=0 bash run_vllm.sh                     # pure TP mode
-#   TP=64 MAX_MODEL_LEN=8192 bash run_vllm.sh
+#   RAY_ADDRESS=<head-ip>:6379 bash run_vllm.sh  # EP mode (default, EP=1)
+#   RAY_ADDRESS=<head-ip>:6379 EP=0 bash run_vllm.sh  # pure TP mode
+#   RAY_ADDRESS=<head-ip>:6379 TP=64 MAX_MODEL_LEN=8192 bash run_vllm.sh
 #
 # Notes:
 #   - MLA attention kernel only supports block size 128; baked in
@@ -21,6 +21,8 @@
 #     (MoeDistributeCombineV2 shape check fails -> collective hang).
 #     The EasyInfer plugin overrides the comm method to ALLGATHER via
 #     EASYINFER_MOE_COMM=allgather (set automatically when EP=1).
+#   - Multi-node Ray deployments must set RAY_ADDRESS=<head-ip>:6379 so
+#     engine-core processes join the existing cluster.
 #
 # Reference:
 #   https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/index.html
@@ -41,16 +43,17 @@ set -u
 readonly BASE_MODEL_PATH="/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/LongCat-Flash-Chat}"
 readonly HOST="${HOST:-0.0.0.0}"
-readonly PORT="${PORT:-8200}"
+readonly PORT="${PORT:-8010}"
 readonly TP="${TP:-32}"
 readonly PP="${PP:-2}"
 readonly DP="${DP:-1}"
 readonly ENABLE_EP="${EP:-1}"
 readonly EXECUTOR="${EXECUTOR:-ray}"
-readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-65536}"
+readonly RAY_ADDRESS="${RAY_ADDRESS:-}"
+readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
 readonly DTYPE="${DTYPE:-bfloat16}"
 # MLA attention kernel only supports block size 128 on this image.
@@ -64,14 +67,21 @@ readonly ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
 readonly PREFIX_CACHING="${PREFIX_CACHING:-0}"
 
 # ------------------------------------------------------------------------------
-# Ensure EasyInfer plugins are registered (model registration, EP fixes)
+# Ensure EasyInfer is installed.  vLLM loads the package through its
+# ``vllm.general_plugins`` entry point in every API/engine/worker process;
+# applying a monkey patch in this launcher process would not propagate.
 # ------------------------------------------------------------------------------
-pip install --no-build-isolation --no-deps -e /home/jianzhnie/llmtuner/llm/EasyInfer --quiet 2>/dev/null || true
+if ! python -c "import importlib.metadata as m; d=m.distribution('easyinfer'); assert any(ep.group == 'vllm.general_plugins' and ep.name == 'easyinfer' for ep in d.entry_points)" >/dev/null 2>&1; then
+    python -m pip install --no-build-isolation --no-deps \
+        -e /home/jianzhnie/llmtuner/llm/EasyInfer
+fi
 
-# ------------------------------------------------------------------------------
-# Apply vllm-ascend LongCat patches (dual-attention, MLA rotary, layernorm)
-# ------------------------------------------------------------------------------
-python -c "from vllm_ascend.models.longcat.apply import apply; apply()" 2>/dev/null || true
+# LongCat compatibility settings are consumed by EasyInfer's per-process
+# general plugin.  Fused gating is disabled by default for the validated
+# A3/CANN graph path; override with VLLM_LONGCAT_DISABLE_FUSED_GATING=0 only
+# after confirming the installed CANN build is stable.
+export VLLM_LONGCAT_PATCH="${VLLM_LONGCAT_PATCH:-1}"
+export VLLM_LONGCAT_DISABLE_FUSED_GATING="${VLLM_LONGCAT_DISABLE_FUSED_GATING:-1}"
 
 # ------------------------------------------------------------------------------
 # Log file (default: <repo>/logs/vllm_longcat_<timestamp>.log, override with LOG_FILE)
@@ -90,7 +100,10 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # ------------------------------------------------------------------------------
 # Auto-detect network interface
 if [[ -z "${HCCL_SOCKET_IFNAME:-}" ]]; then
-    HCCL_SOCKET_IFNAME="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+    if command -v ip >/dev/null 2>&1; then
+        HCCL_SOCKET_IFNAME="$(ip -o -4 route show default 2>/dev/null \
+            | awk '{print $5}' | head -1 || true)"
+    fi
     HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
 fi
 if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
@@ -100,6 +113,9 @@ fi
 export HCCL_OP_EXPANSION_MODE=AIV
 export HCCL_SOCKET_IFNAME
 export GLOO_SOCKET_IFNAME
+if [[ -n "$RAY_ADDRESS" ]]; then
+    export RAY_ADDRESS
+fi
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=1
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-800}"
@@ -139,6 +155,15 @@ fi
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
 [[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
+# vLLM requires a full-context scheduler budget when chunked prefill is off.
+# Fail before worker startup with an actionable message.
+if [[ "$CHUNKED_PREFILL" == "0" ]] && (( MAX_NUM_BATCHED_TOKENS < MAX_MODEL_LEN )); then
+    echo "[ERROR] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS must be >= " \
+        "MAX_MODEL_LEN=$MAX_MODEL_LEN when CHUNKED_PREFILL=0" >&2
+    echo "        Set CHUNKED_PREFILL=1 or raise MAX_NUM_BATCHED_TOKENS." >&2
+    exit 2
+fi
+
 # 层数必须能被 PP 均分 (LongCat-Flash 共 28 层)
 if (( 28 % PP != 0 )); then
     echo "[ERROR] PP=$PP 无法整除模型 28 层, 可选 PP=1/2/4/7/14/28" >&2
@@ -149,8 +174,15 @@ fi
 # group (无报错挂起), 提前退出更省时间
 REQUIRED_NPUS=$((TP * PP * DP))
 if [[ "$EXECUTOR" == "ray" ]] && command -v ray >/dev/null 2>&1; then
-    AVAIL_NPUS=$(ray status 2>/dev/null | grep -oE '[0-9]+\.[0-9]+/[0-9]+\.[0-9]+ NPU' \
-        | head -1 | cut -d/ -f2 | cut -d. -f1)
+    if command -v timeout >/dev/null 2>&1; then
+        AVAIL_NPUS=$(timeout 15 ray status 2>/dev/null \
+            | grep -oE '[0-9]+\.[0-9]+/[0-9]+\.[0-9]+ NPU' \
+            | head -1 | cut -d/ -f2 | cut -d. -f1 || true)
+    else
+        AVAIL_NPUS=$(ray status 2>/dev/null \
+            | grep -oE '[0-9]+\.[0-9]+/[0-9]+\.[0-9]+ NPU' \
+            | head -1 | cut -d/ -f2 | cut -d. -f1 || true)
+    fi
     if [[ -n "$AVAIL_NPUS" ]]; then
         if (( AVAIL_NPUS < REQUIRED_NPUS )); then
             echo "[ERROR] Ray 集群只有 ${AVAIL_NPUS} NPU, 当前配置需要 ${REQUIRED_NPUS}" \
@@ -161,6 +193,12 @@ if [[ "$EXECUTOR" == "ray" ]] && command -v ray >/dev/null 2>&1; then
     else
         echo "[WARN] 无法从 ray status 解析 NPU 数, 跳过集群容量检查"
     fi
+fi
+
+if [[ "$EXECUTOR" == "ray" && "$REQUIRED_NPUS" -gt 8 && -z "$RAY_ADDRESS" ]]; then
+    echo "[ERROR] 多节点配置 (需要 ${REQUIRED_NPUS} NPU) 必须设置 RAY_ADDRESS=<head-ip>:6379" >&2
+    echo "        例如: RAY_ADDRESS=10.16.201.229:6379 PP=${PP} TP=${TP} bash run_vllm.sh" >&2
+    exit 3
 fi
 
 # EP + 空 EASYINFER_MOE_COMM = 走 MC2, 对本模型是已知挂起点
@@ -179,6 +217,7 @@ echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] SERVED_MODEL_NAME: $SERVED_MODEL_NAME"
 echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
+echo "[INFO] RAY_ADDRESS=${RAY_ADDRESS:-<unset>}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
 echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS CHUNKED_PREFILL=$CHUNKED_PREFILL BLOCK_SIZE=$BLOCK_SIZE"
 echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL EASYINFER_MOE_COMM=${EASYINFER_MOE_COMM:-<unset>}"

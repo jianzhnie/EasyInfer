@@ -12,10 +12,11 @@
 #   nohup bash examples/longcat/longcat_server.sh > longcat_flash-chat4.log 2>&1 &
 #
 #   # 从远程节点启动 (SSH + docker exec)
-#   NODE=10.42.11.130 bash examples/longcat/longcat_server.sh --remote
+#   NODE=10.16.201.229 bash examples/longcat/longcat_server.sh --remote
 #
 #   环境变量覆盖:
-#   PP=4 TP=32 MAX_MODEL_LEN=131072 bash examples/longcat/longcat_server.sh
+#   RAY_ADDRESS=<head-ip>:6379 PP=4 TP=32 MAX_MODEL_LEN=131072 \
+#     bash examples/longcat/longcat_server.sh
 #
 # =============================================================================
 set -euo pipefail
@@ -24,28 +25,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # 默认并行配置
-export PP="${PP:-1}"
-export TP="${TP:-64}"
+export PP="${PP:-2}"
+export TP="${TP:-32}"
 export EP="${EP:-1}"
 
-export MODEL_PATH="${MODEL_PATH:-/home/fdd/workspace/mindspeed-0616/MindSpeed-LLM/TrainingLogs/finetune_longcat_flash_1.2T_32k_A3_ptd_psm_0128nodes/PowerStep/hf_model_reshard169}"
-# export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
-export SERVED_MODEL_NAME="longcat_flash"
-export PORT=8000
+export MODEL_PATH="${MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
+export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash}"
+export PORT="${PORT:-8010}"
+export RAY_ADDRESS="${RAY_ADDRESS:-}"
 
 # ---------------------------------------------------------------------------
 # --remote: 从远程节点 SSH + docker exec
 # ---------------------------------------------------------------------------
 if [[ "${1:-}" == "--remote" ]]; then
-    NODE="${NODE:-10.42.11.130}"
+    NODE="${NODE:-10.16.201.229}"
     CONTAINER="${CONTAINER:-vllm-ascend-env}"
 
     echo "[INFO] 远程启动: ssh ${NODE} -> docker exec ${CONTAINER}"
-    echo "[INFO] PP=$PP TP=$TP EP=$EP"
+    RAY_ADDRESS="${RAY_ADDRESS:-${NODE}:6379}"
+    echo "[INFO] PP=$PP TP=$TP EP=$EP RAY_ADDRESS=$RAY_ADDRESS"
     echo ""
 
     ssh "$NODE" \
-        "docker exec ${CONTAINER} bash -c 'cd ${REPO_ROOT} && PP=${PP} TP=${TP} EP=${EP} bash examples/longcat/longcat_server.sh'"
+        "docker exec ${CONTAINER} bash -c 'cd ${REPO_ROOT} && RAY_ADDRESS=${RAY_ADDRESS} PP=${PP} TP=${TP} EP=${EP} bash examples/longcat/longcat_server.sh'"
 
     exit 0
 fi
@@ -62,7 +64,7 @@ fi
 cd "$REPO_ROOT"
 
 echo "[INFO] 容器内启动 LongCat-Flash-Chat"
-echo "[INFO] PP=$PP TP=$TP EP=$EP"
+echo "[INFO] PP=$PP TP=$TP EP=$EP RAY_ADDRESS=${RAY_ADDRESS:-<unset>}"
 echo ""
 
 exec bash examples/longcat/vllm/run_vllm_long-context.sh

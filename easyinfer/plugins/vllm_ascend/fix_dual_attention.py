@@ -81,7 +81,7 @@ def _patch_extract_layer_index_globally() -> None:
             mod.extract_layer_index = _extract_layer_index_safe
             swapped.append(mod.__name__)
     patch_logger.info(
-        "[fix_dual_attention] extract_layer_index swapped in: %s",
+        "[fix_dual_attention] extract_layer_index swapped in: {}",
         ", ".join(swapped) if swapped else "(none yet imported)",
     )
 

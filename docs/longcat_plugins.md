@@ -21,6 +21,10 @@ easyinfer/plugins/
 
 | 插件 | 目标模块 | 作用 |
 |------|---------|------|
+| `vllm_ascend/longcat_process.py` | `vllm_ascend` | 在 `VLLM_LONGCAT_PATCH=1` 时为每个 vLLM 进程关闭 NPU internal format，并可关闭不稳定的 fused gating |
+| `vllm_ascend/fix_mla_decode.py` | `vllm_ascend.attention.mla_v1` | LongCat decode 使用 `npu_transpose_batchmatmul`，并保持 `W_UK_T` 为 ND，适配 A3 graph capture |
+| `vllm_ascend/fix_moe_selector.py` | `vllm_ascend.ops.fused_moe.experts_selector` | 在 `VLLM_LONGCAT_PATCH=1` 时修正 correction bias 和 routed scaling；hash/remap 路径回退到上游实现，避免影响其他 MoE |
+| `vllm_ascend/fix_profile_warmup.py` | `vllm_ascend.worker.model_runner_v1` | profile warmup 用设备侧 `arange` + `index_select`，避免 CPU advanced indexing |
 | `vllm_ascend/ops/fused_moe/fix_ep_zero_expert.py` | `fused_moe_0_23_0` / `fused_moe` / `ascend_forward_context` / `moe_runner` | **EP 零号专家修复（vllm ≥ 0.23）**，含 4 个 patch，见下文 |
 | `vllm_ascend/ops/fused_moe/zero_expert_fused_moe.py` | OOT 注册 `ZeroExpertFusedMoE` | vllm < 0.23 的 EP 路由覆盖（prepare→route→过滤零号专家→apply→finalize）。当前镜像 vllm 0.23 下自动跳过，不生效 |
 | `vllm_ascend/fix_dual_attention.py` | `vllm_ascend.patch.worker.patch_deepseek_v2` | LongCat 双注意力/多 MLP 产生双整数层名（`model.layers.0.self_attn.0`），原生 `extract_layer_index` 断言失败。替换为容忍多整数前缀的版本并全局清扫所有引用 |
@@ -29,7 +33,7 @@ easyinfer/plugins/
 
 #### fix_ep_zero_expert.py 的 4 个 patch
 
-LongCat-Flash 含 512 个 Zero (Identity) 专家，EP 下这是乱码/挂起的主要来源：
+LongCat-Flash 含 512 个路由专家和 256 个 Zero (Identity) 专家，EP 下零号专家路径是乱码/挂起的主要来源：
 
 1. **Patch 0b — 启用原生零号专家路径**（目标 `fused_moe_0_23_0`）：
    vllm 0.23 把零号专家配置移到 `ZeroExpertRouter`，导致
@@ -40,14 +44,17 @@ LongCat-Flash 含 512 个 Zero (Identity) 专家，EP 下这是乱码/挂起的�
    包装 `zero_experts_compute`，把真实的 identity 贡献暂存（stash）并返回零，
    使 `apply` 中过早的 `final_hidden_states += zero_expert_result` 变为空操作。
    不拦截的话，EP 下每个 rank 都算了全量 identity 贡献，下游 all-reduce 会把它
-   累加 world_size 次（TP=EP=64 时 ×64）→ 乱码。
+   累加 world_size 次（64 卡 EP 拓扑下可能达到 ×64）→ 乱码。
 3. **Patch 0c — 强制 ALLGATHER comm**（目标 `ascend_forward_context`）：
    设 `EASYINFER_MOE_COMM=allgather` 时把 MoE comm 从 MC2 覆盖为 ALLGATHER。
    MC2 的 `npu_moe_distribute_dispatch_v2` 丢弃零权重槽位，导致
    `MoeDistributeCombineV2` shape check 失败、集合通信挂起。
 4. **Patch 3 — 在正确位置一次性加回**（目标 `moe_runner`）：
    在 `_maybe_add_zero_expert_output` 中取出 stash，于最终 all-reduce **之后**
-   只加一次（与上游 GPU 语义一致）。无 stash 时退化为标量零空操作。
+   只加一次（与上游 GPU 语义一致）。无 stash 时退化为设备侧标量零空操作。
+
+`Patch 0b2` 同时重绑定已导入的量化实现（W8A8 dynamic、310P）中的
+`zero_experts_compute` 引用，避免量化路径继续使用未修复的早期加法逻辑。
 
 ### vllm 核心层
 
@@ -62,15 +69,22 @@ LongCat-Flash 含 512 个 Zero (Identity) 专家，EP 下这是乱码/挂起的�
 
 | 插件 | 目标模块 | 作用 |
 |------|---------|------|
-| `transformers/longcat_flash.py` | `transformers.models.auto.configuration_auto` | 把 `LongcatFlashConfig` / `LongcatFlashGroupForCausalLM` 注册进 `AutoConfig` / `AutoModelForCausalLM`（含 `LongcatCausalLM` 别名），使 `from_pretrained()` 无需 `trust_remote_code=True` |
+| `transformers/longcat_flash.py` | `transformers.models.auto.configuration_auto` | 以合法 `model_type=longcat_flash` 把 `LongcatFlashConfig` / `LongcatFlashGroupForCausalLM` 注册进 `AutoConfig` / `AutoModelForCausalLM`；`LongcatCausalLM` 架构别名由 vLLM ModelRegistry 处理 |
 
 ## 与部署的关系
 
-- **TP 与 EP 都需要**：`fix_dual_attention`、`fix_mla_rotary`、`fix_layernorm_dtype`、
-  `architectures`、`config`、`longcat_flash`（MTP 过滤）、`transformers/longcat_flash`。
-  少了任何一个，模型要么加载失败要么输出乱码。
+- **当前 vLLM 内置架构路径（`LongcatFlashForCausalLM`）**：建议保留
+  `fix_dual_attention`、`fix_mla_rotary`、`fix_layernorm_dtype`、`config` 和
+  `longcat_flash` 中的 MTP 过滤。`architectures` 只有在旧 checkpoint 使用
+  `LongcatCausalLM` 别名时才需要；`transformers/longcat_flash` 只服务于
+  HuggingFace `AutoConfig`/`AutoModel` 入口，并非 vLLM 服务的硬依赖。
 - **仅 EP 需要**：`fix_ep_zero_expert`（4 个 patch）。EP 部署必须配合
   `EP=1 EASYINFER_MOE_COMM=allgather`（Patch 0c 生效的前提）。
+- **图模式需要**：`fix_mla_decode`、`fix_profile_warmup` 和 RMSNorm dtype guard；
+  `ENFORCE_EAGER=0` 时脚本会关闭 FlashComm1 与 `fuse_allreduce_rms`，避免融合
+  pass 绕过 dtype 防护。
+- **LongCat selector 开关**：`fix_moe_selector` 仅在 `VLLM_LONGCAT_PATCH=1` 时应用；
+  `run_vllm.sh` 默认导出该变量。直接运行 `vllm serve` 时如需该修复，必须手动导出。
 - **当前不生效**：`zero_expert_fused_moe.py`（vllm ≥ 0.23 自动跳过）、
   分组路由（checkpoint 未启用）。
 

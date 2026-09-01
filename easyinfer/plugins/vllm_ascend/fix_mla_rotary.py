@@ -62,7 +62,7 @@ def _ensure_mla_caches(rotary_mod: Any, num_tokens: int) -> None:
     rotary_mod._cos_mla = cos0.new_ones(new_size, 1, 1, rope_dim)
     rotary_mod._sin_mla = cos0.new_zeros(new_size, 1, 1, rope_dim)
     patch_logger.info(
-        "[fix_mla_rotary] (Re)allocated MLA cos/sin scratch (rope_dim=%d, tokens=%d)",
+        "[fix_mla_rotary] (Re)allocated MLA cos/sin scratch (rope_dim={}, tokens={})",
         rope_dim,
         new_size,
     )
@@ -86,6 +86,22 @@ def fix_rotary_embedding(module: Any) -> None:
     module.get_cos_and_sin_mla = patched
     patch_logger.info("[fix_mla_rotary] Patched rotary_embedding.get_cos_and_sin_mla")
 
+    # ``apply_all_patches`` imports targets in discovery order, so mla_v1 may
+    # have been patched before this defining module. Rebind any callers that
+    # already imported the original function now that the wrapper exists.
+    import sys
+
+    for caller_name in (
+        "vllm_ascend.attention.mla_v1",
+        "vllm_ascend.attention.sfa_v1",
+    ):
+        caller = sys.modules.get(caller_name)
+        if caller is not None:
+            caller.get_cos_and_sin_mla = patched
+            patch_logger.info(
+                "[fix_mla_rotary] Rebound {}.get_cos_and_sin_mla", caller_name
+            )
+
 
 # ---- mla_v1 / sfa_v1 (callers with local from-import bindings) ----
 
@@ -100,14 +116,15 @@ def _patch_caller(module: Any) -> None:
     wrapper shared by all call sites.
     """
     if _rotary_mod is None:
-        patch_logger.warning(
-            "[fix_mla_rotary] rotary_embedding not patched; leaving %s untouched",
+        patch_logger.info(
+            "[fix_mla_rotary] rotary_embedding target is pending; {} will be "
+            "rebound after the source patch",
             module.__name__,
         )
         return
     module.get_cos_and_sin_mla = _rotary_mod.get_cos_and_sin_mla
     patch_logger.info(
-        "[fix_mla_rotary] Rebound %s.get_cos_and_sin_mla to the patched function",
+        "[fix_mla_rotary] Rebound {}.get_cos_and_sin_mla to the patched function",
         module.__name__,
     )
 
@@ -122,7 +139,7 @@ def fix_sfa_v1(module: Any) -> None:
     _patch_caller(module)
 
 __all__ = [
-    "fix_rotary_embedding",
     "fix_mla_v1",
+    "fix_rotary_embedding",
     "fix_sfa_v1",
 ]

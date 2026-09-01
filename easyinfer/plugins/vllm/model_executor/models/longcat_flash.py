@@ -43,7 +43,6 @@ path is dormant in practice.
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 import torch
@@ -315,7 +314,7 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             _patch_zero_expert_router(self.experts, expansion_factor, n_routed)
             patch_logger.info(
                 "[longcat_flash] Grouped routing (ZeroExpertRouter): "
-                "prefix=%s expansion=%d n_routed=%d top_k=%d zero=%s",
+                "prefix={} expansion={} n_routed={} top_k={} zero={}",
                 prefix,
                 expansion_factor,
                 n_routed,
@@ -342,7 +341,7 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             )
             patch_logger.info(
                 "[longcat_flash] Grouped routing (CustomRoutingRouter): "
-                "prefix=%s expansion=%d n_routed=%d top_k=%d",
+                "prefix={} expansion={} n_routed={} top_k={}",
                 prefix,
                 expansion_factor,
                 n_routed,
@@ -359,7 +358,7 @@ def patch_longcat_flash_grouped_routing(module: Any) -> None:
             _patch_ascend_select_experts(self.experts, expansion_factor, n_routed)
             patch_logger.info(
                 "[longcat_flash] Grouped routing (Ascend select_experts): "
-                "prefix=%s expansion=%d n_routed=%d top_k=%d",
+                "prefix={} expansion={} n_routed={} top_k={}",
                 prefix,
                 expansion_factor,
                 n_routed,
@@ -386,13 +385,16 @@ def patch_longcat_flash_mtp_filter(module: Any) -> None:
     original_load_weights = module.LongcatFlashForCausalLM.load_weights
 
     def patched_load_weights(self: Any, weights: Any) -> Any:
-        with contextlib.suppress(TypeError, ValueError):
-            weights = [
-                (n, t)
-                for n, t in weights
-                if ".mtp." not in n and not n.startswith("mtp.")
-            ]
-        return original_load_weights(self, weights)
+        # Keep checkpoint iterators lazy.  LongCat has hundreds of gigabytes
+        # of weights, so materialising the filtered stream as a list causes a
+        # needless CPU-memory spike before vLLM starts loading shards.
+        def _without_mtp():
+            for name, tensor in weights:
+                if name.startswith("mtp.") or ".mtp." in name:
+                    continue
+                yield name, tensor
+
+        return original_load_weights(self, _without_mtp())
 
     module.LongcatFlashForCausalLM.load_weights = patched_load_weights
     patch_logger.info("[longcat_flash] MTP weight filter applied")

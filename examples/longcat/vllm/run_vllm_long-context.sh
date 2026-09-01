@@ -29,8 +29,8 @@
 #
 # ❶ CUDA Graph (decode 阶段) — ENFORCE_EAGER=0
 #   eager 模式下每次 decode step 都重新编译 kernel，图模式可消除此开销。
-#   预期 decode 吞吐提升 20-50%。当前默认 eager (兼容性优先)，
-#   设 ENFORCE_EAGER=0 开启图模式。
+#   预期 decode 吞吐提升 20-50%。本长上下文封装默认 ENFORCE_EAGER=0
+#   开启图模式；兼容性排障时设为 1 回退 eager。
 #   代价: 需要 VLLM_ASCEND_ENABLE_FLASHCOMM1=0 (SP pass 与 graph 冲突)。
 #
 # ❷ Prefill 分块大小 — MAX_NUM_BATCHED_TOKENS
@@ -62,7 +62,7 @@
 #  ──────────────────────────────┼────────────────────────────────────────────
 #  最大吞吐 (128K, 16 节点)      | PP=4 TP=32 EP=1 bash run_vllm_long-context.sh
 #  均衡吞吐 (128K, 16 节点)      | PP=4 TP=32 EP=1 MAX_NUM_SEQS=32 bash run_vllm_long-context.sh
-#  低延迟短上下文 (4K, 8 节点)   | 直接用 run_vllm.sh (TP=64 EP=64 PP=1)
+#  低延迟短上下文 (4K, 8 节点)   | 直接用 run_vllm.sh (TP=64 EP=1 PP=1)
 #  混合长短流量                  | MAX_NUM_SEQS=64 MAX_MODEL_LEN=65536 bash run_vllm_long-context.sh
 #  极限并发 (需 FP8 KV cache)    | KV_CACHE_DTYPE=fp8 MAX_NUM_SEQS=64 bash run_vllm_long-context.sh
 #  开启图模式 (提升吞吐)         | ENFORCE_EAGER=0 bash run_vllm_long-context.sh
@@ -77,7 +77,7 @@ readonly SCRIPT_DIR
 # =============================================================================
 # 核心上下文参数
 # =============================================================================
-export MAX_MODEL_LEN="${MAX_MODEL_LEN:-65536}"
+export MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 
 # ---------------------------------------------------------------------------
 # Prefill: 分块喂入
@@ -92,6 +92,9 @@ export CHUNKED_PREFILL="${CHUNKED_PREFILL:-1}"
 # 每块大小：16384 是保守安全值；显存充足时可提升到 32768/49152 加速 prefill
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 
+# Chunked prefill intentionally permits a scheduler budget smaller than
+# MAX_MODEL_LEN, avoiding a 128K prefill memory spike.
+
 # ---------------------------------------------------------------------------
 # 并发: MAX_NUM_SEQS
 # ---------------------------------------------------------------------------
@@ -99,7 +102,7 @@ export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
 # - 纯长上下文流量: 16~32 (留有安全余量, 避免 KV cache 碎片化)
 # - 混合短+长流量: 64~128 (短请求 KV 占用极小, 高上限不影响)
 # 默认 32，兼顾长上下文安全和短请求并发。
-export MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+export MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 
 export GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 
@@ -111,7 +114,7 @@ export GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 # ❶ CUDA Graph / Eager 模式
 # ---------------------------------------------------------------------------
 # ENFORCE_EAGER=0 → 开启 FULL_DECODE_ONLY CUDA graph, decode 提速显著
-# ENFORCE_EAGER=1 (默认) → eager 模式, 逐 step 编译 (兼容性优先, 稳定路径)
+# ENFORCE_EAGER=1 → eager 模式, 逐 step 编译 (兼容性优先, 稳定路径)
 #
 # 图模式 (ENFORCE_EAGER=0) 的两条硬性要求 (2026-07-27 排查结论):
 #   ① cudagraph_capture_sizes 必须含 TP 的倍数 — run_vllm.sh 已自动生成
@@ -119,7 +122,7 @@ export GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 #   ② 必须 VLLM_ASCEND_ENABLE_FLASHCOMM1=0 — FlashComm1 的 SP pass 在 FX 图
 #      里直接插入 npu_add_rms_norm_bias, 绕过 fix_layernorm_dtype 的 dtype 保护,
 #      float32 激活直送 ACLNN 报 EZ1001
-export ENFORCE_EAGER="${ENFORCE_EAGER:-1}"
+export ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
 
 # ---------------------------------------------------------------------------
 # ❷ KV Cache 数据类型

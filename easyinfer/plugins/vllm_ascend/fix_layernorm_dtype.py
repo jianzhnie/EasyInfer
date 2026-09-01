@@ -49,6 +49,41 @@ from easyinfer.plugins.logging import patch_logger
 from easyinfer.plugins.registry import register_patch
 
 
+@torch.library.custom_op("easyinfer::rms_norm_guard_x", mutates_args=())
+def _rms_norm_guard_x(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Keep the dtype conversion opaque when vLLM captures a compiled graph."""
+    if x.dtype != weight.dtype:
+        return x.to(dtype=weight.dtype)
+    return x.clone()
+
+
+@_rms_norm_guard_x.register_fake
+def _rms_norm_guard_x_fake(
+    x: torch.Tensor, weight: torch.Tensor
+) -> torch.Tensor:
+    # Fake implementations participate in torch.compile metadata
+    # propagation.  The real custom op casts to ``weight.dtype``; returning
+    # ``x`` unchanged here can make the compiled graph retain an invalid
+    # FP32 -> BF16 edge and fail later at the ACLNN RMSNorm call.
+    return x.to(dtype=weight.dtype)
+
+
+@torch.library.custom_op("easyinfer::rms_norm_guard_residual", mutates_args=())
+def _rms_norm_guard_residual(
+    residual: torch.Tensor, weight: torch.Tensor
+) -> torch.Tensor:
+    if residual.dtype != weight.dtype:
+        return residual.to(dtype=weight.dtype)
+    return residual.clone()
+
+
+@_rms_norm_guard_residual.register_fake
+def _rms_norm_guard_residual_fake(
+    residual: torch.Tensor, weight: torch.Tensor
+) -> torch.Tensor:
+    return residual.to(dtype=weight.dtype)
+
+
 @register_patch(target="vllm_ascend.ops.layernorm")
 def fix_layernorm_forward_oot_dtype(module: Any) -> None:
     """Wrap AscendRMSNorm.forward_oot to cast inputs to the weight dtype."""
@@ -68,10 +103,22 @@ def fix_layernorm_forward_oot_dtype(module: Any) -> None:
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         target_dtype = self.weight.dtype
-        if x.dtype != target_dtype:
-            x = x.to(dtype=target_dtype)
-        if residual is not None and residual.dtype != target_dtype:
-            residual = residual.to(dtype=target_dtype)
+        is_compiling = getattr(torch, "compiler", None)
+        is_compiling = bool(
+            is_compiling is not None
+            and getattr(is_compiling, "is_compiling", lambda: False)()
+        )
+        if is_compiling:
+            x = torch.ops.easyinfer.rms_norm_guard_x(x, self.weight)
+            if residual is not None:
+                residual = torch.ops.easyinfer.rms_norm_guard_residual(
+                    residual, self.weight
+                )
+        else:
+            if x.dtype != target_dtype:
+                x = x.to(dtype=target_dtype)
+            if residual is not None and residual.dtype != target_dtype:
+                residual = residual.to(dtype=target_dtype)
         return _original_oot(self, x, residual)
 
     _AscendRMSNorm.forward_oot = _dtype_safe_forward_oot

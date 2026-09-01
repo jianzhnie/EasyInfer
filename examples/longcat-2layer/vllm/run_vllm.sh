@@ -7,12 +7,12 @@
 # Docker image: quay.io/ascend/vllm-ascend:v0.23.0rc1-a3
 #
 # Usage:
-#   bash run_vllm.sh                                    # stable mode (default)
-#   EP=1 TP=2 bash run_vllm.sh                          # EP mode
+#   bash run_vllm.sh                                    # TP=2 + EP + graph (default)
+#   ENFORCE_EAGER=1 bash run_vllm.sh                    # eager compatibility mode
 #   MODEL_PATH=/custom/path TP=8 bash run_vllm.sh       # custom model
 #
 # Verified config (vllm-ascend v0.23.0rc1-a3, 2x Ascend 910C):
-#   EP=1 TP=2 EXECUTOR=mp HCCL_BUFFSIZE=2048 GPU_MEM_UTIL=0.75 \
+#   EP=1 TP=2 EXECUTOR=mp HCCL_BUFFSIZE=2048 GPU_MEM_UTIL=0.80 \
 #       bash run_vllm.sh
 #   Notes:
 #   - EP is required: a single NPU cannot hold 512 experts.
@@ -40,26 +40,28 @@ fi
 set -u
 
 # Base configuration
-readonly BASE_MODEL_PATH="${BASE_MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat}"
+readonly BASE_MODEL_PATH="${BASE_MODEL_PATH:-/home/jianzhnie/llmtuner/hfhub/models/meituan-longcat/LongCat-Flash-Chat}"
 readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/expand/LongCat-Flash-Chat-2layer}"
 # readonly MODEL_PATH="${MODEL_PATH:-$BASE_MODEL_PATH/expand/LongCat-Flash-Thinking-2601-2layer}"
 readonly HOST="${HOST:-0.0.0.0}"
 readonly PORT="${PORT:-8300}"
-readonly TP="${TP:-8}"
+readonly TP="${TP:-2}"
 readonly PP="${PP:-1}"
 readonly DP="${DP:-1}"
-readonly ENABLE_EP="${EP:-0}"
+readonly ENABLE_EP="${EP:-1}"
 readonly EXECUTOR="${EXECUTOR:-mp}"
 readonly MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 readonly MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
-readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
-readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+readonly GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.80}"
+readonly MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 readonly SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-longcat-flash-2layer}"
 readonly DTYPE="${DTYPE:-bfloat16}"
 # MLA attention kernel only supports block size 128 on this image.
 readonly BLOCK_SIZE="${BLOCK_SIZE:-128}"
 # Chunked prefill conflicts with EP token dispatch; disable by default.
 readonly CHUNKED_PREFILL="${CHUNKED_PREFILL:-0}"
+readonly ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+readonly PREFIX_CACHING="${PREFIX_CACHING:-0}"
 
 # ------------------------------------------------------------------------------
 # Ensure EasyInfer plugins are registered (required for the EP fixes)
@@ -83,7 +85,10 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # ------------------------------------------------------------------------------
 # Auto-detect network interface
 if [[ -z "${HCCL_SOCKET_IFNAME:-}" ]]; then
-    HCCL_SOCKET_IFNAME="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+    if command -v ip >/dev/null 2>&1; then
+        HCCL_SOCKET_IFNAME="$(ip -o -4 route show default 2>/dev/null \
+            | awk '{print $5}' | head -1 || true)"
+    fi
     HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-enp66s0f5}"
 fi
 if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
@@ -102,6 +107,13 @@ export VLLM_USE_MODELSCOPE=False
 # HCCL multi-node communication
 export HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-1800}"
 export HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-1800}"
+
+# LongCat-specific per-process compatibility settings.  These must be
+# exported before vLLM forks API/engine/worker processes; setting them only in
+# the parent shell would leave the selector and graph-format patches disabled
+# in a direct script launch.
+export VLLM_LONGCAT_PATCH="${VLLM_LONGCAT_PATCH:-1}"
+export VLLM_LONGCAT_DISABLE_FUSED_GATING="${VLLM_LONGCAT_DISABLE_FUSED_GATING:-1}"
 
 # Scheduling
 export VLLM_ASCEND_BALANCE_SCHEDULING="${VLLM_ASCEND_BALANCE_SCHEDULING:-1}"
@@ -129,6 +141,13 @@ fi
 command -v vllm >/dev/null 2>&1 || { echo "[ERROR] vllm not found" >&2; exit 127; }
 [[ -d "$MODEL_PATH" ]] || { echo "[ERROR] MODEL_PATH not found: $MODEL_PATH" >&2; exit 2; }
 
+if [[ "$CHUNKED_PREFILL" == "0" ]] && (( MAX_NUM_BATCHED_TOKENS < MAX_MODEL_LEN )); then
+    echo "[ERROR] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS must be >= " \
+        "MAX_MODEL_LEN=$MAX_MODEL_LEN when CHUNKED_PREFILL=0" >&2
+    echo "        Set CHUNKED_PREFILL=1 or raise MAX_NUM_BATCHED_TOKENS." >&2
+    exit 2
+fi
+
 # ------------------------------------------------------------------------------
 # Launch vllm serve
 # ------------------------------------------------------------------------------
@@ -139,7 +158,8 @@ echo "[INFO] Model: $MODEL_PATH"
 echo "[INFO] TP=$TP PP=$PP DP=$DP EP=$ENABLE_EP Backend=$EXECUTOR"
 echo "[INFO] Host: ${HOST}:${PORT}"
 echo "[INFO] MAX_MODEL_LEN=$MAX_MODEL_LEN MAX_NUM_SEQS=$MAX_NUM_SEQS"
-echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL"
+echo "[INFO] MAX_NUM_BATCHED_TOKENS=$MAX_NUM_BATCHED_TOKENS CHUNKED_PREFILL=$CHUNKED_PREFILL"
+echo "[INFO] GPU_MEM_UTIL=$GPU_MEM_UTIL ENFORCE_EAGER=$ENFORCE_EAGER"
 echo "============================================"
 
 EP_FLAGS=()
@@ -150,6 +170,35 @@ fi
 PREFILL_FLAGS=(--enable-chunked-prefill)
 if [[ "$CHUNKED_PREFILL" == "0" ]]; then
     PREFILL_FLAGS=(--no-enable-chunked-prefill)
+fi
+
+PREFIX_FLAGS=(--no-enable-prefix-caching)
+if [[ "$PREFIX_CACHING" == "1" ]]; then
+    PREFIX_FLAGS=(--enable-prefix-caching)
+fi
+
+EAGER_FLAGS=(--enforce-eager)
+if [[ "$ENFORCE_EAGER" == "0" ]]; then
+    EAGER_FLAGS=()
+fi
+
+COMPILATION_CONFIG='{"cudagraph_mode": "FULL_DECODE_ONLY"}'
+ADDITIONAL_CONFIG_FLAGS=()
+if [[ "$ENFORCE_EAGER" == "0" ]]; then
+    # FlashComm1/SP and fuse_allreduce_rms insert an unguarded float32 RMSNorm
+    # op into the FX graph on this image. Disable both for graph capture.
+    export VLLM_ASCEND_ENABLE_FLASHCOMM1=0
+    ADDITIONAL_CONFIG_FLAGS=(--additional-config '{"ascend_compilation_config":{"fuse_allreduce_rms":false}}')
+    _sizes=()
+    _s=$TP
+    while (( ${#_sizes[@]} < 4 )); do
+        _sizes+=("$_s")
+        (( _s >= MAX_NUM_SEQS )) && break
+        _s=$((_s + TP))
+    done
+    CAPTURE_SIZES="[$(IFS=,; echo "${_sizes[*]}")]"
+    COMPILATION_CONFIG="{\"cudagraph_mode\": \"FULL_DECODE_ONLY\", \"cudagraph_capture_sizes\": ${CAPTURE_SIZES}}"
+    echo "[INFO] 图模式 capture_sizes=$CAPTURE_SIZES"
 fi
 
 vllm serve "$MODEL_PATH" \
@@ -164,13 +213,15 @@ vllm serve "$MODEL_PATH" \
     "${EP_FLAGS[@]}" \
     "${PREFILL_FLAGS[@]}" \
     --block-size "$BLOCK_SIZE" \
+    --safetensors-load-strategy prefetch \
     --distributed-executor-backend "$EXECUTOR" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
     --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-    --no-enable-prefix-caching \
-    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-    --enforce-eager \
+    "${PREFIX_FLAGS[@]}" \
+    --compilation-config "$COMPILATION_CONFIG" \
+    "${ADDITIONAL_CONFIG_FLAGS[@]}" \
+    "${EAGER_FLAGS[@]}" \
     --seed 1024 \
     "$@"
