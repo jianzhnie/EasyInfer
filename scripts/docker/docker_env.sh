@@ -37,8 +37,8 @@ export IMAGE_DIR="${IMAGE_DIR:-/home/jianzhnie/llmtuner/hfhub/docker/image}"
 # export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
 
 # --- vLLM-Ascend 镜像配置（当前生效）---
-export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.23.0rc1-a3}"
-export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/vllm-ascend.v0.23.0rc1-a3.tar}"
+export IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.26.0rc1-a3}"
+export IMAGE_TAR="${IMAGE_TAR:-${IMAGE_DIR}/vllm-ascend.v0.26.0rc1-a3.tar.gz}"
 export RUN_CONTAINER_SCRIPT="${RUN_CONTAINER_SCRIPT:-${SCRIPT_DIR}/run_npuslim_container.sh}"
 export CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
 

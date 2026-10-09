@@ -9,7 +9,7 @@ set -euo pipefail
 # Configuration
 # IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.18.0rc1-a3-openeuler}"
 # CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env-a3}"
-IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.23.0rc1-a3}"
+IMAGE_NAME="${IMAGE_NAME:-quay.io/ascend/vllm-ascend:v0.26.0rc1-a3}"
 CONTAINER_NAME="${CONTAINER_NAME:-vllm-ascend-env}"
 
 

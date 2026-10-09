@@ -57,12 +57,14 @@ MODEL_REPOS = [
     "Eco-Tech/GLM-5.2-w8a8",
     "Eco-Tech/GLM-5.2-w4a8",
     "Eco-Tech/GLM-5.2-w4a8c8",
+    "Eco-Tech/GLM-5.3-w8a8c8",
     ## Kimi
     "Eco-Tech/Kimi-K2.6-w4a8",
     "Eco-Tech/Kimi-K2.7-Code-w4a8",
     "Eco-Tech/Kimi-K3-w4a8",
     ## Hy3
     "Eco-Tech/Hy3-w8a8",
+    "Eco-Tech/Hy4-preview-w8a8",
     ## Qwen
     "Eco-Tech/Qwen3.6-27B-w8a8",
     "Eco-Tech/Qwen3.8-27B-w8a8",
@@ -70,6 +72,7 @@ MODEL_REPOS = [
     "Eco-Tech/DeepSeek-V4-Flash-w8a8-mtp",
     "Eco-Tech/DeepSeek-V4-Pro-w4a8-mtp",
     "Eco-Tech/DeepSeek-V4-Flash-0731-w8a8",
+    "Eco-Tech/DeepSeek-V4-Pro-0813-w4a8",
     ## MiniMax
     "Eco-Tech/MiniMax-M2.7-w8a8-QuaRot",
     "Eco-Tech/MiniMax-M3-w8a8",
